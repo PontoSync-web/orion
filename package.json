@@ -1,7 +1,7 @@
 {
   "name": "orion",
   "version": "5.1.0",
-  "description": "ORION - Sistema de Geolocalização e Inteligência",
+  "description": "Sistema ORION - Geolocalizacao e Inteligencia",
   "main": "orion.js",
   "scripts": {
     "start": "node orion.js"
@@ -11,6 +11,7 @@
     "cors": "^2.8.5",
     "helmet": "^7.1.0",
     "sqlite3": "^5.1.6",
-    "dotenv": "^16.3.1"
+    "dotenv": "^16.3.1",
+    "express-rate-limit": "^7.1.5"
   }
 }
