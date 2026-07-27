@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ORION - Localização</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; background: #1e1e1e; color: #eee; }
+        #container { display: flex; flex-direction: column; height: 100vh; }
+        #header { padding: 16px 20px; background: #2d2d2d; border-bottom: 1px solid #444; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        #header input, #header button { padding: 8px 14px; border-radius: 6px; border: none; font-size: 14px; }
+        #header input { background: #3d3d3d; color: #eee; flex: 1; min-width: 200px; }
+        #header button { background: #4CAF50; color: #fff; font-weight: bold; cursor: pointer; }
+        #header button:hover { background: #45a049; }
+        #header .status { margin-left: auto; font-size: 14px; color: #aaa; }
+        #map { flex: 1; width: 100%; background: #2a2a2a; }
+        #info { padding: 10px 20px; background: #2d2d2d; border-top: 1px solid #444; font-size: 14px; color: #aaa; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+    </style>
+</head>
+<body>
+<div id="container">
+    <div id="header">
+        <span style="font-weight: bold; font-size: 18px;">&#128752; ORION</span>
+        <input type="text" id="numeroInput" placeholder="Digite o número (ex: 71988979724)" />
+        <button id="buscarBtn">&#128270; Localizar</button>
+        <span class="status" id="statusText">&#9989; Servidor online</span>
+    </div>
+    <div id="map"></div>
+    <div id="info">
+        <span id="infoNumero"><b>Número:</b> —</span>
+        <span id="infoCoordenadas"><b>Coordenadas:</b> —</span>
+        <span id="infoPrecisao"><b>Precisão:</b> —</span>
+        <span id="infoTorres"><b>Torres:</b> —</span>
+    </div>
+</div>
+
+<script>
+    const ORION_API_BASE = '/api/rastrear/';
+
+    const map = L.map('map').setView([-14.2350, -51.9253], 4);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
+    let marker = null;
+    let circle = null;
+
+    function atualizarMapa(lat, lng, raio, numero, torres) {
+        if (marker) map.removeLayer(marker);
+        if (circle) map.removeLayer(circle);
+
+        marker = L.marker([lat, lng]).addTo(map);
+        marker.bindPopup(`<b>&#128241; ${numero}</b><br>Lat: ${lat.toFixed(6)}<br>Lng: ${lng.toFixed(6)}<br>Raio: ${raio}m<br>Torres: ${torres}`).openPopup();
+        circle = L.circle([lat, lng], { radius: raio, color: '#4CAF50', fillColor: '#4CAF50', fillOpacity: 0.2 }).addTo(map);
+        map.setView([lat, lng], 13);
+
+        document.getElementById('infoNumero').innerHTML = `<b>Número:</b> ${numero}`;
+        document.getElementById('infoCoordenadas').innerHTML = `<b>Coordenadas:</b> ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+        document.getElementById('infoPrecisao').innerHTML = `<b>Precisão:</b> ${raio}m`;
+        document.getElementById('infoTorres').innerHTML = `<b>Torres:</b> ${torres}`;
+    }
+
+    async function buscarLocalizacao() {
+        const numero = document.getElementById('numeroInput').value.trim();
+        if (!numero) { alert('Digite um número.'); return; }
+
+        const status = document.getElementById('statusText');
+        status.innerHTML = '&#9203; Buscando...';
+        status.style.color = '#ffaa00';
+
+        try {
+            const response = await fetch(ORION_API_BASE + encodeURIComponent(numero));
+            const data = await response.json();
+
+            if (!response.ok) throw new Error(data.erro || 'Erro na requisição');
+
+            if (data.position) {
+                atualizarMapa(data.position.latitude, data.position.longitude, data.position.raio_estimado || 500, data.numero || numero, data.torres_usadas || 'N/A');
+                status.innerHTML = '&#9989; Localizado!';
+                status.style.color = '#4CAF50';
+            } else {
+                throw new Error('Coordenadas não encontradas');
+            }
+        } catch (error) {
+            console.error(error);
+            status.innerHTML = `&#10060; Erro: ${error.message}`;
+            status.style.color = '#f44336';
+        }
+    }
+
+    document.getElementById('buscarBtn').addEventListener('click', buscarLocalizacao);
+    document.getElementById('numeroInput').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') buscarLocalizacao();
+    });
+
+    async function checkHealth() {
+        try {
+            const response = await fetch('/health');
+            if (response.ok) {
+                document.getElementById('statusText').innerHTML = '&#9989; Servidor online';
+                document.getElementById('statusText').style.color = '#4CAF50';
+            } else {
+                throw new Error('Offline');
+            }
+        } catch {
+            document.getElementById('statusText').innerHTML = '&#9888;&#65039; Servidor offline';
+            document.getElementById('statusText').style.color = '#f44336';
+        }
+    }
+    checkHealth();
+</script>
+</body>
+</html>
