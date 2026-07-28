@@ -207,6 +207,39 @@ app.get('/api/ticket/:id', (req, res) => {
 // ============================================================
 // INICIALIZAÇÃO
 // ============================================================
-app.listen(port, () => {
-    log('info', `ORION 5.1 rodando na porta ${port}`);
-});
+// ============================================================
+// INICIALIZAÇÃO COM IMPORTAÇÃO AUTOMÁTICA
+// ============================================================
+
+async function iniciarServidor() {
+    // Verifica se o banco de torres existe e tem dados
+    const precisaImportar = !fs.existsSync(DB_TOWERS) || await new Promise((resolve) => {
+        const db = new sqlite3.Database(DB_TOWERS);
+        db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => {
+            db.close();
+            resolve(!row || row.c < 1000000);
+        });
+    });
+
+    if (precisaImportar) {
+        log('info', 'Banco de torres vazio ou ausente. Iniciando importacao...');
+        try {
+            const { execSync } = require('child_process');
+            log('info', 'Executando scripts/import-render.js...');
+            execSync('node scripts/import-render.js', { stdio: 'inherit', timeout: 600000 }); // 10 min timeout
+            log('info', 'Importacao concluida com sucesso!');
+        } catch (err) {
+            log('error', 'Falha na importacao: ' + err.message);
+            log('warn', 'Servidor iniciara sem banco de torres. A localizacao por triangulacao ficara indisponivel.');
+        }
+    } else {
+        log('info', 'Banco de torres OK');
+    }
+
+    app.listen(port, () => {
+        log('info', `ORION 5.1 rodando na porta ${port}`);
+        log('info', `Banco de torres: ${fs.existsSync(DB_TOWERS) ? 'OK' : 'PENDENTE'}`);
+    });
+}
+
+iniciarServidor();
