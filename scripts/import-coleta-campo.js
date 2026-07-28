@@ -1,7 +1,8 @@
 // ============================================================
 // ARQUIVO: scripts/import-coleta-campo.js
 // DATA: 28 de Julho de 2026
-// HORÁRIO: 21:00 (Horário Oficial — Salvador, Bahia, Brasil)
+// HORÁRIO: 22:00 (Horário Oficial — Salvador, Bahia, Brasil)
+// FUSO: América do Sul / Brasil / Bahia (GMT-3)
 // MOTIVO: Importa dados primários de ERBs coletados em campo
 //         via app OpenCellID. Fonte: contribuições próprias
 //         do investigador. Dados 100% reais e verificados.
