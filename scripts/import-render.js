@@ -1,6 +1,6 @@
 // ============================================================
 // ORION — Pipeline de Importação Otimizado (Render)
-// Data: 28/07/2026
+// Data: 28/07/2026 — v2 (corrigida)
 // ============================================================
 
 const https = require('https');
@@ -29,32 +29,30 @@ async function main() {
     }
     
     const db = new sqlite3.Database(DB_PATH);
-
-// Garante que a tabela existe antes de consultar
-db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
-    radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
-    cell INTEGER PRIMARY KEY, unit INTEGER,
-    lon REAL, lat REAL, range INTEGER,
-    samples INTEGER, changeable INTEGER,
-    created INTEGER, updated INTEGER, averageSignal INTEGER
-)`);
-
-// Verifica se ja tem dados
-const count = await new Promise((rs, rj) => {
-    db.get('SELECT COUNT(*) as c FROM cell_towers', (e, r) => e ? rj(e) : rs(r));
-});
     
-    // Verifica se ja tem dados
-    const count = await new Promise((rs, rj) => {
+    // Cria tabela se nao existir
+    db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
+        radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
+        cell INTEGER PRIMARY KEY, unit INTEGER,
+        lon REAL, lat REAL, range INTEGER,
+        samples INTEGER, changeable INTEGER,
+        created INTEGER, updated INTEGER, averageSignal INTEGER
+    )`);
+    
+    // Verifica se ja tem dados suficientes
+    const row = await new Promise((rs, rj) => {
         db.get('SELECT COUNT(*) as c FROM cell_towers', (e, r) => e ? rj(e) : rs(r));
     });
     
-    if (count && count.c > 1000000) {
-        log(`Banco ja possui ${count.c.toLocaleString()} torres. Importacao desnecessaria.`);
+    const totalExistente = row ? row.c : 0;
+    log(`Torres existentes no banco: ${totalExistente.toLocaleString()}`);
+    
+    if (totalExistente > 1000000) {
+        log('Banco ja possui mais de 1 milhao de torres. Importacao desnecessaria.');
         db.close();
         process.exit(0);
     }
-       
+    
     // Ativa modo WAL para performance
     db.run('PRAGMA journal_mode=WAL');
     db.run('PRAGMA synchronous=OFF');
@@ -75,8 +73,8 @@ const count = await new Promise((rs, rj) => {
     log('Descompactacao concluida.');
     
     // Importa em lote
-    log('Importando torres...');
-    let count2 = 0;
+    log('Importando torres (isso pode levar varios minutos)...');
+    let importadas = 0;
     const rl = readline.createInterface({ input: fs.createReadStream(csvPath) });
     let header = false;
     
@@ -88,11 +86,11 @@ const count = await new Promise((rs, rj) => {
         const cols = line.split(',');
         if (cols.length < 14) continue;
         stmt.run([cols[0], +cols[1], +cols[2], +cols[3], +cols[4], +cols[5], +cols[6], +cols[7], +cols[8], +cols[9], +cols[10], +cols[11], +cols[12], +cols[13]]);
-        count2++;
-        if (count2 % 100000 === 0) {
+        importadas++;
+        if (importadas % 100000 === 0) {
             db.run('COMMIT');
             db.run('BEGIN TRANSACTION');
-            log(`${count2.toLocaleString()} torres processadas...`);
+            log(`${importadas.toLocaleString()} torres processadas...`);
         }
     }
     
@@ -108,10 +106,10 @@ const count = await new Promise((rs, rj) => {
     db.close();
     
     // Limpa arquivos temporarios
-    fs.unlinkSync(gzPath);
-    fs.unlinkSync(csvPath);
+    try { fs.unlinkSync(gzPath); } catch (e) {}
+    try { fs.unlinkSync(csvPath); } catch (e) {}
     
-    log(`Importacao concluida! Total: ${count2.toLocaleString()} torres.`);
+    log(`Importacao concluida! Total importado: ${importadas.toLocaleString()} torres.`);
     process.exit(0);
 }
 
@@ -127,7 +125,7 @@ function downloadFile(url, dest) {
             }
             if (res.statusCode !== 200) {
                 file.close();
-                fs.unlinkSync(dest);
+                try { fs.unlinkSync(dest); } catch (e) {}
                 return reject(new Error(`HTTP ${res.statusCode}`));
             }
             res.pipe(file);
