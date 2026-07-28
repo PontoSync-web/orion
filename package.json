@@ -1,17 +1,26 @@
 {
   "name": "ai-depom",
-  "version": "5.8.1",
+  "version": "5.8.3",
   "description": "AI-DEPOM - Sistema de Geolocalização e Inteligência",
   "main": "orion.js",
   "scripts": {
-    "start": "node orion.js"
+    "start": "node orion.js",
+    "audit": "npm audit",
+    "audit-fix": "npm audit fix"
   },
   "dependencies": {
-    "express": "^4.21.0",
-    "cors": "^2.8.5",
-    "helmet": "^7.1.0",
-    "sqlite3": "^5.1.7",
-    "dotenv": "^16.4.5",
-    "express-rate-limit": "^7.4.0"
+    "express": "4.21.0",
+    "cors": "2.8.5",
+    "helmet": "7.1.0",
+    "sqlite3": "5.1.7",
+    "dotenv": "16.4.5",
+    "express-rate-limit": "7.4.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "resolutions": {
+    "express": "4.21.0",
+    "sqlite3": "5.1.7"
   }
 }
