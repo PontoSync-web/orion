@@ -27,9 +27,15 @@ async function main() {
         log('ERRO: Token OpenCellID nao configurado.');
         process.exit(1);
     }
-    
+    // Remove banco antigo/corrompido para garantir um ambiente limpo
+if (fs.existsSync(DB_PATH)) {
+    log('Removendo banco de torres antigo...');
+    try { fs.unlinkSync(DB_PATH); } catch(e) {
+        log('Aviso: Nao foi possivel remover banco antigo. ' + e.message);
+    }
+}
     const db = new sqlite3.Database(DB_PATH);
-    
+    og('Banco de dados criado/aberto com sucesso.');
     // Cria tabela se nao existir
     db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
         radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
