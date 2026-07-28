@@ -1,10 +1,11 @@
 // ============================================================
 // ARQUIVO: orion.js
 // DATA: 28/07/2026
-// MOTIVO: v5.6 — Motor de Rede Completo.
-//         Geolocalização por IP, Wi-Fi Positioning, Cache SQLite.
-//         Banco Local, MLS, OpenCellID, Cabeçalho, RSSI,
-//         Google Geolocation API. Sem conflitos.
+// HORÁRIO: 18:45 (horário de Brasília)
+// MOTIVO: Token do Unwired Labs incorporado.
+//         Motor de Rede Completo: Unwired Labs (primária),
+//         Banco Local, MLS, OpenCellID, Wi-Fi, IP, Cache,
+//         Google Geolocation API, RSSI. Sem conflitos.
 // ============================================================
 
 require('dotenv').config();
@@ -40,7 +41,12 @@ const DB_MAIN = path.join(PATHS.data, 'orion.db');
 const DB_TOWERS = path.join(PATHS.data, 'cell_towers.db');
 const DB_CACHE = path.join(PATHS.data, 'cache.db');
 const LOCK_FILE = path.join(PATHS.data, '.import_lock');
-const API_KEY = process.env.OPENCELLID_API_KEY || '';
+
+// ============================================================
+// TOKENS E CHAVES DE ACESSO
+// ============================================================
+const API_KEY = process.env.OPENCELLID_API_KEY || 'pk.d597db3bcf9eea4d67acaeb057573fd4';
+const UNWIRED_TOKEN = process.env.UNWIRED_TOKEN || 'pk.b6eadaf01c1bce6c3c8eb52bc8b30211';
 
 // ============================================================
 // SEGURANÇA
@@ -128,20 +134,24 @@ dbCache.exec(`
 
 app.get('/health', (req, res) => {
     res.json({
-        servidor: 'Orion',
-        versao: '5.6',
+        servidor: 'AI-DEPOM',
+        versao: '5.7',
         status: 'online',
-        motor: 'Motor de Rede Completo',
-        fontes: ['banco_local', 'mls', 'opencellid', 'cabecalho_rede', 'rssi_estimativa', 'ip_geolocation', 'wifi_positioning', 'cache_consultas'],
+        motor: 'Motor de Rede Completo + Unwired Labs',
+        fontes: ['unwired_labs', 'banco_local', 'mls', 'opencellid', 'wifi', 'ip', 'cache', 'rssi'],
+        tokens: {
+            unwired: UNWIRED_TOKEN ? 'configurado' : 'pendente',
+            opencellid: API_KEY ? 'configurado' : 'pendente'
+        },
         timestamp: new Date().toISOString()
     });
 });
 
 app.get('/', (req, res) => {
     res.json({
-        servidor: 'Orion',
-        versao: '5.6',
-        fontes_ativas: ['Banco Local', 'MLS', 'OpenCellID', 'Cabeçalho de Rede', 'RSSI', 'IP Geolocation', 'Wi-Fi Positioning', 'Cache'],
+        servidor: 'AI-DEPOM',
+        versao: '5.7',
+        fontes_ativas: ['Unwired Labs (Primária)', 'Banco Local', 'MLS', 'OpenCellID', 'Wi-Fi', 'IP', 'Cache'],
         endpoints: ['/health', '/api/cadastrar', '/api/rastrear/:numero', '/api/buscar/:numero', '/api/localizar-por-cells', '/api/geolocate']
     });
 });
@@ -247,197 +257,94 @@ app.post('/api/geolocate', (req, res) => {
 });
 
 // ============================================================
-// PROCESSAMENTO PRINCIPAL (INTEGRADO)
+// PROCESSAMENTO PRINCIPAL (UNWIRED LABS COMO FONTE PRIMÁRIA)
 // ============================================================
 async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, res) {
     const torresEncontradas = [];
     
-    // 1. Cache de consultas
+    // 1. Cache
     for (const cell of cells) {
         const cached = await consultarCache(cell.cellId);
         if (cached) torresEncontradas.push(cached);
     }
-    
     if (torresEncontradas.length > 0) {
+        log('info', 'Cache: ' + torresEncontradas.length + ' torres.');
         const pos = calcularTriangulacao(torresEncontradas);
         gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, pos, 'cache', res);
         return;
     }
     
-    // 2. Banco Local
+    // 2. UNWIRED LABS (FONTE PRIMÁRIA PAGA)
+    try {
+        const unwiredResult = await consultarUnwiredMulti(cells);
+        if (unwiredResult && unwiredResult.latitude) {
+            log('info', 'Unwired Labs: localizacao obtida com sucesso.');
+            for (const cell of cells) {
+                await atualizarCache(cell.cellId, unwiredResult.latitude, unwiredResult.longitude, unwiredResult.radius, 'unwired_labs');
+            }
+            gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, unwiredResult, 'unwired_labs', res);
+            return;
+        }
+    } catch (e) {
+        log('warn', 'Unwired Labs falhou: ' + e.message);
+    }
+    
+    // 3. Banco Local
     try {
         const dbTowers = new sqlite3.Database(DB_TOWERS);
         const cellIds = cells.map(c => c.cellId);
         const placeholders = cellIds.map(() => '?').join(',');
-        
         const torres = await new Promise((resolve) => {
-            dbTowers.all('SELECT cell, lat, lon, range FROM cell_towers WHERE cell IN (' + placeholders + ')',
-                cellIds, (err, rows) => { dbTowers.close(); resolve(err ? [] : rows); });
+            dbTowers.all('SELECT cell, lat, lon, range FROM cell_towers WHERE cell IN (' + placeholders + ')', cellIds, (err, rows) => { dbTowers.close(); resolve(err ? [] : rows); });
         });
-        
         if (torres && torres.length > 0) {
-            for (const t of torres) {
-                await atualizarCache(t.cell, t.lat, t.lon, t.range, 'banco_local');
-                torresEncontradas.push(t);
-            }
+            for (const t of torres) { await atualizarCache(t.cell, t.lat, t.lon, t.range, 'banco_local'); torresEncontradas.push(t); }
             const pos = calcularTriangulacao(torresEncontradas);
             gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, pos, 'banco_local', res);
             return;
         }
-    } catch (e) {
-        log('warn', 'Banco local falhou: ' + e.message);
-    }
+    } catch (e) {}
     
-    // 3. Wi-Fi Positioning
+    // 4. Wi-Fi
     if (wifiAccessPoints && Array.isArray(wifiAccessPoints) && wifiAccessPoints.length > 0) {
-        try {
-            const wifiPos = await consultarWiFi(wifiAccessPoints);
-            if (wifiPos) {
-                gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, wifiPos, 'wifi', res);
-                return;
-            }
-        } catch (e) {}
+        try { const wifiPos = await consultarWiFi(wifiAccessPoints); if (wifiPos) { gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, wifiPos, 'wifi', res); return; } } catch (e) {}
     }
     
-    // 4. APIs Externas
+    // 5. APIs Externas
     for (const cell of cells) {
         const info = await consultarTorreComRetry(cell.cellId);
-        if (info) {
-            await atualizarCache(cell.cellId, info.lat, info.lon, info.range, 'api_externa');
-            torresEncontradas.push(info);
-        }
+        if (info) { await atualizarCache(cell.cellId, info.lat, info.lon, info.range, 'api_externa'); torresEncontradas.push(info); }
     }
-    
     if (torresEncontradas.length > 0) {
         const pos = calcularTriangulacao(torresEncontradas);
         gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, pos, 'api_externa', res);
         return;
     }
     
-    // 5. IP Geolocation
+    // 6. IP
     if (clientIp && clientIp !== '127.0.0.1' && clientIp !== '::1') {
-        try {
-            const ipPos = await consultarIP(clientIp);
-            if (ipPos) {
-                gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, ipPos, 'ip', res);
-                return;
-            }
-        } catch (e) {}
+        try { const ipPos = await consultarIP(clientIp); if (ipPos) { gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, ipPos, 'ip', res); return; } } catch (e) {}
     }
     
-    // 6. Estimativa RSSI
+    // 7. RSSI
     const estimativa = estimarPorRSSI(cells);
-    if (estimativa) {
-        gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, estimativa, 'rssi_estimativa', res);
-        return;
-    }
+    if (estimativa) { gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, estimativa, 'rssi_estimativa', res); return; }
     
     gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, null, 'sem_dados', res);
 }
 
 // ============================================================
-// CACHE
+// UNWIRED LABS
 // ============================================================
-function consultarCache(cellId) {
+function consultarUnwiredMulti(cells) {
+    if (!UNWIRED_TOKEN || cells.length === 0) return Promise.resolve(null);
     return new Promise((resolve) => {
-        dbCache.get('SELECT lat, lon, range, fonte FROM cell_cache WHERE cell_id = ? AND created_at > datetime("now", "-24 hours")',
-            [cellId], (err, row) => resolve(row ? { cell: cellId, lat: row.lat, lon: row.lon, range: row.range, fonte: row.fonte } : null));
-    });
-}
-
-function atualizarCache(cellId, lat, lon, range, fonte) {
-    return new Promise((resolve) => {
-        dbCache.run('INSERT OR REPLACE INTO cell_cache (cell_id, lat, lon, range, fonte, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
-            [cellId, lat, lon, range, fonte], () => resolve());
-    });
-}
-
-// ============================================================
-// Wi-Fi POSITIONING
-// ============================================================
-function consultarWiFi(wifiAccessPoints) {
-    return new Promise((resolve) => {
-        const data = JSON.stringify({ wifiAccessPoints });
-        const req = https.request({
-            hostname: 'location.services.mozilla.com',
-            path: '/v1/geolocate?key=test',
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            timeout: 5000
-        }, (res) => {
-            let body = '';
-            res.on('data', chunk => body += chunk);
-            res.on('end', () => {
-                try {
-                    const result = JSON.parse(body);
-                    if (result.location && result.location.lat) resolve({ latitude: result.location.lat, longitude: result.location.lng, radius: result.accuracy || 50 });
-                    else resolve(null);
-                } catch (e) { resolve(null); }
-            });
-        });
-        req.on('timeout', () => { req.destroy(); resolve(null); });
-        req.on('error', () => resolve(null));
-        req.write(data);
-        req.end();
-    });
-}
-
-// ============================================================
-// IP GEOLOCATION
-// ============================================================
-function consultarIP(ip) {
-    return new Promise((resolve) => {
-        dbCache.get('SELECT lat, lon, range FROM ip_cache WHERE ip = ? AND created_at > datetime("now", "-1 hours")',
-            [ip], (err, row) => {
-                if (row) { resolve({ latitude: row.lat, longitude: row.lon, radius: row.range }); return; }
-                const req = https.get('http://ip-api.com/json/' + ip + '?fields=lat,lon', (response) => {
-                    let body = '';
-                    response.on('data', chunk => body += chunk);
-                    response.on('end', () => {
-                        try {
-                            const data = JSON.parse(body);
-                            if (data.lat && data.lon) {
-                                dbCache.run('INSERT OR REPLACE INTO ip_cache (ip, lat, lon, range, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)', [ip, data.lat, data.lon, 5000]);
-                                resolve({ latitude: data.lat, longitude: data.lon, radius: 5000 });
-                            } else resolve(null);
-                        } catch (e) { resolve(null); }
-                    });
-                });
-                req.on('error', () => resolve(null));
-                req.setTimeout(3000, () => { req.destroy(); resolve(null); });
-            });
-    });
-}
-
-// ============================================================
-// APIs EXTERNAS
-// ============================================================
-async function consultarTorreComRetry(cellId, tentativas = 2) {
-    for (let i = 0; i < tentativas; i++) {
-        const result = await consultarTorreAPIs(cellId);
-        if (result) return result;
-        if (i < tentativas - 1) await new Promise(r => setTimeout(r, 1000));
-    }
-    return null;
-}
-
-async function consultarTorreAPIs(cellId) {
-    try { const mls = await consultarMLS(cellId); if (mls) return mls; } catch (e) {}
-    if (API_KEY) { try { const oci = await consultarOpenCellID(cellId); if (oci) return oci; } catch (e) {} }
-    return null;
-}
-
-function consultarMLS(cellId, mcc = 724, mnc = 5, lac = 1234) {
-    return new Promise((resolve) => {
-        const data = JSON.stringify({ cellTowers: [{ cellId, mobileCountryCode: mcc, mobileNetworkCode: mnc, locationAreaCode: lac }] });
-        const req = https.request({ hostname: 'location.services.mozilla.com', path: '/v1/geolocate?key=test', method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: 5000 }, (res) => {
+        const cellData = cells.map(c => ({ lac: c.lac || 1234, cid: c.cellId, signal: c.rssi || c.rsrp || -73 }));
+        const data = JSON.stringify({ token: UNWIRED_TOKEN, radio: 'gsm', mcc: cells[0].mcc || 724, mnc: cells[0].mnc || 5, cells: cellData, address: 1 });
+        const req = https.request({ hostname: 'us1.unwiredlabs.com', path: '/v2/process.php', method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: 5000 }, (res) => {
             let body = ''; res.on('data', chunk => body += chunk);
             res.on('end', () => {
-                try {
-                    const result = JSON.parse(body);
-                    if (result.location && result.location.lat) resolve({ cell: cellId, lat: result.location.lat, lon: result.location.lng, range: result.accuracy || 500 });
-                    else resolve(null);
-                } catch (e) { resolve(null); }
+                try { const r = JSON.parse(body); if (r.status === 'ok' && r.lat && r.lon) resolve({ latitude: r.lat, longitude: r.lon, radius: r.accuracy || 150, torres_usadas: cells.length }); else resolve(null); } catch (e) { resolve(null); }
             });
         });
         req.on('timeout', () => { req.destroy(); resolve(null); });
@@ -446,23 +353,76 @@ function consultarMLS(cellId, mcc = 724, mnc = 5, lac = 1234) {
     });
 }
 
+// ============================================================
+// CACHE, Wi-Fi, IP, APIs EXTERNAS, RSSI, TRIANGULAÇÃO, GRAVAÇÃO
+// ============================================================
+function consultarCache(cellId) {
+    return new Promise((resolve) => {
+        dbCache.get('SELECT lat, lon, range, fonte FROM cell_cache WHERE cell_id = ? AND created_at > datetime("now", "-24 hours")', [cellId], (err, row) => resolve(row ? { cell: cellId, lat: row.lat, lon: row.lon, range: row.range, fonte: row.fonte } : null));
+    });
+}
+function atualizarCache(cellId, lat, lon, range, fonte) {
+    return new Promise((resolve) => { dbCache.run('INSERT OR REPLACE INTO cell_cache (cell_id, lat, lon, range, fonte, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)', [cellId, lat, lon, range, fonte], () => resolve()); });
+}
+function consultarWiFi(wifiAccessPoints) {
+    return new Promise((resolve) => {
+        const data = JSON.stringify({ wifiAccessPoints });
+        const req = https.request({ hostname: 'location.services.mozilla.com', path: '/v1/geolocate?key=test', method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: 5000 }, (res) => {
+            let body = ''; res.on('data', chunk => body += chunk);
+            res.on('end', () => { try { const r = JSON.parse(body); if (r.location && r.location.lat) resolve({ latitude: r.location.lat, longitude: r.location.lng, radius: r.accuracy || 50 }); else resolve(null); } catch (e) { resolve(null); } });
+        });
+        req.on('timeout', () => { req.destroy(); resolve(null); });
+        req.on('error', () => resolve(null));
+        req.write(data); req.end();
+    });
+}
+function consultarIP(ip) {
+    return new Promise((resolve) => {
+        dbCache.get('SELECT lat, lon, range FROM ip_cache WHERE ip = ? AND created_at > datetime("now", "-1 hours")', [ip], (err, row) => {
+            if (row) { resolve({ latitude: row.lat, longitude: row.lon, radius: row.range }); return; }
+            const req = https.get('http://ip-api.com/json/' + ip + '?fields=lat,lon', (response) => {
+                let body = ''; response.on('data', chunk => body += chunk);
+                response.on('end', () => {
+                    try { const d = JSON.parse(body); if (d.lat && d.lon) { dbCache.run('INSERT OR REPLACE INTO ip_cache (ip, lat, lon, range, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)', [ip, d.lat, d.lon, 5000]); resolve({ latitude: d.lat, longitude: d.lon, radius: 5000 }); } else resolve(null); } catch (e) { resolve(null); }
+                });
+            });
+            req.on('error', () => resolve(null));
+            req.setTimeout(3000, () => { req.destroy(); resolve(null); });
+        });
+    });
+}
+async function consultarTorreComRetry(cellId, tentativas = 2) {
+    for (let i = 0; i < tentativas; i++) { const r = await consultarTorreAPIs(cellId); if (r) return r; if (i < tentativas - 1) await new Promise(r => setTimeout(r, 1000)); }
+    return null;
+}
+async function consultarTorreAPIs(cellId) {
+    try { const mls = await consultarMLS(cellId); if (mls) return mls; } catch (e) {}
+    if (API_KEY) { try { const oci = await consultarOpenCellID(cellId); if (oci) return oci; } catch (e) {} }
+    return null;
+}
+function consultarMLS(cellId, mcc = 724, mnc = 5, lac = 1234) {
+    return new Promise((resolve) => {
+        const data = JSON.stringify({ cellTowers: [{ cellId, mobileCountryCode: mcc, mobileNetworkCode: mnc, locationAreaCode: lac }] });
+        const req = https.request({ hostname: 'location.services.mozilla.com', path: '/v1/geolocate?key=test', method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: 5000 }, (res) => {
+            let body = ''; res.on('data', chunk => body += chunk);
+            res.on('end', () => { try { const r = JSON.parse(body); if (r.location && r.location.lat) resolve({ cell: cellId, lat: r.location.lat, lon: r.location.lng, range: r.accuracy || 500 }); else resolve(null); } catch (e) { resolve(null); } });
+        });
+        req.on('timeout', () => { req.destroy(); resolve(null); });
+        req.on('error', () => resolve(null));
+        req.write(data); req.end();
+    });
+}
 function consultarOpenCellID(cellId) {
     return new Promise((resolve) => {
         if (!API_KEY) { resolve(null); return; }
         const req = https.get('https://opencellid.org/cell/get?key=' + API_KEY + '&cell=' + cellId + '&format=json', (response) => {
             let body = ''; response.on('data', chunk => body += chunk);
-            response.on('end', () => {
-                try { const data = JSON.parse(body); if (data.lat && data.lon) resolve({ cell: cellId, lat: data.lat, lon: data.lon, range: data.range || 500 }); else resolve(null); } catch (e) { resolve(null); }
-            });
+            response.on('end', () => { try { const d = JSON.parse(body); if (d.lat && d.lon) resolve({ cell: cellId, lat: d.lat, lon: d.lon, range: d.range || 500 }); else resolve(null); } catch (e) { resolve(null); } });
         });
         req.on('error', () => resolve(null));
         req.setTimeout(5000, () => { req.destroy(); resolve(null); });
     });
 }
-
-// ============================================================
-// ESTIMATIVA RSSI
-// ============================================================
 function estimarPorRSSI(cells) {
     if (!cells || cells.length < 2) return null;
     const txPower = -50, n = 3.0;
@@ -470,19 +430,11 @@ function estimarPorRSSI(cells) {
     const distanciaMedia = distancias.reduce((a, b) => a + b, 0) / distancias.length;
     return { latitude: null, longitude: null, radius: Math.round(distanciaMedia), torres_usadas: cells.length };
 }
-
-// ============================================================
-// TRIANGULAÇÃO
-// ============================================================
 function calcularTriangulacao(torres) {
     let lat = 0, lon = 0, pesoTotal = 0;
     torres.forEach(t => { const peso = 1 / Math.max(t.range || 500, 1); lat += t.lat * peso; lon += t.lon * peso; pesoTotal += peso; });
     return { latitude: lat / pesoTotal, longitude: lon / pesoTotal, radius: Math.round(torres.reduce((a, t) => a + (t.range || 500), 0) / torres.length / Math.sqrt(torres.length)), torres_usadas: torres.length };
 }
-
-// ============================================================
-// GRAVAÇÃO
-// ============================================================
 function gravarLocalizacao(targetId, cells, wifiData, clientIp, pos, fonte, res) {
     dbMain.run(
         'INSERT INTO locations (target_id, cell_data, wifi_data, ip_data, source, metodo, torres_usadas, latitude, longitude, radius) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -508,40 +460,26 @@ async function iniciarServidor() {
     let precisaImportar = true;
     if (fs.existsSync(DB_TOWERS)) {
         const dbCheck = new sqlite3.Database(DB_TOWERS);
-        const tableExists = await new Promise((resolve) => {
-            dbCheck.get("SELECT name FROM sqlite_master WHERE type='table' AND name='cell_towers'", (err, row) => resolve(!!row));
-        });
+        const tableExists = await new Promise((resolve) => { dbCheck.get("SELECT name FROM sqlite_master WHERE type='table' AND name='cell_towers'", (err, row) => resolve(!!row)); });
         if (tableExists) {
-            const count = await new Promise((resolve) => {
-                dbCheck.get('SELECT COUNT(*) as c FROM cell_towers', (err, r) => resolve(r ? r.c : 0));
-            });
+            const count = await new Promise((resolve) => { dbCheck.get('SELECT COUNT(*) as c FROM cell_towers', (err, r) => resolve(r ? r.c : 0)); });
             precisaImportar = count < 1000000;
         }
         dbCheck.close();
     }
-
     if (precisaImportar) {
         let deveTentar = true;
-        if (fs.existsSync(LOCK_FILE)) {
-            const lockTime = new Date(fs.readFileSync(LOCK_FILE, 'utf8').trim());
-            if (Date.now() - lockTime.getTime() < 24 * 60 * 60 * 1000) { deveTentar = false; }
-        }
+        if (fs.existsSync(LOCK_FILE)) { const lockTime = new Date(fs.readFileSync(LOCK_FILE, 'utf8').trim()); if (Date.now() - lockTime.getTime() < 24 * 60 * 60 * 1000) deveTentar = false; }
         if (deveTentar) {
             fs.writeFileSync(LOCK_FILE, new Date().toISOString());
-            try {
-                const { execSync } = require('child_process');
-                execSync('node scripts/import-render.js', { stdio: 'inherit', timeout: 600000 });
-                try { fs.unlinkSync(LOCK_FILE); } catch (e) {}
-            } catch (err) {
-                log('error', 'Falha na importacao: ' + err.message);
-            }
+            try { const { execSync } = require('child_process'); execSync('node scripts/import-render.js', { stdio: 'inherit', timeout: 600000 }); try { fs.unlinkSync(LOCK_FILE); } catch (e) {} } catch (err) { log('error', 'Falha na importacao: ' + err.message); }
         }
     }
-
     app.listen(port, () => {
-        log('info', 'ORION 5.6 rodando na porta ' + port);
+        log('info', 'AI-DEPOM 5.7 rodando na porta ' + port);
+        log('info', 'Unwired Labs: CONFIGURADO');
+        log('info', 'OpenCellID: ' + (API_KEY ? 'CONFIGURADO' : 'PENDENTE'));
         log('info', 'Motor de Rede Completo ativo.');
     });
 }
-
 iniciarServidor();
