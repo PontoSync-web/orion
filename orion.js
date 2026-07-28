@@ -30,7 +30,7 @@ Object.values(PATHS).forEach(dir => {
 
 const DB_MAIN = path.join(PATHS.data, 'orion.db');
 const DB_TOWERS = path.join(PATHS.data, 'cell_towers.db');
-
+// Não cria o arquivo aqui — o import-render.js fará isso
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -213,24 +213,35 @@ app.get('/api/ticket/:id', (req, res) => {
 
 async function iniciarServidor() {
     // Verifica se o banco de torres existe e tem dados
-    const precisaImportar = !fs.existsSync(DB_TOWERS) || await new Promise((resolve) => {
-        const db = new sqlite3.Database(DB_TOWERS);
-        db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => {
-            db.close();
-            resolve(!row || row.c < 1000000);
+    let precisaImportar = true;
+    
+    if (fs.existsSync(DB_TOWERS)) {
+        const dbCheck = new sqlite3.Database(DB_TOWERS);
+        const row = await new Promise((resolve) => {
+            dbCheck.get("SELECT name FROM sqlite_master WHERE type='table' AND name='cell_towers'", (err, row) => {
+                resolve(row);
+            });
         });
-    });
+        if (row) {
+            const count = await new Promise((resolve) => {
+                dbCheck.get('SELECT COUNT(*) as c FROM cell_towers', (err, r) => {
+                    resolve(r ? r.c : 0);
+                });
+            });
+            precisaImportar = count < 1000000;
+        }
+        dbCheck.close();
+    }
 
     if (precisaImportar) {
         log('info', 'Banco de torres vazio ou ausente. Iniciando importacao...');
         try {
             const { execSync } = require('child_process');
-            log('info', 'Executando scripts/import-render.js...');
-            execSync('node scripts/import-render.js', { stdio: 'inherit', timeout: 600000 }); // 10 min timeout
+            execSync('node scripts/import-render.js', { stdio: 'inherit', timeout: 600000 });
             log('info', 'Importacao concluida com sucesso!');
         } catch (err) {
             log('error', 'Falha na importacao: ' + err.message);
-            log('warn', 'Servidor iniciara sem banco de torres. A localizacao por triangulacao ficara indisponivel.');
+            log('warn', 'Servidor iniciara sem banco de torres.');
         }
     } else {
         log('info', 'Banco de torres OK');
