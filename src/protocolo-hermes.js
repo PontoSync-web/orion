@@ -1,7 +1,7 @@
 // ============================================================
 // ARQUIVO: src/protocolo-hermes.js
 // DATA: 28 de Julho de 2026
-// HORÁRIO: 16:45 (Horário Oficial — Salvador, Bahia, Brasil)
+// HORÁRIO: 17:15 (Horário Oficial — Salvador, Bahia, Brasil)
 // FUSO: América do Sul / Brasil / Bahia (GMT-3)
 // MOTIVO: Protocolo Hermes v2.0 — Abrangência Nacional.
 //         Cobertura de emergência para todas as 27 capitais
@@ -41,9 +41,6 @@ class ProtocoloHermes {
         this.timeoutSessao = 30 * 60 * 1000;
         this.iniciarLimpezaAutomatica();
 
-        // ============================================================
-        // 28/07/2026 16:45 — Cobertura das 27 capitais brasileiras
-        // ============================================================
         this.capitaisBrasileiras = [
             { nome: 'Aracaju', uf: 'SE', lat: -10.9472, lon: -37.0731 },
             { nome: 'Belém', uf: 'PA', lat: -1.4558, lon: -48.4902 },
@@ -74,7 +71,6 @@ class ProtocoloHermes {
             { nome: 'Vitória', uf: 'ES', lat: -20.3155, lon: -40.3128 }
         ];
 
-        // Regiões metropolitanas adicionais com alta densidade de ERBs
         this.regioesMetropolitanas = [
             { nome: 'Campinas', uf: 'SP', lat: -22.9056, lon: -47.0608 },
             { nome: 'Santos', uf: 'SP', lat: -23.9608, lon: -46.3336 },
@@ -93,7 +89,6 @@ class ProtocoloHermes {
             { nome: 'Ananindeua', uf: 'PA', lat: -1.3657, lon: -48.3744 }
         ];
 
-        // Operadoras brasileiras por região
         this.operadorasPorRegiao = {
             Norte: ['Vivo', 'Claro', 'TIM', 'Oi'],
             Nordeste: ['Vivo', 'Claro', 'TIM', 'Oi'],
@@ -103,18 +98,12 @@ class ProtocoloHermes {
         };
     }
 
-    // ============================================================
-    // GERA CHAVE DE SESSÃO EFÊMERA (SHA-256)
-    // ============================================================
     gerarChaveSessao() {
         return crypto.createHash('sha256')
             .update(Date.now().toString() + Math.random().toString())
             .digest('hex');
     }
 
-    // ============================================================
-    // INICIA SESSÃO DE EMERGÊNCIA NACIONAL
-    // ============================================================
     iniciarSessaoEmergenciaNacional(motivo, dadosContexto) {
         const sessaoId = this.gerarChaveSessao();
         const sessao = {
@@ -132,29 +121,13 @@ class ProtocoloHermes {
         return sessaoId;
     }
 
-    // ============================================================
-    // SANITIZA CONTEXTO (remove dados sensíveis)
-    // ============================================================
     sanitizarContexto(dados) {
         const sanitizado = { ...dados };
-        if (sanitizado.numero) {
-            sanitizado.numero = sanitizado.numero.replace(/\d/g, '*');
-        }
-        if (sanitizado.cells) {
-            sanitizado.cells = sanitizado.cells.map(c => ({
-                cellId: c.cellId,
-                rssi: c.rssi,
-                lac: c.lac,
-                mcc: c.mcc,
-                mnc: c.mnc
-            }));
-        }
+        if (sanitizado.numero) sanitizado.numero = sanitizado.numero.replace(/\d/g, '*');
+        if (sanitizado.cells) sanitizado.cells = sanitizado.cells.map(c => ({ cellId: c.cellId, rssi: c.rssi, lac: c.lac, mcc: c.mcc, mnc: c.mnc }));
         return sanitizado;
     }
 
-    // ============================================================
-    // DETECTA REGIÃO PELAS COORDENADAS OU CELL IDs
-    // ============================================================
     detectarRegiao(dadosContexto) {
         if (dadosContexto.cells && dadosContexto.cells.length > 0) {
             const mcc = dadosContexto.cells[0].mcc || 724;
@@ -164,44 +137,25 @@ class ProtocoloHermes {
         return 'Brasil (Nacional)';
     }
 
-    // ============================================================
-    // SOLICITA DADOS A UMA IA COM ABRANGÊNCIA NACIONAL
-    // ============================================================
     async solicitarDadosIANacional(nomeIA, payload) {
         const fonte = this.fontesIA.find(f => f.nome.includes(nomeIA));
         if (!fonte) return { erro: 'Fonte IA não encontrada', nome: nomeIA };
-
         const sessaoId = payload.sessaoId;
         const sessao = this.sessoes.get(sessaoId);
         if (!sessao) return { erro: 'Sessão expirada ou inválida' };
-
         const pedido = this.montarPedidoNacional(fonte, payload);
-
         try {
             console.log(`[HERMES] Enviando pedido NACIONAL para ${fonte.nome}...`);
-            console.log(`[HERMES] Abrangência: 27 capitais + 15 regiões metropolitanas`);
-
             const resposta = await this.enviarParaIANacional(fonte, pedido);
-
-            sessao.resultados.push({
-                fonte: fonte.nome,
-                timestamp: new Date().toISOString(),
-                abrangencia: 'NACIONAL',
-                dados: resposta
-            });
-
+            sessao.resultados.push({ fonte: fonte.nome, timestamp: new Date().toISOString(), abrangencia: 'NACIONAL', dados: resposta });
             return { status: 'sucesso', fonte: fonte.nome, dados: resposta };
         } catch (erro) {
             return { status: 'falha', fonte: fonte.nome, erro: erro.message };
         }
     }
 
-    // ============================================================
-    // MONTA O PEDIDO NACIONAL PARA CADA IA
-    // ============================================================
     montarPedidoNacional(fonte, payload) {
         const regiaoDetectada = this.detectarRegiao(payload.contexto || payload);
-
         switch (fonte.especialidade) {
             case 'dataset_erbs_nacional':
                 return {
@@ -245,12 +199,8 @@ class ProtocoloHermes {
         }
     }
 
-    // ============================================================
-    // ENVIA PARA IA COM RESPOSTA NACIONAL
-    // ============================================================
     async enviarParaIANacional(fonte, pedido) {
         await new Promise(r => setTimeout(r, 500 + Math.random() * 1500));
-
         switch (fonte.especialidade) {
             case 'dataset_erbs_nacional':
                 return {
@@ -276,17 +226,16 @@ class ProtocoloHermes {
                 return {
                     tipo: 'analise_rede_nacional',
                     cobertura_nacional: {
-                        Norte: { torres_estimadas: 15000, cobertura: 'REGULAR', principais_operadoras: ['Vivo', 'Claro'] },
-                        Nordeste: { torres_estimadas: 35000, cobertura: 'BOA', principais_operadoras: ['Claro', 'Vivo', 'TIM'] },
-                        CentroOeste: { torres_estimadas: 12000, cobertura: 'REGULAR', principais_operadoras: ['Vivo', 'Claro'] },
-                        Sudeste: { torres_estimadas: 60000, cobertura: 'EXCELENTE', principais_operadoras: ['Vivo', 'Claro', 'TIM', 'Oi'] },
-                        Sul: { torres_estimadas: 28000, cobertura: 'BOA', principais_operadoras: ['Vivo', 'Claro', 'TIM'] }
+                        Norte: { torres_estimadas: 15000, cobertura: 'REGULAR' },
+                        Nordeste: { torres_estimadas: 35000, cobertura: 'BOA' },
+                        CentroOeste: { torres_estimadas: 12000, cobertura: 'REGULAR' },
+                        Sudeste: { torres_estimadas: 60000, cobertura: 'EXCELENTE' },
+                        Sul: { torres_estimadas: 28000, cobertura: 'BOA' }
                     },
                     total_nacional_estimado: 150000,
                     apis_recomendadas: [
                         { nome: 'Unwired Labs', cobertura: 'Nacional', precisao: '50-200m', custo: '$9/mês' },
-                        { nome: 'CellMapper', cobertura: 'Nacional', precisao: '100-500m', custo: 'Gratuito' },
-                        { nome: 'OpenCellID', cobertura: 'Nacional', precisao: '50-500m', custo: 'Gratuito (limitado)' }
+                        { nome: 'CellMapper', cobertura: 'Nacional', precisao: '100-500m', custo: 'Gratuito' }
                     ]
                 };
             case 'otimizacao_algoritmo_nacional':
@@ -307,13 +256,9 @@ class ProtocoloHermes {
         }
     }
 
-    // ============================================================
-    // CONSOLIDA RESULTADOS NACIONAIS
-    // ============================================================
     consolidarResultados(sessaoId) {
         const sessao = this.sessoes.get(sessaoId);
         if (!sessao) return { erro: 'Sessão não encontrada' };
-
         return {
             sessaoId: sessaoId,
             criadoEm: sessao.criadoEm,
@@ -325,20 +270,15 @@ class ProtocoloHermes {
         };
     }
 
-    // ============================================================
-    // EXPORTA DADOS CONSOLIDADOS PARA O ORION
-    // ============================================================
     exportarParaORION(sessaoId) {
         const consolidado = this.consolidarResultados(sessaoId);
         if (consolidado.erro) return null;
-
         const erbs = [];
         for (const resultado of consolidado.resultados) {
             if (resultado.dados && resultado.dados.dados_amostra_nacional) {
                 erbs.push(...resultado.dados.dados_amostra_nacional);
             }
         }
-
         return {
             total_erbs: erbs.length,
             erbs: erbs,
@@ -348,17 +288,11 @@ class ProtocoloHermes {
         };
     }
 
-    // ============================================================
-    // DESTRÓI SESSÃO
-    // ============================================================
     destruirSessao(sessaoId) {
         this.sessoes.delete(sessaoId);
         console.log(`[HERMES] Sessão ${sessaoId.substring(0, 16)}... destruída.`);
     }
 
-    // ============================================================
-    // LIMPEZA AUTOMÁTICA
-    // ============================================================
     iniciarLimpezaAutomatica() {
         setInterval(() => {
             const agora = Date.now();
