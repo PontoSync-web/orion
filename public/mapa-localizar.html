@@ -1,31 +1,45 @@
+<!--
+    ARQUIVO: public/mapa-localizar.html
+    DATA: 28/07/2026
+    MOTIVO: Reescrita completa para compatibilidade total com ORION 5.1.
+            - Trata status 'cadastrado', 'sem_dados' e 'sucesso' sem erros.
+            - Exibe alertas informativos quando não há coordenadas.
+            - Health check automático a cada 30 segundos.
+            - Interface responsiva e profissional.
+            - Integração com rotas /api/rastrear/:numero e /health.
+-->
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ORION - Localização</title>
+    <title>ORION - Sistema de Localização</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; background: #1e1e1e; color: #eee; }
-        #container { display: flex; flex-direction: column; height: 100vh; }
-        #header { padding: 16px 20px; background: #2d2d2d; border-bottom: 1px solid #444; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-        #header input, #header button { padding: 8px 14px; border-radius: 6px; border: none; font-size: 14px; }
-        #header input { background: #3d3d3d; color: #eee; flex: 1; min-width: 200px; }
-        #header button { background: #4CAF50; color: #fff; font-weight: bold; cursor: pointer; }
-        #header button:hover { background: #45a049; }
-        #header .status { margin-left: auto; font-size: 14px; color: #aaa; }
-        #map { flex: 1; width: 100%; background: #2a2a2a; }
-        #info { padding: 10px 20px; background: #2d2d2d; border-top: 1px solid #444; font-size: 14px; color: #aaa; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #1a1a2e; color: #eee; height: 100vh; display: flex; flex-direction: column; }
+        #header { background: #16213e; padding: 15px 20px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-bottom: 2px solid #0f3460; }
+        #header h1 { font-size: 20px; color: #e94560; white-space: nowrap; }
+        #header input { flex: 1; min-width: 180px; padding: 10px; border-radius: 6px; border: 1px solid #0f3460; background: #0f3460; color: #eee; font-size: 14px; }
+        #header button { padding: 10px 20px; border-radius: 6px; border: none; background: #e94560; color: #fff; font-weight: bold; cursor: pointer; font-size: 14px; transition: background 0.2s; }
+        #header button:hover { background: #c23152; }
+        #status { font-size: 13px; color: #aaa; margin-left: auto; white-space: nowrap; }
+        #map { flex: 1; width: 100%; }
+        #info { background: #16213e; padding: 10px 20px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; font-size: 13px; border-top: 2px solid #0f3460; }
+        #info span { white-space: nowrap; }
+        #alertBox { padding: 10px; margin: 0; text-align: center; font-weight: bold; display: none; }
+        .alert-info { background: #0f3460; color: #4fc3f7; display: block !important; }
+        .alert-error { background: #3e1a1a; color: #ef5350; display: block !important; }
     </style>
 </head>
 <body>
-<div id="container">
+    <div id="alertBox"></div>
     <div id="header">
-        <span style="font-weight: bold; font-size: 18px;">&#128752; ORION</span>
-        <input type="text" id="numeroInput" placeholder="Digite o número (ex: 71988979724)" />
-        <button id="buscarBtn">&#128270; Localizar</button>
-        <span class="status" id="statusText">&#9989; Servidor online</span>
+        <h1>🛰️ ORION</h1>
+        <input type="text" id="numeroInput" placeholder="Digite o número do alvo..." />
+        <button id="buscarBtn">🔍 Localizar</button>
+        <span id="status">✅ Online</span>
     </div>
     <div id="map"></div>
     <div id="info">
@@ -33,83 +47,149 @@
         <span id="infoCoordenadas"><b>Coordenadas:</b> —</span>
         <span id="infoPrecisao"><b>Precisão:</b> —</span>
         <span id="infoTorres"><b>Torres:</b> —</span>
+        <span id="infoFonte"><b>Fonte:</b> —</span>
     </div>
-</div>
 
-<script>
-    const ORION_API_BASE = '/api/rastrear/';
+    <script>
+        const API_BASE = '/api/rastrear/';
 
-    const map = L.map('map').setView([-14.2350, -51.9253], 4);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap'
-    }).addTo(map);
+        const map = L.map('map').setView([-14.235, -51.925], 4);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap',
+            maxZoom: 19
+        }).addTo(map);
 
-    let marker = null;
-    let circle = null;
+        let marker = null;
+        let circle = null;
 
-    function atualizarMapa(lat, lng, raio, numero, torres) {
-        if (marker) map.removeLayer(marker);
-        if (circle) map.removeLayer(circle);
-
-        marker = L.marker([lat, lng]).addTo(map);
-        marker.bindPopup(`<b>&#128241; ${numero}</b><br>Lat: ${lat.toFixed(6)}<br>Lng: ${lng.toFixed(6)}<br>Raio: ${raio}m<br>Torres: ${torres}`).openPopup();
-        circle = L.circle([lat, lng], { radius: raio, color: '#4CAF50', fillColor: '#4CAF50', fillOpacity: 0.2 }).addTo(map);
-        map.setView([lat, lng], 13);
-
-        document.getElementById('infoNumero').innerHTML = `<b>Número:</b> ${numero}`;
-        document.getElementById('infoCoordenadas').innerHTML = `<b>Coordenadas:</b> ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-        document.getElementById('infoPrecisao').innerHTML = `<b>Precisão:</b> ${raio}m`;
-        document.getElementById('infoTorres').innerHTML = `<b>Torres:</b> ${torres}`;
-    }
-
-    async function buscarLocalizacao() {
-        const numero = document.getElementById('numeroInput').value.trim();
-        if (!numero) { alert('Digite um número.'); return; }
-
-        const status = document.getElementById('statusText');
-        status.innerHTML = '&#9203; Buscando...';
-        status.style.color = '#ffaa00';
-
-        try {
-            const response = await fetch(ORION_API_BASE + encodeURIComponent(numero));
-            const data = await response.json();
-
-            if (!response.ok) throw new Error(data.erro || 'Erro na requisição');
-
-            if (data.position) {
-                atualizarMapa(data.position.latitude, data.position.longitude, data.position.raio_estimado || 500, data.numero || numero, data.torres_usadas || 'N/A');
-                status.innerHTML = '&#9989; Localizado!';
-                status.style.color = '#4CAF50';
-            } else {
-                throw new Error('Coordenadas não encontradas');
-            }
-        } catch (error) {
-            console.error(error);
-            status.innerHTML = `&#10060; Erro: ${error.message}`;
-            status.style.color = '#f44336';
+        function showAlert(msg, type) {
+            const box = document.getElementById('alertBox');
+            box.textContent = msg;
+            box.className = type === 'error' ? 'alert-error' : 'alert-info';
+            clearTimeout(box._timeout);
+            box._timeout = setTimeout(() => { box.className = ''; }, 10000);
         }
-    }
 
-    document.getElementById('buscarBtn').addEventListener('click', buscarLocalizacao);
-    document.getElementById('numeroInput').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') buscarLocalizacao();
-    });
+        function atualizarMapa(lat, lng, raio, numero, torres, fonte) {
+            if (marker) map.removeLayer(marker);
+            if (circle) map.removeLayer(circle);
 
-    async function checkHealth() {
-        try {
-            const response = await fetch('/health');
-            if (response.ok) {
-                document.getElementById('statusText').innerHTML = '&#9989; Servidor online';
-                document.getElementById('statusText').style.color = '#4CAF50';
-            } else {
-                throw new Error('Offline');
-            }
-        } catch {
-            document.getElementById('statusText').innerHTML = '&#9888;&#65039; Servidor offline';
-            document.getElementById('statusText').style.color = '#f44336';
+            marker = L.marker([lat, lng]).addTo(map);
+            marker.bindPopup(
+                '<b>📱 ' + numero + '</b><br>' +
+                'Lat: ' + lat.toFixed(6) + '<br>' +
+                'Lng: ' + lng.toFixed(6) + '<br>' +
+                'Raio: ' + raio + 'm<br>' +
+                'Torres: ' + torres + '<br>' +
+                'Fonte: ' + fonte
+            ).openPopup();
+
+            circle = L.circle([lat, lng], {
+                radius: raio,
+                color: '#e94560',
+                fillColor: '#e94560',
+                fillOpacity: 0.15
+            }).addTo(map);
+
+            map.setView([lat, lng], 14);
+
+            document.getElementById('infoNumero').innerHTML = '<b>Número:</b> ' + numero;
+            document.getElementById('infoCoordenadas').innerHTML = '<b>Coordenadas:</b> ' + lat.toFixed(6) + ', ' + lng.toFixed(6);
+            document.getElementById('infoPrecisao').innerHTML = '<b>Precisão:</b> ' + raio + 'm';
+            document.getElementById('infoTorres').innerHTML = '<b>Torres:</b> ' + torres;
+            document.getElementById('infoFonte').innerHTML = '<b>Fonte:</b> ' + fonte;
         }
-    }
-    checkHealth();
-</script>
+
+        function limparInfo() {
+            document.getElementById('infoNumero').innerHTML = '<b>Número:</b> —';
+            document.getElementById('infoCoordenadas').innerHTML = '<b>Coordenadas:</b> —';
+            document.getElementById('infoPrecisao').innerHTML = '<b>Precisão:</b> —';
+            document.getElementById('infoTorres').innerHTML = '<b>Torres:</b> —';
+            document.getElementById('infoFonte').innerHTML = '<b>Fonte:</b> —';
+        }
+
+        async function buscarLocalizacao() {
+            const numero = document.getElementById('numeroInput').value.trim();
+            if (!numero) {
+                showAlert('Por favor, digite um número de telefone.', 'error');
+                return;
+            }
+
+            const statusEl = document.getElementById('status');
+            statusEl.innerHTML = '⏳ Buscando...';
+            statusEl.style.color = '#ffaa00';
+            limparInfo();
+
+            try {
+                const response = await fetch(API_BASE + encodeURIComponent(numero));
+                const data = await response.json();
+
+                if (!response.ok) throw new Error(data.erro || 'Erro ' + response.status);
+
+                if (data.status === 'cadastrado') {
+                    showAlert('📡 ' + data.mensagem + '\n\nPara localizar, envie dados de torres via POST /api/localizar-por-cells', 'info');
+                    statusEl.innerHTML = '⚠️ Aguardando dados';
+                    statusEl.style.color = '#ffaa00';
+                    document.getElementById('infoNumero').innerHTML = '<b>Número:</b> ' + numero;
+                    document.getElementById('infoCoordenadas').innerHTML = '<b>Status:</b> Cadastrado';
+                    return;
+                }
+
+                if (data.status === 'sem_dados') {
+                    showAlert('📡 ' + data.mensagem + '\n\nEnvie Cell IDs reais para calcular a posição.', 'info');
+                    statusEl.innerHTML = '⚠️ Sem localização';
+                    statusEl.style.color = '#ffaa00';
+                    document.getElementById('infoNumero').innerHTML = '<b>Número:</b> ' + numero;
+                    document.getElementById('infoCoordenadas').innerHTML = '<b>Alvo:</b> ' + (data.alvo || 'Desconhecido');
+                    return;
+                }
+
+                if (data.status === 'sucesso' && data.position && data.position.latitude) {
+                    atualizarMapa(
+                        data.position.latitude,
+                        data.position.longitude,
+                        data.position.raio_estimado || 500,
+                        data.numero || numero,
+                        data.torres_usadas || '1',
+                        data.fonte || 'real'
+                    );
+                    statusEl.innerHTML = '✅ Localizado!';
+                    statusEl.style.color = '#4CAF50';
+                    showAlert('🎯 Alvo localizado com sucesso!', 'info');
+                    return;
+                }
+
+                throw new Error('Formato de resposta não reconhecido');
+
+            } catch (error) {
+                console.error('Erro:', error);
+                statusEl.innerHTML = '❌ ' + error.message;
+                statusEl.style.color = '#ef5350';
+                showAlert('❌ ' + error.message, 'error');
+            }
+        }
+
+        document.getElementById('buscarBtn').addEventListener('click', buscarLocalizacao);
+        document.getElementById('numeroInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') buscarLocalizacao();
+        });
+
+        async function checkHealth() {
+            try {
+                const res = await fetch('/health');
+                if (res.ok) {
+                    document.getElementById('status').innerHTML = '✅ Online';
+                    document.getElementById('status').style.color = '#4CAF50';
+                } else {
+                    throw new Error('Offline');
+                }
+            } catch (e) {
+                document.getElementById('status').innerHTML = '⚠️ Offline';
+                document.getElementById('status').style.color = '#ef5350';
+            }
+        }
+        checkHealth();
+        setInterval(checkHealth, 30000);
+    </script>
 </body>
 </html>
