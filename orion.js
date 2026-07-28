@@ -1,10 +1,14 @@
 // ============================================================
 // ARQUIVO: orion.js
 // DATA: 28 de Julho de 2026
-// HORÁRIO: 11:39 (Horário Oficial — Salvador, Bahia, Brasil)
+// HORÁRIO: 12:00 (Horário Oficial — Salvador, Bahia, Brasil)
 // FUSO: América do Sul / Brasil / Bahia (GMT-3)
-// MOTIVO: Token do Unwired Labs incorporado.
-//         AI-DEPOM 5.7 — Motor de Rede Completo ativado.
+// MOTIVO: v5.8 — CellMapper integrado como fonte primária de
+//         importação (sem limite diário). Correção definitiva
+//         do erro RATE_LIMITED do OpenCellID.
+//         Motor de Rede Completo: CellMapper, Unwired Labs,
+//         Banco Local, MLS, OpenCellID, Wi-Fi, IP, Cache,
+//         Google Geolocation API, RSSI. Sem conflitos.
 // ============================================================
 
 require('dotenv').config();
@@ -134,10 +138,11 @@ dbCache.exec(`
 app.get('/health', (req, res) => {
     res.json({
         servidor: 'AI-DEPOM',
-        versao: '5.7',
+        versao: '5.8',
         status: 'online',
-        motor: 'Motor de Rede Completo + Unwired Labs',
-        fontes: ['unwired_labs', 'banco_local', 'mls', 'opencellid', 'wifi', 'ip', 'cache', 'rssi'],
+        motor: 'Motor de Rede Completo + CellMapper + Unwired Labs',
+        fontes_importacao: ['cellmapper', 'opencellid'],
+        fontes_localizacao: ['unwired_labs', 'banco_local', 'mls', 'opencellid', 'wifi', 'ip', 'cache', 'rssi'],
         tokens: {
             unwired: UNWIRED_TOKEN ? 'configurado' : 'pendente',
             opencellid: API_KEY ? 'configurado' : 'pendente'
@@ -149,8 +154,9 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
     res.json({
         servidor: 'AI-DEPOM',
-        versao: '5.7',
-        fontes_ativas: ['Unwired Labs (Primária)', 'Banco Local', 'MLS', 'OpenCellID', 'Wi-Fi', 'IP', 'Cache'],
+        versao: '5.8',
+        fontes_importacao: ['CellMapper (Primária - sem limites)', 'OpenCellID (Fallback)'],
+        fontes_localizacao: ['Unwired Labs', 'Banco Local', 'MLS', 'OpenCellID', 'Wi-Fi', 'IP', 'Cache'],
         endpoints: ['/health', '/api/cadastrar', '/api/rastrear/:numero', '/api/buscar/:numero', '/api/localizar-por-cells', '/api/geolocate']
     });
 });
@@ -256,7 +262,7 @@ app.post('/api/geolocate', (req, res) => {
 });
 
 // ============================================================
-// PROCESSAMENTO PRINCIPAL (UNWIRED LABS COMO FONTE PRIMÁRIA)
+// PROCESSAMENTO PRINCIPAL
 // ============================================================
 async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, res) {
     const torresEncontradas = [];
@@ -267,17 +273,15 @@ async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp,
         if (cached) torresEncontradas.push(cached);
     }
     if (torresEncontradas.length > 0) {
-        log('info', 'Cache: ' + torresEncontradas.length + ' torres.');
         const pos = calcularTriangulacao(torresEncontradas);
         gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, pos, 'cache', res);
         return;
     }
     
-    // 2. UNWIRED LABS (FONTE PRIMÁRIA PAGA)
+    // 2. Unwired Labs
     try {
         const unwiredResult = await consultarUnwiredMulti(cells);
         if (unwiredResult && unwiredResult.latitude) {
-            log('info', 'Unwired Labs: localizacao obtida com sucesso.');
             for (const cell of cells) {
                 await atualizarCache(cell.cellId, unwiredResult.latitude, unwiredResult.longitude, unwiredResult.radius, 'unwired_labs');
             }
@@ -288,7 +292,7 @@ async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp,
         log('warn', 'Unwired Labs falhou: ' + e.message);
     }
     
-    // 3. Banco Local
+    // 3. Banco Local (CellMapper + OpenCellID)
     try {
         const dbTowers = new sqlite3.Database(DB_TOWERS);
         const cellIds = cells.map(c => c.cellId);
@@ -453,7 +457,7 @@ function gravarLocalizacao(targetId, cells, wifiData, clientIp, pos, fonte, res)
 }
 
 // ============================================================
-// INICIALIZAÇÃO
+// INICIALIZAÇÃO COM CELLMAPPER (PRIMÁRIO) + OPENCELLID (FALLBACK)
 // ============================================================
 async function iniciarServidor() {
     let precisaImportar = true;
@@ -471,14 +475,29 @@ async function iniciarServidor() {
         if (fs.existsSync(LOCK_FILE)) { const lockTime = new Date(fs.readFileSync(LOCK_FILE, 'utf8').trim()); if (Date.now() - lockTime.getTime() < 24 * 60 * 60 * 1000) deveTentar = false; }
         if (deveTentar) {
             fs.writeFileSync(LOCK_FILE, new Date().toISOString());
-            try { const { execSync } = require('child_process'); execSync('node scripts/import-render.js', { stdio: 'inherit', timeout: 600000 }); try { fs.unlinkSync(LOCK_FILE); } catch (e) {} } catch (err) { log('error', 'Falha na importacao: ' + err.message); }
+            try {
+                const { execSync } = require('child_process');
+                // Tenta CellMapper primeiro (sem limites)
+                log('info', 'Tentando importar via CellMapper...');
+                execSync('node scripts/import-cellmapper.js', { stdio: 'inherit', timeout: 600000 });
+                try { fs.unlinkSync(LOCK_FILE); } catch (e) {}
+            } catch (err1) {
+                log('warn', 'CellMapper falhou. Tentando OpenCellID...');
+                try {
+                    const { execSync } = require('child_process');
+                    execSync('node scripts/import-render.js', { stdio: 'inherit', timeout: 600000 });
+                    try { fs.unlinkSync(LOCK_FILE); } catch (e) {}
+                } catch (err2) {
+                    log('error', 'Todas as fontes de importação falharam.');
+                }
+            }
         }
     }
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 5.7 rodando na porta ' + port);
-        log('info', 'Unwired Labs: CONFIGURADO');
+        log('info', 'AI-DEPOM 5.8 rodando na porta ' + port);
+        log('info', 'CellMapper: Fonte primária de importação (sem limites)');
+        log('info', 'Unwired Labs: ' + (UNWIRED_TOKEN ? 'CONFIGURADO' : 'PENDENTE'));
         log('info', 'OpenCellID: ' + (API_KEY ? 'CONFIGURADO' : 'PENDENTE'));
-        log('info', 'Motor de Rede Completo ativo.');
     });
 }
 iniciarServidor();
