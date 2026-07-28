@@ -29,6 +29,20 @@ async function main() {
     }
     
     const db = new sqlite3.Database(DB_PATH);
+
+// Garante que a tabela existe antes de consultar
+db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
+    radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
+    cell INTEGER PRIMARY KEY, unit INTEGER,
+    lon REAL, lat REAL, range INTEGER,
+    samples INTEGER, changeable INTEGER,
+    created INTEGER, updated INTEGER, averageSignal INTEGER
+)`);
+
+// Verifica se ja tem dados
+const count = await new Promise((rs, rj) => {
+    db.get('SELECT COUNT(*) as c FROM cell_towers', (e, r) => e ? rj(e) : rs(r));
+});
     
     // Verifica se ja tem dados
     const count = await new Promise((rs, rj) => {
@@ -40,17 +54,7 @@ async function main() {
         db.close();
         process.exit(0);
     }
-    
-    // Cria tabela
-    db.run('DROP TABLE IF EXISTS cell_towers');
-    db.run(`CREATE TABLE cell_towers (
-        radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
-        cell INTEGER PRIMARY KEY, unit INTEGER,
-        lon REAL, lat REAL, range INTEGER,
-        samples INTEGER, changeable INTEGER,
-        created INTEGER, updated INTEGER, averageSignal INTEGER
-    )`);
-    
+       
     // Ativa modo WAL para performance
     db.run('PRAGMA journal_mode=WAL');
     db.run('PRAGMA synchronous=OFF');
