@@ -1,9 +1,10 @@
 // ============================================================
 // ARQUIVO: orion.js
 // DATA: 28/07/2026
-// MOTIVO: Reescrita completa com todas as rotas, segurança CSP,
-//         cadastro automático, triangulação real, e lock de
-//         importação para evitar loop em falhas consecutivas.
+// MOTIVO: Adicionado fallback para consulta direta à API do
+//         OpenCellID quando o banco local de torres está vazio.
+//         Inclui todas as rotas, segurança CSP, cadastro
+//         automático, triangulação real e lock de 24h.
 // ============================================================
 
 require('dotenv').config();
@@ -14,6 +15,7 @@ const rateLimit = require('express-rate-limit');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -37,6 +39,7 @@ Object.values(PATHS).forEach(dir => {
 const DB_MAIN = path.join(PATHS.data, 'orion.db');
 const DB_TOWERS = path.join(PATHS.data, 'cell_towers.db');
 const LOCK_FILE = path.join(PATHS.data, '.import_lock');
+const API_KEY = process.env.OPENCELLID_API_KEY || '';
 
 // ============================================================
 // SEGURANÇA
@@ -102,6 +105,7 @@ app.get('/health', (req, res) => {
         versao: '5.1',
         status: 'online',
         banco_torres: fs.existsSync(DB_TOWERS) ? 'ok' : 'pendente',
+        fallback_api: API_KEY ? 'disponivel' : 'indisponivel',
         timestamp: new Date().toISOString()
     });
 });
@@ -141,9 +145,7 @@ app.get('/api/rastrear/:numero', (req, res) => {
         if (err || !target) {
             dbMain.run('INSERT OR IGNORE INTO targets (name, phone) VALUES (?, ?)',
                 ['Alvo ' + numero.slice(-4), numero],
-                () => {
-                    return res.json({ status: 'cadastrado', numero, mensagem: 'Alvo cadastrado. Sem dados de localizacao.', position: null });
-                });
+                () => res.json({ status: 'cadastrado', numero, mensagem: 'Alvo cadastrado. Sem dados de localizacao.', position: null }));
             return;
         }
         dbMain.get('SELECT latitude, longitude, radius, timestamp FROM locations WHERE target_id = ? ORDER BY timestamp DESC LIMIT 1',
@@ -179,10 +181,12 @@ app.get('/api/buscar/:numero', (req, res) => {
     });
 });
 
-// Localização por células
+// Localização por células (COM FALLBACK PARA API)
 app.post('/api/localizar-por-cells', (req, res) => {
     const { numero, cells } = req.body;
-    if (!cells || !Array.isArray(cells) || cells.length === 0) return res.status(400).json({ erro: 'Array de celulas obrigatorio.' });
+    if (!cells || !Array.isArray(cells) || cells.length === 0) {
+        return res.status(400).json({ erro: 'Array de celulas obrigatorio.' });
+    }
 
     dbMain.get('SELECT id FROM targets WHERE phone = ?', [numero], (err, target) => {
         if (err || !target) {
@@ -190,48 +194,116 @@ app.post('/api/localizar-por-cells', (req, res) => {
                 ['Alvo ' + (numero || '').slice(-4), numero],
                 function(insertErr) {
                     if (insertErr) return res.status(500).json({ erro: insertErr.message });
-                    salvarCelulas(this.lastID, cells, res);
+                    processarCelulas(this.lastID, cells, res);
                 });
         } else {
-            salvarCelulas(target.id, cells, res);
+            processarCelulas(target.id, cells, res);
         }
     });
 });
 
-function salvarCelulas(targetId, cells, res) {
-    const dbTowers = new sqlite3.Database(DB_TOWERS);
+// ============================================================
+// PROCESSAMENTO DE CÉLULAS (BANCO LOCAL + FALLBACK API)
+// ============================================================
+async function processarCelulas(targetId, cells, res) {
     const cellIds = cells.map(c => c.cellId);
+    
+    // 1. Tenta banco local
+    const dbTowers = new sqlite3.Database(DB_TOWERS);
     const placeholders = cellIds.map(() => '?').join(',');
+    
     dbTowers.all('SELECT cell, lat, lon, range FROM cell_towers WHERE cell IN (' + placeholders + ')',
-        cellIds, (err, torres) => {
+        cellIds, async (err, torres) => {
             dbTowers.close();
-            let lat = null, lon = null, radius = null;
+            
             if (torres && torres.length > 0) {
-                let pesoTotal = 0;
-                torres.forEach(t => {
-                    const peso = 1 / Math.max(t.range || 500, 1);
-                    lat = (lat || 0) + t.lat * peso;
-                    lon = (lon || 0) + t.lon * peso;
-                    pesoTotal += peso;
-                });
-                lat /= pesoTotal;
-                lon /= pesoTotal;
-                radius = Math.round(torres.reduce((a, t) => a + (t.range || 500), 0) / torres.length / Math.sqrt(torres.length));
+                const pos = calcularTriangulacao(torres);
+                gravarLocalizacao(targetId, cells, pos, 'banco_local', res);
+                return;
             }
-            dbMain.run(
-                'INSERT INTO locations (target_id, cell_data, source, metodo, torres_usadas, latitude, longitude, radius) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                [targetId, JSON.stringify(cells), 'api', lat ? 'triangulacao' : 'dados_brutos', cells.length, lat, lon, radius],
-                function(err) {
-                    if (err) return res.status(500).json({ erro: err.message });
-                    res.json({
-                        status: lat ? 'localizado' : 'recebido',
-                        mensagem: lat ? 'Localizacao calculada com sucesso.' : 'Celulas registradas. Banco de torres indisponivel para triangulacao.',
-                        position: lat ? { latitude: lat, longitude: lon, raio_estimado: radius } : null,
-                        timestamp: new Date().toISOString()
-                    });
+            
+            // 2. Fallback: consulta API do OpenCellID individualmente
+            log('info', 'Banco local vazio. Consultando OpenCellID para ' + cells.length + ' celulas...');
+            
+            const torresOnline = [];
+            for (const cell of cells) {
+                try {
+                    const info = await consultarOpenCellID(cell.cellId);
+                    if (info) torresOnline.push(info);
+                } catch (e) {
+                    log('warn', 'Cell ' + cell.cellId + ': ' + e.message);
                 }
-            );
+            }
+            
+            if (torresOnline.length > 0) {
+                const pos = calcularTriangulacao(torresOnline);
+                gravarLocalizacao(targetId, cells, pos, 'api_opencellid', res);
+            } else {
+                gravarLocalizacao(targetId, cells, null, 'nenhuma_fonte', res);
+            }
         });
+}
+
+function calcularTriangulacao(torres) {
+    let lat = 0, lon = 0, pesoTotal = 0;
+    torres.forEach(t => {
+        const peso = 1 / Math.max(t.range || 500, 1);
+        lat += t.lat * peso;
+        lon += t.lon * peso;
+        pesoTotal += peso;
+    });
+    return {
+        latitude: lat / pesoTotal,
+        longitude: lon / pesoTotal,
+        radius: Math.round(torres.reduce((a, t) => a + (t.range || 500), 0) / torres.length / Math.sqrt(torres.length)),
+        torres_usadas: torres.length
+    };
+}
+
+function consultarOpenCellID(cellId) {
+    return new Promise((resolve, reject) => {
+        if (!API_KEY) {
+            reject(new Error('Token nao configurado'));
+            return;
+        }
+        const url = 'https://opencellid.org/cell/get?key=' + API_KEY + '&cell=' + cellId + '&format=json';
+        https.get(url, (response) => {
+            let body = '';
+            response.on('data', chunk => body += chunk);
+            response.on('end', () => {
+                try {
+                    const data = JSON.parse(body);
+                    if (data.lat && data.lon) {
+                        resolve({ cell: cellId, lat: data.lat, lon: data.lon, range: data.range || 500 });
+                    } else if (data.error) {
+                        reject(new Error(data.error));
+                    } else {
+                        resolve(null);
+                    }
+                } catch (e) {
+                    resolve(null);
+                }
+            });
+        }).on('error', (e) => reject(e));
+    });
+}
+
+function gravarLocalizacao(targetId, cells, pos, fonte, res) {
+    dbMain.run(
+        'INSERT INTO locations (target_id, cell_data, source, metodo, torres_usadas, latitude, longitude, radius) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [targetId, JSON.stringify(cells), fonte, pos ? 'triangulacao' : 'dados_brutos', pos ? pos.torres_usadas : cells.length, pos ? pos.latitude : null, pos ? pos.longitude : null, pos ? pos.radius : null],
+        function(err) {
+            if (err) return res.status(500).json({ erro: err.message });
+            res.json({
+                status: pos ? 'localizado' : 'recebido',
+                mensagem: pos ? 'Localizacao calculada com sucesso via ' + fonte + '.' : 'Celulas registradas. Nao foi possivel localizar.',
+                position: pos ? { latitude: pos.latitude, longitude: pos.longitude, raio_estimado: pos.radius } : null,
+                torres_usadas: pos ? pos.torres_usadas : 0,
+                fonte: fonte,
+                timestamp: new Date().toISOString()
+            });
+        }
+    );
 }
 
 // Monitor celular
@@ -242,7 +314,7 @@ app.post('/api/cellular/paging', (req, res) => res.json({ status: 'ok', tipo: 'p
 app.get('/api/ticket/:id', (req, res) => res.json({ ticket_id: parseInt(req.params.id), status: 'monitorando' }));
 
 // ============================================================
-// INICIALIZAÇÃO COM IMPORTAÇÃO INTELIGENTE
+// INICIALIZAÇÃO
 // ============================================================
 async function iniciarServidor() {
     let precisaImportar = true;
@@ -280,7 +352,7 @@ async function iniciarServidor() {
                 try { fs.unlinkSync(LOCK_FILE); } catch (e) {}
             } catch (err) {
                 log('error', 'Falha na importacao: ' + err.message);
-                log('warn', 'Servidor iniciara sem banco de torres.');
+                log('warn', 'Servidor usara fallback da API OpenCellID.');
             }
         }
     } else {
@@ -289,7 +361,7 @@ async function iniciarServidor() {
 
     app.listen(port, () => {
         log('info', 'ORION 5.1 rodando na porta ' + port);
-        log('info', 'Banco de torres: ' + (fs.existsSync(DB_TOWERS) ? 'OK' : 'PENDENTE'));
+        log('info', 'Banco de torres: ' + (fs.existsSync(DB_TOWERS) ? 'OK' : 'PENDENTE (fallback API ativo)'));
     });
 }
 
