@@ -2,10 +2,9 @@
 // ARQUIVO: orion.js
 // DATA: 28/07/2026
 // MOTIVO: v5.6 — Motor de Rede Completo.
-//         Adicionado: Geolocalização por IP, Wi-Fi Positioning,
-//         Cache de Consultas (SQLite). Integrado sem conflitos
-//         com Banco Local, MLS, OpenCellID, Cabeçalho, RSSI,
-//         Google Geolocation API.
+//         Geolocalização por IP, Wi-Fi Positioning, Cache SQLite.
+//         Banco Local, MLS, OpenCellID, Cabeçalho, RSSI,
+//         Google Geolocation API. Sem conflitos.
 // ============================================================
 
 require('dotenv').config();
@@ -103,7 +102,6 @@ dbMain.exec(`
     );
 `);
 
-// Cache de consultas (reduz chamadas externas em 80%)
 const dbCache = new sqlite3.Database(DB_CACHE);
 dbCache.run('PRAGMA journal_mode=WAL');
 dbCache.exec(`
@@ -254,16 +252,13 @@ app.post('/api/geolocate', (req, res) => {
 async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, res) {
     const torresEncontradas = [];
     
-    // 1. Cache de consultas (verifica primeiro)
+    // 1. Cache de consultas
     for (const cell of cells) {
         const cached = await consultarCache(cell.cellId);
-        if (cached) {
-            torresEncontradas.push(cached);
-        }
+        if (cached) torresEncontradas.push(cached);
     }
     
     if (torresEncontradas.length > 0) {
-        log('info', 'Cache: ' + torresEncontradas.length + ' torres encontradas.');
         const pos = calcularTriangulacao(torresEncontradas);
         gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, pos, 'cache', res);
         return;
@@ -293,22 +288,18 @@ async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp,
         log('warn', 'Banco local falhou: ' + e.message);
     }
     
-    // 3. Wi-Fi Positioning (se disponível)
+    // 3. Wi-Fi Positioning
     if (wifiAccessPoints && Array.isArray(wifiAccessPoints) && wifiAccessPoints.length > 0) {
         try {
             const wifiPos = await consultarWiFi(wifiAccessPoints);
             if (wifiPos) {
-                log('info', 'Localização por Wi-Fi bem-sucedida.');
                 gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, wifiPos, 'wifi', res);
                 return;
             }
-        } catch (e) {
-            log('warn', 'Wi-Fi falhou: ' + e.message);
-        }
+        } catch (e) {}
     }
     
-    // 4. APIs Externas (MLS + OpenCellID)
-    log('info', 'Consultando APIs externas...');
+    // 4. APIs Externas
     for (const cell of cells) {
         const info = await consultarTorreComRetry(cell.cellId);
         if (info) {
@@ -323,48 +314,41 @@ async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp,
         return;
     }
     
-    // 5. Geolocalização por IP
+    // 5. IP Geolocation
     if (clientIp && clientIp !== '127.0.0.1' && clientIp !== '::1') {
         try {
             const ipPos = await consultarIP(clientIp);
             if (ipPos) {
-                log('info', 'Localização por IP bem-sucedida.');
                 gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, ipPos, 'ip', res);
                 return;
             }
-        } catch (e) {
-            log('warn', 'IP Geolocation falhou: ' + e.message);
-        }
+        } catch (e) {}
     }
     
-    // 6. Estimativa RSSI (último recurso)
+    // 6. Estimativa RSSI
     const estimativa = estimarPorRSSI(cells);
     if (estimativa) {
         gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, estimativa, 'rssi_estimativa', res);
         return;
     }
     
-    // Nenhuma fonte disponível
     gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, null, 'sem_dados', res);
 }
 
 // ============================================================
-// CACHE DE CONSULTAS
+// CACHE
 // ============================================================
 function consultarCache(cellId) {
     return new Promise((resolve) => {
         dbCache.get('SELECT lat, lon, range, fonte FROM cell_cache WHERE cell_id = ? AND created_at > datetime("now", "-24 hours")',
-            [cellId], (err, row) => {
-                if (err || !row) resolve(null);
-                else resolve({ cell: cellId, lat: row.lat, lon: row.lon, range: row.range, fonte: row.fonte });
-            });
+            [cellId], (err, row) => resolve(row ? { cell: cellId, lat: row.lat, lon: row.lon, range: row.range, fonte: row.fonte } : null));
     });
 }
 
 function atualizarCache(cellId, lat, lon, range, fonte) {
     return new Promise((resolve) => {
         dbCache.run('INSERT OR REPLACE INTO cell_cache (cell_id, lat, lon, range, fonte, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
-            [cellId, lat, lon, range, fonte], (err) => resolve());
+            [cellId, lat, lon, range, fonte], () => resolve());
     });
 }
 
@@ -386,9 +370,8 @@ function consultarWiFi(wifiAccessPoints) {
             res.on('end', () => {
                 try {
                     const result = JSON.parse(body);
-                    if (result.location && result.location.lat) {
-                        resolve({ latitude: result.location.lat, longitude: result.location.lng, radius: result.accuracy || 50, fonte: 'wifi' });
-                    } else resolve(null);
+                    if (result.location && result.location.lat) resolve({ latitude: result.location.lat, longitude: result.location.lng, radius: result.accuracy || 50 });
+                    else resolve(null);
                 } catch (e) { resolve(null); }
             });
         });
@@ -404,15 +387,9 @@ function consultarWiFi(wifiAccessPoints) {
 // ============================================================
 function consultarIP(ip) {
     return new Promise((resolve) => {
-        // Verifica cache primeiro
         dbCache.get('SELECT lat, lon, range FROM ip_cache WHERE ip = ? AND created_at > datetime("now", "-1 hours")',
             [ip], (err, row) => {
-                if (row) {
-                    resolve({ latitude: row.lat, longitude: row.lon, radius: row.range, fonte: 'ip_cache' });
-                    return;
-                }
-                
-                // Consulta ip-api.com (gratuito, ilimitado)
+                if (row) { resolve({ latitude: row.lat, longitude: row.lon, radius: row.range }); return; }
                 const req = https.get('http://ip-api.com/json/' + ip + '?fields=lat,lon', (response) => {
                     let body = '';
                     response.on('data', chunk => body += chunk);
@@ -420,9 +397,8 @@ function consultarIP(ip) {
                         try {
                             const data = JSON.parse(body);
                             if (data.lat && data.lon) {
-                                dbCache.run('INSERT OR REPLACE INTO ip_cache (ip, lat, lon, range, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)',
-                                    [ip, data.lat, data.lon, 5000]);
-                                resolve({ latitude: data.lat, longitude: data.lon, radius: 5000, fonte: 'ip' });
+                                dbCache.run('INSERT OR REPLACE INTO ip_cache (ip, lat, lon, range, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)', [ip, data.lat, data.lon, 5000]);
+                                resolve({ latitude: data.lat, longitude: data.lon, radius: 5000 });
                             } else resolve(null);
                         } catch (e) { resolve(null); }
                     });
@@ -434,7 +410,7 @@ function consultarIP(ip) {
 }
 
 // ============================================================
-// APIs EXTERNAS (MLS + OpenCellID)
+// APIs EXTERNAS
 // ============================================================
 async function consultarTorreComRetry(cellId, tentativas = 2) {
     for (let i = 0; i < tentativas; i++) {
@@ -446,32 +422,16 @@ async function consultarTorreComRetry(cellId, tentativas = 2) {
 }
 
 async function consultarTorreAPIs(cellId) {
-    try {
-        const mls = await consultarMLS(cellId);
-        if (mls) return mls;
-    } catch (e) {}
-    
-    if (API_KEY) {
-        try {
-            const oci = await consultarOpenCellID(cellId);
-            if (oci) return oci;
-        } catch (e) {}
-    }
+    try { const mls = await consultarMLS(cellId); if (mls) return mls; } catch (e) {}
+    if (API_KEY) { try { const oci = await consultarOpenCellID(cellId); if (oci) return oci; } catch (e) {} }
     return null;
 }
 
 function consultarMLS(cellId, mcc = 724, mnc = 5, lac = 1234) {
     return new Promise((resolve) => {
         const data = JSON.stringify({ cellTowers: [{ cellId, mobileCountryCode: mcc, mobileNetworkCode: mnc, locationAreaCode: lac }] });
-        const req = https.request({
-            hostname: 'location.services.mozilla.com',
-            path: '/v1/geolocate?key=test',
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            timeout: 5000
-        }, (res) => {
-            let body = '';
-            res.on('data', chunk => body += chunk);
+        const req = https.request({ hostname: 'location.services.mozilla.com', path: '/v1/geolocate?key=test', method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: 5000 }, (res) => {
+            let body = ''; res.on('data', chunk => body += chunk);
             res.on('end', () => {
                 try {
                     const result = JSON.parse(body);
@@ -482,8 +442,7 @@ function consultarMLS(cellId, mcc = 724, mnc = 5, lac = 1234) {
         });
         req.on('timeout', () => { req.destroy(); resolve(null); });
         req.on('error', () => resolve(null));
-        req.write(data);
-        req.end();
+        req.write(data); req.end();
     });
 }
 
@@ -491,14 +450,9 @@ function consultarOpenCellID(cellId) {
     return new Promise((resolve) => {
         if (!API_KEY) { resolve(null); return; }
         const req = https.get('https://opencellid.org/cell/get?key=' + API_KEY + '&cell=' + cellId + '&format=json', (response) => {
-            let body = '';
-            response.on('data', chunk => body += chunk);
+            let body = ''; response.on('data', chunk => body += chunk);
             response.on('end', () => {
-                try {
-                    const data = JSON.parse(body);
-                    if (data.lat && data.lon) resolve({ cell: cellId, lat: data.lat, lon: data.lon, range: data.range || 500 });
-                    else resolve(null);
-                } catch (e) { resolve(null); }
+                try { const data = JSON.parse(body); if (data.lat && data.lon) resolve({ cell: cellId, lat: data.lat, lon: data.lon, range: data.range || 500 }); else resolve(null); } catch (e) { resolve(null); }
             });
         });
         req.on('error', () => resolve(null));
@@ -514,7 +468,7 @@ function estimarPorRSSI(cells) {
     const txPower = -50, n = 3.0;
     const distancias = cells.map(c => Math.pow(10, (txPower - (c.rssi || c.rsrp || -73)) / (10 * n)));
     const distanciaMedia = distancias.reduce((a, b) => a + b, 0) / distancias.length;
-    return { latitude: null, longitude: null, radius: Math.round(distanciaMedia), torres_usadas: cells.length, nota: 'Estimativa RSSI' };
+    return { latitude: null, longitude: null, radius: Math.round(distanciaMedia), torres_usadas: cells.length };
 }
 
 // ============================================================
@@ -522,12 +476,7 @@ function estimarPorRSSI(cells) {
 // ============================================================
 function calcularTriangulacao(torres) {
     let lat = 0, lon = 0, pesoTotal = 0;
-    torres.forEach(t => {
-        const peso = 1 / Math.max(t.range || 500, 1);
-        lat += t.lat * peso;
-        lon += t.lon * peso;
-        pesoTotal += peso;
-    });
+    torres.forEach(t => { const peso = 1 / Math.max(t.range || 500, 1); lat += t.lat * peso; lon += t.lon * peso; pesoTotal += peso; });
     return { latitude: lat / pesoTotal, longitude: lon / pesoTotal, radius: Math.round(torres.reduce((a, t) => a + (t.range || 500), 0) / torres.length / Math.sqrt(torres.length)), torres_usadas: torres.length };
 }
 
@@ -591,7 +540,7 @@ async function iniciarServidor() {
 
     app.listen(port, () => {
         log('info', 'ORION 5.6 rodando na porta ' + port);
-        log('info', 'Motor de Rede Completo: Banco Local, MLS, OpenCellID, Wi-Fi, IP, Cache, RSSI');
+        log('info', 'Motor de Rede Completo ativo.');
     });
 }
 
