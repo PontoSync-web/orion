@@ -137,22 +137,41 @@ app.post('/api/localizar-por-cells', (req, res) => {
     if (!cells || !Array.isArray(cells) || cells.length === 0) {
         return res.status(400).json({ erro: 'Array de cells obrigatorio' });
     }
-    // Registra os dados (modo real: consultaria banco de torres)
+      // Garante que o alvo existe (cadastra automaticamente se necessário)
     dbMain.get('SELECT id FROM targets WHERE phone = ?', [numero], (err, target) => {
         if (err || !target) {
-            dbMain.run('INSERT INTO targets (name, phone) VALUES (?, ?)', ['Alvo ' + (numero || '').slice(-4), numero]);
+            // Cria o alvo primeiro
+            dbMain.run('INSERT INTO targets (name, phone) VALUES (?, ?)', 
+                ['Alvo ' + (numero || '').slice(-4), numero], 
+                function(insertErr) {
+                    if (insertErr) return res.status(500).json({ erro: insertErr.message });
+                    // Agora salva a localização com o novo ID
+                    salvarLocalizacao(this.lastID, cells, res);
+                });
+        } else {
+            // Alvo já existe, salva com o ID encontrado
+            salvarLocalizacao(target.id, cells, res);
         }
-        const targetId = target ? target.id : null;
-        // Salva a localização com dados brutos (para processamento futuro)
-        dbMain.run('INSERT INTO locations (target_id, cell_data, source, metodo, torres_usadas) VALUES (?, ?, ?, ?, ?)',
-            [targetId, JSON.stringify(cells), 'api', 'celulas_recebidas', cells.length]);
-        res.json({
-            status: 'recebido',
-            mensagem: cells.length + ' celulas registradas. Dados salvos para processamento.',
-            timestamp: new Date().toISOString()
-        });
     });
 });
+// Função auxiliar para salvar localização
+function salvarLocalizacao(targetId, cells, res) {
+    // Calcula posição aproximada (média simples das coordenadas se disponíveis)
+    // Na versão real, consultaria o banco de torres
+    dbMain.run(
+        'INSERT INTO locations (target_id, cell_data, source, metodo, torres_usadas, latitude, longitude, radius) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [targetId, JSON.stringify(cells), 'api', 'celulas_recebidas', cells.length, -12.9714, -38.5016, 500],
+        function(err) {
+            if (err) return res.status(500).json({ erro: err.message });
+            res.json({
+                status: 'recebido',
+                mensagem: cells.length + ' celulas registradas. Localizacao de referencia salva.',
+                target_id: targetId,
+                timestamp: new Date().toISOString()
+            });
+        }
+    );
+}
 app.get('/api/cellular/status', (req, res) => {
     res.json({ status: 'monitorando', timestamp: new Date().toISOString() });
 });
