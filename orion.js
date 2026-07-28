@@ -131,7 +131,28 @@ app.get('/api/buscar/:numero', (req, res) => {
         });
     });
 });
-
+// Localização por Cell IDs
+app.post('/api/localizar-por-cells', (req, res) => {
+    const { numero, cells } = req.body;
+    if (!cells || !Array.isArray(cells) || cells.length === 0) {
+        return res.status(400).json({ erro: 'Array de cells obrigatorio' });
+    }
+    // Registra os dados (modo real: consultaria banco de torres)
+    dbMain.get('SELECT id FROM targets WHERE phone = ?', [numero], (err, target) => {
+        if (err || !target) {
+            dbMain.run('INSERT INTO targets (name, phone) VALUES (?, ?)', ['Alvo ' + (numero || '').slice(-4), numero]);
+        }
+        const targetId = target ? target.id : null;
+        // Salva a localização com dados brutos (para processamento futuro)
+        dbMain.run('INSERT INTO locations (target_id, cell_data, source, metodo, torres_usadas) VALUES (?, ?, ?, ?, ?)',
+            [targetId, JSON.stringify(cells), 'api', 'celulas_recebidas', cells.length]);
+        res.json({
+            status: 'recebido',
+            mensagem: cells.length + ' celulas registradas. Dados salvos para processamento.',
+            timestamp: new Date().toISOString()
+        });
+    });
+});
 app.get('/api/cellular/status', (req, res) => {
     res.json({ status: 'monitorando', timestamp: new Date().toISOString() });
 });
