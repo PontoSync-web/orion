@@ -1,11 +1,11 @@
 // ============================================================
 // ARQUIVO: orion.js
 // DATA: 28 de Julho de 2026
-// HORÁRIO: 17:00 (Horário Oficial — Salvador, Bahia, Brasil)
+// HORÁRIO: 18:00 (Horário Oficial — Salvador, Bahia, Brasil)
 // FUSO: América do Sul / Brasil / Bahia (GMT-3)
-// MOTIVO: v5.8.5 — Protocolo Hermes Nacional integrado.
+// MOTIVO: v5.8.6 — Compatível com Protocolo Hermes v4.1.
+//         Integração real com Claude, Grok e Gemini.
 //         8 camadas de localização. Blindagem de segurança.
-//         Motor de Rede Unificado + ORION Agent + Hermes.
 // ============================================================
 
 require('dotenv').config();
@@ -77,10 +77,10 @@ dbCache.run('PRAGMA journal_mode=WAL');
 dbCache.exec(`CREATE TABLE IF NOT EXISTS cell_cache (cell_id INTEGER PRIMARY KEY, lat REAL, lon REAL, range INTEGER, fonte TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS ip_cache (ip TEXT PRIMARY KEY, lat REAL, lon REAL, range INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
 
-app.get('/health', (req, res) => res.json({ servidor: 'AI-DEPOM', versao: '5.8.5', status: 'online', seguranca: 'BLINDADO', protocolo_hermes: 'ATIVO (NACIONAL)', banco_emergencia: 'ATIVO', agentes_ativos: agentesAtivos.size, timestamp: new Date().toISOString() }));
-app.get('/', (req, res) => res.json({ servidor: 'AI-DEPOM', versao: '5.8.5', protocolo_hermes: 'ATIVO (27 capitais + 15 RMs)', endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status'] }));
+app.get('/health', (req, res) => res.json({ servidor: 'AI-DEPOM', versao: '5.8.6', status: 'online', seguranca: 'BLINDADO', protocolo_hermes: 'ATIVO (3 IAs conectadas)', banco_emergencia: 'ATIVO', agentes_ativos: agentesAtivos.size, timestamp: new Date().toISOString() }));
+app.get('/', (req, res) => res.json({ servidor: 'AI-DEPOM', versao: '5.8.6', protocolo_hermes: 'ATIVO (Claude, Grok, Gemini)', endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status'] }));
 app.get('/api/agent/status', (req, res) => { const agentes = []; agentesAtivos.forEach((v, k) => agentes.push({ id: k.substring(0, 8) + '****', numero: v.numero ? v.numero.substring(0, 4) + '****' : '****', ultima_vez: v.timestamp, torres: v.torres })); res.json({ agentes_ativos: agentesAtivos.size, agentes, timestamp: new Date().toISOString() }); });
-app.get('/api/hermes/status', (req, res) => res.json({ protocolo: 'Hermes v2.0', status: 'operacional', abrangencia: 'NACIONAL (27 capitais + 15 RMs)', sessoes_ativas: hermes.sessoes.size, fontes: hermes.fontesIA.map(f => f.nome), timestamp: new Date().toISOString() }));
+app.get('/api/hermes/status', (req, res) => res.json({ protocolo: 'Hermes v4.1', status: 'operacional', ias_conectadas: ['Claude (Anthropic)', 'Grok (xAI)', 'Gemini (Google)'], abrangencia: 'NACIONAL (27 capitais + 15 RMs)', sessoes_ativas: hermes.sessoes.size, cache_regional: hermes.cacheRegional.size, timestamp: new Date().toISOString() }));
 
 app.get('/api/rastrear/:numero', (req, res) => {
     const numero = sanitizarNumero(req.params.numero);
@@ -114,31 +114,52 @@ app.post('/api/geolocate', (req, res) => {
     dbMain.run('INSERT INTO targets (name, phone) VALUES (?, ?)', ['Google API Client', 'geo_' + Date.now()], function(ie) { processarLocalizacao(this.lastID || 1, cells, wifiAccessPoints, req.ip, 'geo_' + Date.now(), res); });
 });
 
+// ============================================================
+// MOTOR DE LOCALIZAÇÃO (8 CAMADAS — ATUALIZADO PARA HERMES v4.1)
+// ============================================================
 async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, res) {
     const torresEncontradas = [];
+
+    // Camada 1: Cache
     for (const cell of cells) { const cached = await consultarCache(cell.cellId); if (cached) torresEncontradas.push(cached); }
     if (torresEncontradas.length > 0) { gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, calcularTriangulacao(torresEncontradas), 'cache', res); return; }
+
+    // Camada 2: Unwired Labs
     try { const ur = await consultarUnwiredMulti(cells); if (ur && ur.latitude) { for (const cell of cells) await atualizarCache(cell.cellId, ur.latitude, ur.longitude, ur.radius, 'unwired_labs'); gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, ur, 'unwired_labs', res); return; } } catch (e) {}
+
+    // Camada 3: Banco Local
     try { const dbT = new sqlite3.Database(DB_TOWERS); const cids = cells.map(c => c.cellId); const ph = cids.map(() => '?').join(','); const trs = await new Promise((resolve) => { dbT.all('SELECT cell, lat, lon, range FROM cell_towers WHERE cell IN (' + ph + ')', cids, (err, rows) => { dbT.close(); resolve(err ? [] : rows); }); }); if (trs && trs.length > 0) { for (const t of trs) { await atualizarCache(t.cell, t.lat, t.lon, t.range, 'banco_local'); torresEncontradas.push(t); } gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, calcularTriangulacao(torresEncontradas), 'banco_local', res); return; } } catch (e) {}
+
+    // Camada 4: Wi-Fi
     if (wifiAccessPoints && Array.isArray(wifiAccessPoints) && wifiAccessPoints.length > 0) { try { const wp = await consultarWiFi(wifiAccessPoints); if (wp) { gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, wp, 'wifi', res); return; } } catch (e) {} }
+
+    // Camada 5: APIs Externas
     for (const cell of cells) { const info = await consultarTorreComRetry(cell.cellId); if (info) { await atualizarCache(cell.cellId, info.lat, info.lon, info.range, 'api_externa'); torresEncontradas.push(info); } }
     if (torresEncontradas.length > 0) { gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, calcularTriangulacao(torresEncontradas), 'api_externa', res); return; }
+
+    // Camada 6: IP
     if (clientIp && clientIp !== '127.0.0.1' && clientIp !== '::1') { try { const ip = await consultarIP(clientIp); if (ip) { gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, ip, 'ip', res); return; } } catch (e) {} }
+
+    // Camada 7: RSSI
     const estimativa = estimarPorRSSI(cells);
     if (estimativa) { gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, estimativa, 'rssi_estimativa', res); return; }
 
-    log('info', 'Todas as 7 fontes falharam. Acionando Protocolo Hermes Nacional...');
+    // ============================================================
+    // CAMADA 8: PROTOCOLO HERMES v4.1 (ATUALIZADO)
+    // ============================================================
+    log('info', 'Todas as 7 fontes falharam. Acionando Protocolo Hermes v4.1...');
     try {
         const sessaoId = hermes.iniciarSessaoEmergenciaNacional('localizacao_falha', { cells, regiao: 'Brasil' });
-        log('info', 'Sessão Hermes Nacional iniciada: ' + sessaoId);
-        await hermes.solicitarDadosIANacional('Claude', { sessaoId, contexto: { cells, regiao: 'Brasil' } });
-        await hermes.solicitarDadosIANacional('Grok', { sessaoId, contexto: { cells, regiao: 'Brasil' } });
-        await hermes.solicitarDadosIANacional('Gemini', { sessaoId, cells });
-        const dadosHermes = hermes.exportarParaORION(sessaoId);
-        if (dadosHermes && dadosHermes.erbs && dadosHermes.erbs.length > 0) {
+        log('info', 'Sessão Hermes iniciada: ' + sessaoId);
+
+        // NOVA CHAMADA: consultarTodasAsIAs recebe (sessaoId, contexto)
+        const erbs = await hermes.consultarTodasAsIAs(sessaoId, { cells });
+
+        if (erbs && erbs.length > 0) {
+            log('info', `Hermes retornou ${erbs.length} ERBs reais. Importando...`);
             const dbT = new sqlite3.Database(DB_TOWERS);
             const stmt = dbT.prepare('INSERT OR REPLACE INTO cell_towers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
-            for (const erb of dadosHermes.erbs) {
+            for (const erb of erbs) {
                 stmt.run(['GSM', erb.mcc || 724, erb.mnc || 5, erb.lac || 100, erb.cell_id, 0, erb.lon, erb.lat, erb.range || 5000, 100, 1, 1609459200, 1609459200, -71]);
                 await atualizarCache(erb.cell_id, erb.lat, erb.lon, erb.range || 5000, 'hermes');
                 torresEncontradas.push({ cell: erb.cell_id, lat: erb.lat, lon: erb.lon, range: erb.range || 5000 });
@@ -151,9 +172,13 @@ async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp,
         }
         hermes.destruirSessao(sessaoId);
     } catch (e) { log('error', 'Hermes falhou: ' + e.message); }
+
     gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, null, 'sem_dados', res);
 }
 
+// ============================================================
+// FUNÇÕES AUXILIARES
+// ============================================================
 function consultarCache(cellId) { return new Promise((resolve) => { dbCache.get('SELECT lat, lon, range, fonte FROM cell_cache WHERE cell_id = ? AND created_at > datetime("now", "-24 hours")', [cellId], (err, row) => resolve(row ? { cell: cellId, lat: row.lat, lon: row.lon, range: row.range, fonte: row.fonte } : null)); }); }
 function atualizarCache(cellId, lat, lon, range, fonte) { return new Promise((resolve) => { dbCache.run('INSERT OR REPLACE INTO cell_cache (cell_id, lat, lon, range, fonte, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)', [cellId, lat, lon, range, fonte], () => resolve()); }); }
 function consultarUnwiredMulti(cells) { if (!UNWIRED_TOKEN || cells.length === 0) return Promise.resolve(null); return new Promise((resolve) => { const cellData = cells.map(c => ({ lac: c.lac || 1234, cid: c.cellId, signal: c.rssi || -73 })); const data = JSON.stringify({ token: UNWIRED_TOKEN, radio: 'gsm', mcc: cells[0].mcc || 724, mnc: cells[0].mnc || 5, cells: cellData, address: 1 }); const req = https.request({ hostname: 'us1.unwiredlabs.com', path: '/v2/process.php', method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: 5000 }, (res) => { let body = ''; res.on('data', chunk => body += chunk); res.on('end', () => { try { const r = JSON.parse(body); if (r.status === 'ok' && r.lat && r.lon) resolve({ latitude: r.lat, longitude: r.lon, radius: r.accuracy || 150, torres_usadas: cells.length }); else resolve(null); } catch (e) { resolve(null); } }); }); req.on('timeout', () => { req.destroy(); resolve(null); }); req.on('error', () => resolve(null)); req.write(data); req.end(); }); }
@@ -174,6 +199,9 @@ function gravarLocalizacao(targetId, cells, wifiData, clientIp, agentId, hermesS
         });
 }
 
+// ============================================================
+// INICIALIZAÇÃO
+// ============================================================
 async function iniciarServidor() {
     const dbTowers = new sqlite3.Database(DB_TOWERS);
     dbTowers.run('PRAGMA journal_mode=WAL');
@@ -201,6 +229,6 @@ async function iniciarServidor() {
         log('info', 'Banco de emergência criado com ' + torres.length + ' torres.');
     } else { log('info', 'Banco de torres OK: ' + count.toLocaleString() + ' torres.'); }
     dbTowers.close();
-    app.listen(port, () => { log('info', 'AI-DEPOM 5.8.5 rodando na porta ' + port); log('info', 'Protocolo Hermes Nacional: ATIVO'); log('info', 'SEGURANÇA: BLINDADO'); });
+    app.listen(port, () => { log('info', 'AI-DEPOM 5.8.6 rodando na porta ' + port); log('info', 'Protocolo Hermes v4.1: ATIVO (3 IAs conectadas)'); log('info', 'SEGURANÇA: BLINDADO'); });
 }
 iniciarServidor();
