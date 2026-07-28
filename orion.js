@@ -1,10 +1,10 @@
 // ============================================================
 // ARQUIVO: orion.js
 // DATA: 28 de Julho de 2026
-// HORÁRIO: 19:00 (Horário Oficial — Salvador, Bahia, Brasil)
+// HORÁRIO: 22:15 (Horário Oficial — Salvador, Bahia, Brasil)
 // FUSO: América do Sul / Brasil / Bahia (GMT-3)
-// MOTIVO: v5.8.7 — Cadeia de importação otimizada:
-//         OpenCellID → Anatel → IAs → Banco de Emergência.
+// MOTIVO: v5.8.7 — Cadeia de importação completa:
+//         Coleta de Campo → OpenCellID → Anatel → IAs → Emergência.
 //         Protocolo Hermes v4.1 integrado.
 //         8 camadas de localização. Blindagem de segurança.
 // ============================================================
@@ -82,14 +82,14 @@ app.get('/health', (req, res) => res.json({
     servidor: 'AI-DEPOM', versao: '5.8.7', status: 'online',
     seguranca: 'BLINDADO',
     protocolo_hermes: 'ATIVO (3 IAs conectadas)',
-    fontes_importacao: ['OpenCellID', 'Anatel', 'IAs', 'Emergencia'],
+    fontes_importacao: ['Coleta de Campo', 'OpenCellID', 'Anatel', 'IAs', 'Emergencia'],
     agentes_ativos: agentesAtivos.size,
     timestamp: new Date().toISOString()
 }));
 
 app.get('/', (req, res) => res.json({
     servidor: 'AI-DEPOM', versao: '5.8.7',
-    fontes_importacao: ['OpenCellID (área)', 'Anatel (Mosaico)', 'IAs (Claude, Grok, Gemini)', 'Banco de Emergência'],
+    fontes_importacao: ['Coleta de Campo (primária)', 'OpenCellID (área)', 'Anatel (Mosaico)', 'IAs (Claude, Grok, Gemini)', 'Banco de Emergência'],
     endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status', '/api/hermes/forcar']
 }));
 
@@ -221,7 +221,7 @@ function gravarLocalizacao(targetId, cells, wifiData, clientIp, agentId, hermesS
 }
 
 // ============================================================
-// INICIALIZAÇÃO COM CADEIA DE IMPORTAÇÃO OTIMIZADA
+// INICIALIZAÇÃO COM CADEIA DE IMPORTAÇÃO COMPLETA
 // ============================================================
 async function iniciarServidor() {
     const dbTowers = new sqlite3.Database(DB_TOWERS);
@@ -229,12 +229,35 @@ async function iniciarServidor() {
     dbTowers.run('PRAGMA secure_delete=ON');
     dbTowers.run(`CREATE TABLE IF NOT EXISTS cell_towers (radio TEXT, mcc INTEGER, net INTEGER, area INTEGER, cell INTEGER PRIMARY KEY, unit INTEGER, lon REAL, lat REAL, range INTEGER, samples INTEGER, changeable INTEGER, created INTEGER, updated INTEGER, averageSignal INTEGER)`);
 
+    const tabelaExiste = await new Promise((resolve) => {
+        dbTowers.get("SELECT name FROM sqlite_master WHERE type='table' AND name='cell_towers'", (err, row) => resolve(!!row));
+    });
+    if (!tabelaExiste) {
+        log('error', 'Falha crítica: não foi possível criar a tabela cell_towers.');
+        dbTowers.close();
+        process.exit(1);
+    }
+
     const count = await new Promise((resolve) => { dbTowers.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0)); });
+    log('info', 'Tabela cell_towers verificada. Torres atuais: ' + (count || 0).toLocaleString());
 
     if (count < 1000000) {
         let importado = false;
 
-        // Tenta OpenCellID por área (fonte oficial, sem limite de tokens)
+        // 1. Coleta de Campo (dados primários do investigador)
+        if (!importado) {
+            try {
+                log('info', 'Tentando importar dados de coleta de campo...');
+                const { execSync } = require('child_process');
+                execSync('node scripts/import-coleta-campo.js', { stdio: 'inherit', timeout: 120000 });
+                importado = true;
+                log('info', 'Importação de dados de campo concluída!');
+            } catch (err) {
+                log('warn', 'Coleta de campo falhou (arquivo CSV não encontrado): ' + err.message);
+            }
+        }
+
+        // 2. OpenCellID por área
         if (!importado) {
             try {
                 log('info', 'Tentando importar via OpenCellID por área (27 capitais)...');
@@ -247,7 +270,7 @@ async function iniciarServidor() {
             }
         }
 
-        // Tenta Anatel (fonte oficial brasileira)
+        // 3. Anatel
         if (!importado) {
             try {
                 log('info', 'Tentando importar via Anatel (Mosaico)...');
@@ -260,7 +283,7 @@ async function iniciarServidor() {
             }
         }
 
-        // Tenta IAs como último recurso
+        // 4. IAs
         if (!importado) {
             try {
                 log('info', 'Tentando importar via IAs (Claude, Grok, Gemini)...');
@@ -273,8 +296,11 @@ async function iniciarServidor() {
             }
         }
 
-        // Se nada funcionou, insere banco de emergência
-        if (!importado || count < 50) {
+        // 5. Banco de Emergência
+        const novoCount = await new Promise((resolve) => {
+            dbTowers.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
+        });
+        if (novoCount < 50) {
             log('warn', 'Nenhuma fonte externa disponível. Inserindo banco de emergência...');
             await inserirBancoEmergencia(dbTowers);
         }
@@ -286,20 +312,20 @@ async function iniciarServidor() {
 
     app.listen(port, () => {
         log('info', 'AI-DEPOM 5.8.7 rodando na porta ' + port);
-        log('info', 'Fontes de importação: OpenCellID, Anatel, IAs, Emergência');
+        log('info', 'Fontes de importação: Coleta de Campo, OpenCellID, Anatel, IAs, Emergência');
         log('info', 'Protocolo Hermes v4.1: ATIVO');
         log('info', 'SEGURANÇA: BLINDADO');
     });
 }
 
 async function inserirBancoEmergencia(dbTowers) {
-    log('info', 'Inserindo 50 torres de emergência...');
+    log('info', 'Inserindo 5 torres de emergência...');
     const torres = [
         ['GSM', 724, 5, 100, 208020001, 0, -38.5016, -12.9714, 5000, 100, 1, 1609459200, 1609459200, -71],
-        ['GSM', 724, 5, 100, 208020002, 0, -38.5020, -12.9710, 3000, 75, 1, 1609459200, 1609459200, -76],
         ['GSM', 724, 5, 200, 208017145, 0, -46.6333, -23.5505, 5000, 100, 1, 1609459200, 1609459200, -73],
         ['GSM', 724, 5, 300, 208019001, 0, -43.2096, -22.9035, 3500, 85, 1, 1609459200, 1609459200, -74],
         ['GSM', 724, 5, 400, 208018001, 0, -47.9292, -15.7801, 6000, 120, 1, 1609459200, 1609459200, -68],
+        ['GSM', 724, 5, 500, 208021001, 0, -38.5266, -3.7319, 4000, 90, 1, 1609459200, 1609459200, -69],
     ];
     const stmt = dbTowers.prepare('INSERT OR REPLACE INTO cell_towers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
     for (const t of torres) { stmt.run(t); }
