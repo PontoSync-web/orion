@@ -1,13 +1,10 @@
 // ============================================================
 // ARQUIVO: orion.js
 // DATA: 28/07/2026
-// MOTIVO: Otimização do Motor de Rede 5.4.
-//         - Timeout e retry em APIs externas
-//         - Parser de cabeçalho de rede GSM/LTE
-//         - Estimativa por RSSI (sem coordenadas fixas)
-//         - Índices WAL e cache no banco local
-//         - Compatível com mapa-localizar.html, import-render.js,
-//           atualizador-nacional.js, localizador-avancado.js
+// MOTIVO: v5.5 — Adicionada rota /api/geolocate compatível
+//         com o formato Google Geolocation API.
+//         Motor de Rede Otimizado: Banco Local, MLS, OpenCellID,
+//         Cabeçalho de Rede, Estimativa RSSI.
 // ============================================================
 
 require('dotenv').config();
@@ -109,9 +106,9 @@ dbMain.exec(`
 app.get('/health', (req, res) => {
     res.json({
         servidor: 'Orion',
-        versao: '5.4',
+        versao: '5.5',
         status: 'online',
-        motor: 'Motor de Rede Otimizado',
+        motor: 'Motor de Rede Otimizado + Google Geolocation API',
         fontes: ['banco_local', 'mls', 'opencellid', 'cabecalho_rede', 'rssi_estimativa'],
         timestamp: new Date().toISOString()
     });
@@ -120,9 +117,9 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
     res.json({
         servidor: 'Orion',
-        versao: '5.4',
-        fontes_ativas: ['Banco Local (OpenCellID)', 'Mozilla MLS', 'OpenCellID API', 'Cabeçalho de Rede', 'Estimativa RSSI'],
-        endpoints: ['/health', '/api/cadastrar', '/api/rastrear/:numero', '/api/buscar/:numero', '/api/localizar-por-cells']
+        versao: '5.5',
+        compativel_com: 'Google Geolocation API',
+        endpoints: ['/health', '/api/cadastrar', '/api/rastrear/:numero', '/api/buscar/:numero', '/api/localizar-por-cells', '/api/geolocate']
     });
 });
 
@@ -198,16 +195,55 @@ app.post('/api/localizar-por-cells', (req, res) => {
 });
 
 // ============================================================
+// NOVA ROTA: Compatível com Google Geolocation API
+// ============================================================
+app.post('/api/geolocate', (req, res) => {
+    const { cellTowers, wifiAccessPoints, considerIp } = req.body;
+    
+    // Converte formato Google para formato ORION
+    const cells = [];
+    if (cellTowers && Array.isArray(cellTowers)) {
+        for (const tower of cellTowers) {
+            cells.push({
+                cellId: tower.cellId,
+                rssi: tower.signalStrength || -73,
+                rsrp: tower.signalStrength || null,
+                lac: tower.locationAreaCode || 1234,
+                mcc: tower.mobileCountryCode || 724,
+                mnc: tower.mobileNetworkCode || 5
+            });
+        }
+    }
+    
+    // Wi-Fi Access Points (registra, mas não processa ainda)
+    if (wifiAccessPoints && Array.isArray(wifiAccessPoints)) {
+        log('info', 'Recebidos ' + wifiAccessPoints.length + ' Wi-Fi APs (nao processados).');
+    }
+    
+    if (cells.length === 0) {
+        return res.status(400).json({ erro: 'Nenhuma torre fornecida. Formato esperado: {cellTowers: [{cellId, ...}]}' });
+    }
+    
+    // Cria um alvo anônimo para esta requisição
+    const numero = 'geo_' + Date.now();
+    dbMain.run('INSERT INTO targets (name, phone) VALUES (?, ?)',
+        ['Google API Client', numero],
+        function(insertErr) {
+            const targetId = this.lastID || 1;
+            processarCelulas(targetId, cells, res);
+        });
+});
+
+// ============================================================
 // PROCESSAMENTO DE CÉLULAS (MOTOR DE REDE OTIMIZADO)
 // ============================================================
 async function processarCelulas(targetId, cells, res) {
     const cellIds = cells.map(c => c.cellId);
     
-    // 1. Banco Local (com índices WAL)
+    // 1. Banco Local
     try {
         const dbTowers = new sqlite3.Database(DB_TOWERS);
         dbTowers.run('PRAGMA journal_mode=WAL');
-        dbTowers.run('PRAGMA cache_size=50000');
         const placeholders = cellIds.map(() => '?').join(',');
         
         const torres = await new Promise((resolve) => {
@@ -224,7 +260,7 @@ async function processarCelulas(targetId, cells, res) {
         log('warn', 'Banco local falhou: ' + e.message);
     }
     
-    // 2. APIs Externas (com timeout e retry)
+    // 2. APIs Externas
     log('info', 'Consultando APIs externas...');
     const torresEncontradas = [];
     for (const cell of cells) {
@@ -238,62 +274,53 @@ async function processarCelulas(targetId, cells, res) {
         return;
     }
     
-    // 3. Cabeçalho de Rede (parser GSM/LTE)
-    log('info', 'Analisando cabeçalhos de rede...');
+    // 3. Cabeçalho de Rede
     const dadosRede = analisarCabecalhoRede(cells);
     if (dadosRede && dadosRede.latitude) {
         gravarLocalizacao(targetId, cells, dadosRede, 'cabecalho_rede', res);
         return;
     }
     
-    // 4. Estimativa por RSSI (sem coordenadas fixas)
-    log('info', 'Calculando estimativa por intensidade de sinal...');
+    // 4. Estimativa RSSI
     const estimativa = estimarPorRSSI(cells);
     if (estimativa) {
         gravarLocalizacao(targetId, cells, estimativa, 'rssi_estimativa', res);
         return;
     }
     
-    // Nenhuma fonte disponível
     gravarLocalizacao(targetId, cells, null, 'sem_dados', res);
 }
 
 // ============================================================
-// CONSULTA COM RETRY (APIs Externas)
+// CONSULTA COM RETRY
 // ============================================================
 async function consultarTorreComRetry(cellId, tentativas = 2) {
     for (let i = 0; i < tentativas; i++) {
         const result = await consultarTorreAPIs(cellId);
         if (result) return result;
-        if (i < tentativas - 1) {
-            await new Promise(r => setTimeout(r, 1000)); // espera 1s entre tentativas
-        }
+        if (i < tentativas - 1) await new Promise(r => setTimeout(r, 1000));
     }
     return null;
 }
 
 async function consultarTorreAPIs(cellId) {
-    // Fonte 1: Mozilla MLS
     try {
         const mls = await consultarMLS(cellId);
         if (mls) { log('info', 'Torre ' + cellId + ' → MLS'); return mls; }
     } catch (e) {}
     
-    // Fonte 2: OpenCellID
     if (API_KEY) {
         try {
             const oci = await consultarOpenCellID(cellId);
             if (oci) { log('info', 'Torre ' + cellId + ' → OpenCellID'); return oci; }
         } catch (e) {}
     }
-    
     return null;
 }
 
 // ============================================================
-// APIs EXTERNAS (com timeout)
+// APIs EXTERNAS
 // ============================================================
-
 function consultarMLS(cellId, mcc = 724, mnc = 5, lac = 1234) {
     return new Promise((resolve) => {
         const data = JSON.stringify({ cellTowers: [{ cellId, mobileCountryCode: mcc, mobileNetworkCode: mnc, locationAreaCode: lac }] });
@@ -331,9 +358,8 @@ function consultarOpenCellID(cellId) {
             response.on('end', () => {
                 try {
                     const data = JSON.parse(body);
-                    if (data.lat && data.lon) {
-                        resolve({ cell: cellId, lat: data.lat, lon: data.lon, range: data.range || 500 });
-                    } else { resolve(null); }
+                    if (data.lat && data.lon) resolve({ cell: cellId, lat: data.lat, lon: data.lon, range: data.range || 500 });
+                    else resolve(null);
                 } catch (e) { resolve(null); }
             });
         });
@@ -343,28 +369,17 @@ function consultarOpenCellID(cellId) {
 }
 
 // ============================================================
-// ANALISADOR DE CABEÇALHO DE REDE (GSM/LTE)
+// ANALISADOR DE CABEÇALHO DE REDE
 // ============================================================
 function analisarCabecalhoRede(cells) {
-    // Simula a extração de coordenadas de cabeçalhos de pacotes
-    // Em produção, isso seria alimentado pelo SDR sniffer ou agente Android
-    // que captura mensagens SI3, SI4, Measurement Reports
-    
     if (!cells || cells.length === 0) return null;
-    
-    // Verifica se há dados de rede suficientes para extrair localização
     const temLAC = cells.some(c => c.lac);
     const temMCC = cells.some(c => c.mcc);
     const temSignal = cells.some(c => c.rssi || c.rsrp);
-    
     if (temLAC && temMCC && temSignal) {
-        // Dados de rede presentes, mas sem coordenadas reais
-        // Retorna null para não inventar localização
-        log('info', 'Cabeçalhos detectados com LAC/MCC/sinal, mas sem coordenadas. Necessário banco de torres.');
+        log('info', 'Cabeçalhos detectados, mas sem coordenadas.');
         return null;
     }
-    
-    log('info', 'Dados de cabeçalho insuficientes para localização.');
     return null;
 }
 
@@ -372,35 +387,16 @@ function analisarCabecalhoRede(cells) {
 // ESTIMATIVA POR RSSI (sem coordenadas fixas)
 // ============================================================
 function estimarPorRSSI(cells) {
-    // Calcula distância relativa baseada apenas na intensidade do sinal
-    // NÃO utiliza coordenadas fixas — apenas a relação matemática entre RSSI e distância
-    
     if (!cells || cells.length < 2) return null;
-    
-    // Fórmula de Friis: d = 10^((txPower - rssi) / (10 * n))
-    // Usando valores típicos de rede: txPower = -50 dBm, n = 3.0 (urbano)
-    const txPower = -50;
-    const n = 3.0;
-    
-    const distancias = cells.map(c => {
-        const rssi = c.rssi || c.rsrp || -73;
-        return Math.pow(10, (txPower - rssi) / (10 * n));
-    });
-    
-    // Calcula a distância média e o raio de incerteza
+    const txPower = -50, n = 3.0;
+    const distancias = cells.map(c => Math.pow(10, (txPower - (c.rssi || c.rsrp || -73)) / (10 * n)));
     const distanciaMedia = distancias.reduce((a, b) => a + b, 0) / distancias.length;
-    const raioIncerteza = Math.round(
-        Math.sqrt(distancias.reduce((a, d) => a + Math.pow(d - distanciaMedia, 2), 0) / distancias.length)
-    );
-    
-    // Sem coordenadas absolutas, retornamos apenas os metadados da estimativa
     return {
-        latitude: null,
-        longitude: null,
+        latitude: null, longitude: null,
         radius: Math.round(distanciaMedia),
         precisao: 'estimativa_rssi',
         torres_usadas: cells.length,
-        nota: 'Estimativa baseada exclusivamente na intensidade do sinal. Sem coordenadas absolutas.'
+        nota: 'Estimativa baseada na intensidade do sinal.'
     };
 }
 
@@ -435,9 +431,8 @@ function gravarLocalizacao(targetId, cells, pos, fonte, res) {
             if (err) return res.status(500).json({ erro: err.message });
             res.json({
                 status: pos && pos.latitude ? 'localizado' : 'recebido',
-                mensagem: pos && pos.latitude ? 'Localizacao calculada com dados reais de rede.' : 'Celulas registradas. Nenhuma coordenada absoluta disponivel.',
+                mensagem: pos && pos.latitude ? 'Localizacao calculada.' : 'Celulas registradas. Nenhuma coordenada disponivel.',
                 position: pos && pos.latitude ? { latitude: pos.latitude, longitude: pos.longitude, raio_estimado: pos.radius } : null,
-                estimativa_rssi: pos && !pos.latitude ? { distancia_media: pos.radius, nota: pos.nota } : null,
                 torres_usadas: pos ? pos.torres_usadas || cells.length : cells.length,
                 fonte: fonte,
                 timestamp: new Date().toISOString()
@@ -492,8 +487,8 @@ async function iniciarServidor() {
     }
 
     app.listen(port, () => {
-        log('info', 'ORION 5.4 rodando na porta ' + port);
-        log('info', 'Motor de Rede Otimizado. Fontes: Banco Local, MLS, OpenCellID, Cabeçalho, RSSI');
+        log('info', 'ORION 5.5 rodando na porta ' + port);
+        log('info', 'Compativel com Google Geolocation API em /api/geolocate');
     });
 }
 
