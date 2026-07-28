@@ -1,5 +1,6 @@
 // ============================================================
-// ORION — Servidor Principal v5.1
+// ORION — Servidor Principal v5.1 (Completo)
+// Atualizado: 28/07/2026 00:30 — Rotas unificadas + cadastro automático
 // ============================================================
 
 require('dotenv').config();
@@ -20,6 +21,7 @@ const PATHS = {
     logs: path.join(PROJECT_ROOT, 'logs'),
     public: path.join(PROJECT_ROOT, 'public'),
     src: path.join(PROJECT_ROOT, 'src'),
+    scripts: path.join(PROJECT_ROOT, 'scripts'),
 };
 
 Object.values(PATHS).forEach(dir => {
@@ -52,89 +54,3 @@ CREATE TABLE IF NOT EXISTS locations (
     torres_usadas INTEGER, cell_data TEXT,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );`);
-
-app.get('/health', (req, res) => {
-    res.json({
-        servidor: 'Orion',
-        versao: '5.1',
-        status: 'online',
-        banco_torres: fs.existsSync(DB_TOWERS) ? 'ok' : 'pendente',
-        timestamp: new Date().toISOString()
-    });
-});
-
-app.get('/', (req, res) => {
-    res.json({
-        servidor: 'Orion',
-        status: 'online',
-        endpoints: ['/health', '/api/localizar-por-cells', '/api/rastrear/:numero', '/api/cellular/status']
-    });
-});
-
-app.post('/api/localizar-por-cells', async (req, res) => {
-    const { numero, cells } = req.body;
-    if (!cells || !Array.isArray(cells) || cells.length === 0) {
-        return res.status(400).json({ erro: 'Array de cells obrigatorio' });
-    }
-    try {
-        const db = new sqlite3.Database(DB_TOWERS);
-        const placeholders = cells.map(() => '?').join(',');
-        const cellIds = cells.map(c => c.cellId);
-        
-        db.all(`SELECT cell, lat, lon, range, averageSignal FROM cell_towers WHERE cell IN (${placeholders})`, cellIds, (err, rows) => {
-            db.close();
-            if (err) return res.status(500).json({ erro: err.message });
-            if (!rows || rows.length === 0) return res.status(404).json({ erro: 'Nenhuma torre encontrada' });
-
-            let lat = 0, lon = 0, pesoTotal = 0;
-            rows.forEach(t => {
-                const peso = 1 / Math.max(t.range || 500, 1);
-                lat += t.lat * peso;
-                lon += t.lon * peso;
-                pesoTotal += peso;
-            });
-
-            const raio = Math.round(rows.reduce((a, t) => a + (t.range || 500), 0) / rows.length / Math.sqrt(rows.length));
-
-            if (numero) {
-                dbMain.run('INSERT INTO locations (target_id, latitude, longitude, radius, source, metodo, torres_usadas, cell_data) VALUES ((SELECT id FROM targets WHERE phone = ?), ?, ?, ?, ?, ?, ?, ?)',
-                    [numero, lat / pesoTotal, lon / pesoTotal, raio, 'api', 'triangulacao', rows.length, JSON.stringify(cells)]);
-            }
-
-            res.json({
-                status: 'sucesso',
-                position: {
-                    latitude: lat / pesoTotal,
-                    longitude: lon / pesoTotal,
-                    raio_estimado: raio,
-                    precisao: rows.length >= 3 ? 'media' : 'baixa'
-                },
-                torres_usadas: rows.length,
-                timestamp: new Date().toISOString()
-            });
-        });
-    } catch (e) {
-        res.status(500).json({ erro: e.message });
-    }
-});
-
-app.get('/api/rastrear/:numero', (req, res) => {
-    const numero = req.params.numero;
-    dbMain.get('SELECT * FROM locations WHERE target_id = (SELECT id FROM targets WHERE phone = ?) ORDER BY timestamp DESC LIMIT 1', [numero], (err, row) => {
-        if (err || !row) return res.status(404).json({ erro: 'Alvo nao encontrado ou sem localizacao' });
-        res.json({
-            status: 'sucesso',
-            numero,
-            position: { latitude: row.latitude, longitude: row.longitude, raio_estimado: row.radius },
-            timestamp: row.timestamp
-        });
-    });
-});
-
-app.get('/api/cellular/status', (req, res) => {
-    res.json({ status: 'monitorando', timestamp: new Date().toISOString() });
-});
-
-app.listen(port, () => {
-    log('info', `ORION 5.1 rodando na porta ${port}`);
-});
