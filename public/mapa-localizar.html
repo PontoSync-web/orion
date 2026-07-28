@@ -1,23 +1,49 @@
 <!--
     ARQUIVO: public/mapa-localizar.html
     DATA: 28/07/2026
-    MOTIVO: Reescrita completa para compatibilidade total com ORION 5.1.
-            - Trata status 'cadastrado', 'sem_dados' e 'sucesso' sem erros.
-            - Exibe alertas informativos quando não há coordenadas.
-            - Health check automático a cada 30 segundos.
-            - Interface responsiva e profissional.
-            - Integração com rotas /api/rastrear/:numero e /health.
+    MOTIVO: Marca atualizada para AI-DEPOM.
+            Tela de apresentação de 5s com "AI - DEPOM".
+            Compatível com ORION 5.6.
 -->
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI-DEPOM - Sistema de Localização</title>
+    <title>AI-DEPOM — Sistema de Localização</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        /* Splash Screen */
+        #splash {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: #0a0a1a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            animation: fadeOut 1s ease 4s forwards;
+        }
+        #splash .logo {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 48px;
+            font-weight: 900;
+            color: #e94560;
+            letter-spacing: 8px;
+            animation: pulse 0.8s ease-in-out infinite alternate;
+        }
+        @keyframes pulse {
+            from { opacity: 0.6; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1.05); }
+        }
+        @keyframes fadeOut {
+            to { opacity: 0; visibility: hidden; }
+        }
+
+        /* Interface principal */
         body { font-family: 'Segoe UI', Arial, sans-serif; background: #1a1a2e; color: #eee; height: 100vh; display: flex; flex-direction: column; }
         #header { background: #16213e; padding: 15px 20px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-bottom: 2px solid #0f3460; }
         #header h1 { font-size: 20px; color: #e94560; white-space: nowrap; }
@@ -34,12 +60,19 @@
     </style>
 </head>
 <body>
+
+    <!-- SPLASH SCREEN AI-DEPOM -->
+    <div id="splash">
+        <div class="logo">AI &mdash; DEPOM</div>
+    </div>
+
+    <!-- INTERFACE PRINCIPAL -->
     <div id="alertBox"></div>
     <div id="header">
-        <h1>🛰️ ORION</h1>
+        <h1>&#128752; AI-DEPOM</h1>
         <input type="text" id="numeroInput" placeholder="Digite o número do alvo..." />
-        <button id="buscarBtn">🔍 Localizar</button>
-        <span id="status">✅ Online</span>
+        <button id="buscarBtn">&#128270; Localizar</button>
+        <span id="status">&#9989; Online</span>
     </div>
     <div id="map"></div>
     <div id="info">
@@ -76,7 +109,7 @@
 
             marker = L.marker([lat, lng]).addTo(map);
             marker.bindPopup(
-                '<b>📱 ' + numero + '</b><br>' +
+                '<b>&#128241; ' + numero + '</b><br>' +
                 'Lat: ' + lat.toFixed(6) + '<br>' +
                 'Lng: ' + lng.toFixed(6) + '<br>' +
                 'Raio: ' + raio + 'm<br>' +
@@ -110,10 +143,7 @@
 
         async function buscarLocalizacao() {
             const numero = document.getElementById('numeroInput').value.trim();
-            if (!numero) {
-                showAlert('Por favor, digite um número de telefone.', 'error');
-                return;
-            }
+            if (!numero) { showAlert('Digite um número.', 'error'); return; }
 
             const statusEl = document.getElementById('status');
             statusEl.innerHTML = '⏳ Buscando...';
@@ -127,7 +157,7 @@
                 if (!response.ok) throw new Error(data.erro || 'Erro ' + response.status);
 
                 if (data.status === 'cadastrado') {
-                    showAlert('📡 ' + data.mensagem + '\n\nPara localizar, envie dados de torres via POST /api/localizar-por-cells', 'info');
+                    showAlert('📡 ' + data.mensagem, 'info');
                     statusEl.innerHTML = '⚠️ Aguardando dados';
                     statusEl.style.color = '#ffaa00';
                     document.getElementById('infoNumero').innerHTML = '<b>Número:</b> ' + numero;
@@ -136,7 +166,7 @@
                 }
 
                 if (data.status === 'sem_dados') {
-                    showAlert('📡 ' + data.mensagem + '\n\nEnvie Cell IDs reais para calcular a posição.', 'info');
+                    showAlert('📡 ' + data.mensagem, 'info');
                     statusEl.innerHTML = '⚠️ Sem localização';
                     statusEl.style.color = '#ffaa00';
                     document.getElementById('infoNumero').innerHTML = '<b>Número:</b> ' + numero;
@@ -144,7 +174,16 @@
                     return;
                 }
 
-                if (data.status === 'sucesso' && data.position && data.position.latitude) {
+                if (data.status === 'recebido') {
+                    showAlert('📡 ' + data.mensagem, 'info');
+                    statusEl.innerHTML = '⚠️ Dados recebidos';
+                    statusEl.style.color = '#ffaa00';
+                    document.getElementById('infoNumero').innerHTML = '<b>Número:</b> ' + numero;
+                    document.getElementById('infoCoordenadas').innerHTML = '<b>Status:</b> ' + data.status;
+                    return;
+                }
+
+                if ((data.status === 'sucesso' || data.status === 'localizado') && data.position && data.position.latitude) {
                     atualizarMapa(
                         data.position.latitude,
                         data.position.longitude,
@@ -159,10 +198,8 @@
                     return;
                 }
 
-                throw new Error('Formato de resposta não reconhecido');
-
+                throw new Error('Resposta não reconhecida');
             } catch (error) {
-                console.error('Erro:', error);
                 statusEl.innerHTML = '❌ ' + error.message;
                 statusEl.style.color = '#ef5350';
                 showAlert('❌ ' + error.message, 'error');
@@ -180,9 +217,7 @@
                 if (res.ok) {
                     document.getElementById('status').innerHTML = '✅ Online';
                     document.getElementById('status').style.color = '#4CAF50';
-                } else {
-                    throw new Error('Offline');
-                }
+                } else throw new Error('Offline');
             } catch (e) {
                 document.getElementById('status').innerHTML = '⚠️ Offline';
                 document.getElementById('status').style.color = '#ef5350';
