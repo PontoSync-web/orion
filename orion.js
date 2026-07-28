@@ -1,12 +1,12 @@
 // ============================================================
 // ARQUIVO: orion.js
 // DATA: 28 de Julho de 2026
-// HORÁRIO: 19:15 (Horário Oficial — Salvador, Bahia, Brasil)
+// HORÁRIO: 19:00 (Horário Oficial — Salvador, Bahia, Brasil)
 // FUSO: América do Sul / Brasil / Bahia (GMT-3)
-// MOTIVO: v5.8.7 — Importação nacional automática via 3 IAs.
-//         Banco populado com torres reais do Brasil.
-//         8 camadas de localização. Blindagem de segurança.
+// MOTIVO: v5.8.7 — Cadeia de importação otimizada:
+//         OpenCellID → Anatel → IAs → Banco de Emergência.
 //         Protocolo Hermes v4.1 integrado.
+//         8 camadas de localização. Blindagem de segurança.
 // ============================================================
 
 require('dotenv').config();
@@ -35,7 +35,6 @@ Object.values(PATHS).forEach(dir => { if (!fs.existsSync(dir)) fs.mkdirSync(dir,
 const DB_MAIN = path.join(PATHS.data, 'orion.db');
 const DB_TOWERS = path.join(PATHS.data, 'cell_towers.db');
 const DB_CACHE = path.join(PATHS.data, 'cache.db');
-const LOCK_FILE = path.join(PATHS.data, '.import_nacional_lock');
 
 const API_KEY = process.env.OPENCELLID_API_KEY || 'pk.d597db3bcf9eea4d67acaeb057573fd4';
 const UNWIRED_TOKEN = process.env.UNWIRED_TOKEN || 'pk.b6eadaf01c1bce6c3c8eb52bc8b30211';
@@ -83,16 +82,14 @@ app.get('/health', (req, res) => res.json({
     servidor: 'AI-DEPOM', versao: '5.8.7', status: 'online',
     seguranca: 'BLINDADO',
     protocolo_hermes: 'ATIVO (3 IAs conectadas)',
-    importacao_nacional: fs.existsSync(LOCK_FILE) ? 'EM ANDAMENTO' : 'PRONTO',
-    banco_torres: 'AUTOMATICO (IAs)',
+    fontes_importacao: ['OpenCellID', 'Anatel', 'IAs', 'Emergencia'],
     agentes_ativos: agentesAtivos.size,
     timestamp: new Date().toISOString()
 }));
 
 app.get('/', (req, res) => res.json({
     servidor: 'AI-DEPOM', versao: '5.8.7',
-    protocolo_hermes: 'ATIVO (Claude, Grok, Gemini)',
-    importacao_nacional: 'AUTOMATICA',
+    fontes_importacao: ['OpenCellID (área)', 'Anatel (Mosaico)', 'IAs (Claude, Grok, Gemini)', 'Banco de Emergência'],
     endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status', '/api/hermes/forcar']
 }));
 
@@ -111,7 +108,6 @@ app.get('/api/hermes/status', (req, res) => res.json({
     timestamp: new Date().toISOString()
 }));
 
-// 28/07/2026 19:15 — Rota de emergência para forçar consulta às IAs
 app.post('/api/hermes/forcar', async (req, res) => {
     const { regiao } = req.body;
     const regiaoAlvo = regiao || 'Salvador';
@@ -131,7 +127,7 @@ app.post('/api/hermes/forcar', async (req, res) => {
             res.json({ status: 'sucesso', total_erbs: erbs.length, erbs: erbs.slice(0, 5), timestamp: new Date().toISOString() });
         } else {
             hermes.destruirSessao(sessaoId);
-            res.json({ status: 'falha', mensagem: 'Nenhuma IA retornou ERBs. Verifique os tokens no Render.', timestamp: new Date().toISOString() });
+            res.json({ status: 'falha', mensagem: 'Nenhuma IA retornou ERBs.', timestamp: new Date().toISOString() });
         }
     } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -181,7 +177,6 @@ async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp,
     const estimativa = estimarPorRSSI(cells);
     if (estimativa) { gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, estimativa, 'rssi_estimativa', res); return; }
 
-    // Protocolo Hermes
     log('info', 'Todas as 7 fontes falharam. Acionando Protocolo Hermes...');
     try {
         const sessaoId = hermes.iniciarSessaoEmergenciaNacional('localizacao_falha', { cells, regiao: 'Brasil' });
@@ -205,7 +200,6 @@ async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp,
     gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, null, 'sem_dados', res);
 }
 
-// Funções auxiliares (inalteradas)
 function consultarCache(cellId) { return new Promise((resolve) => { dbCache.get('SELECT lat, lon, range, fonte FROM cell_cache WHERE cell_id = ? AND created_at > datetime("now", "-24 hours")', [cellId], (err, row) => resolve(row ? { cell: cellId, lat: row.lat, lon: row.lon, range: row.range, fonte: row.fonte } : null)); }); }
 function atualizarCache(cellId, lat, lon, range, fonte) { return new Promise((resolve) => { dbCache.run('INSERT OR REPLACE INTO cell_cache (cell_id, lat, lon, range, fonte, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)', [cellId, lat, lon, range, fonte], () => resolve()); }); }
 function consultarUnwiredMulti(cells) { if (!UNWIRED_TOKEN || cells.length === 0) return Promise.resolve(null); return new Promise((resolve) => { const cellData = cells.map(c => ({ lac: c.lac || 1234, cid: c.cellId, signal: c.rssi || -73 })); const data = JSON.stringify({ token: UNWIRED_TOKEN, radio: 'gsm', mcc: cells[0].mcc || 724, mnc: cells[0].mnc || 5, cells: cellData, address: 1 }); const req = https.request({ hostname: 'us1.unwiredlabs.com', path: '/v2/process.php', method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: 5000 }, (res) => { let body = ''; res.on('data', chunk => body += chunk); res.on('end', () => { try { const r = JSON.parse(body); if (r.status === 'ok' && r.lat && r.lon) resolve({ latitude: r.lat, longitude: r.lon, radius: r.accuracy || 150, torres_usadas: cells.length }); else resolve(null); } catch (e) { resolve(null); } }); }); req.on('timeout', () => { req.destroy(); resolve(null); }); req.on('error', () => resolve(null)); req.write(data); req.end(); }); }
@@ -227,7 +221,7 @@ function gravarLocalizacao(targetId, cells, wifiData, clientIp, agentId, hermesS
 }
 
 // ============================================================
-// INICIALIZAÇÃO COM IMPORTAÇÃO NACIONAL AUTOMÁTICA
+// INICIALIZAÇÃO COM CADEIA DE IMPORTAÇÃO OTIMIZADA
 // ============================================================
 async function iniciarServidor() {
     const dbTowers = new sqlite3.Database(DB_TOWERS);
@@ -238,34 +232,51 @@ async function iniciarServidor() {
     const count = await new Promise((resolve) => { dbTowers.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0)); });
 
     if (count < 1000000) {
-        // Verifica lock de 24h para não sobrecarregar as IAs
-        let deveImportar = true;
-        if (fs.existsSync(LOCK_FILE)) {
-            const lockTime = new Date(fs.readFileSync(LOCK_FILE, 'utf8').trim());
-            if (Date.now() - lockTime.getTime() < 24 * 60 * 60 * 1000) {
-                log('info', 'Importação nacional já foi executada nas últimas 24h. Pulando.');
-                deveImportar = false;
+        let importado = false;
+
+        // Tenta OpenCellID por área (fonte oficial, sem limite de tokens)
+        if (!importado) {
+            try {
+                log('info', 'Tentando importar via OpenCellID por área (27 capitais)...');
+                const { execSync } = require('child_process');
+                execSync('node scripts/import-opencellid-area.js', { stdio: 'inherit', timeout: 300000 });
+                importado = true;
+                log('info', 'Importação via OpenCellID concluída!');
+            } catch (err) {
+                log('warn', 'OpenCellID por área falhou: ' + err.message);
             }
         }
 
-        if (deveImportar) {
-            log('info', 'Banco com menos de 1 milhão de torres. Iniciando importação nacional via IAs...');
-            fs.writeFileSync(LOCK_FILE, new Date().toISOString());
+        // Tenta Anatel (fonte oficial brasileira)
+        if (!importado) {
             try {
+                log('info', 'Tentando importar via Anatel (Mosaico)...');
+                const { execSync } = require('child_process');
+                execSync('node scripts/import-anatel.js', { stdio: 'inherit', timeout: 300000 });
+                importado = true;
+                log('info', 'Importação via Anatel concluída!');
+            } catch (err) {
+                log('warn', 'Anatel falhou: ' + err.message);
+            }
+        }
+
+        // Tenta IAs como último recurso
+        if (!importado) {
+            try {
+                log('info', 'Tentando importar via IAs (Claude, Grok, Gemini)...');
                 const { execSync } = require('child_process');
                 execSync('node scripts/import-nacional-ias.js', { stdio: 'inherit', timeout: 600000 });
-                log('info', 'Importação nacional concluída!');
-                try { fs.unlinkSync(LOCK_FILE); } catch (e) {}
+                importado = true;
+                log('info', 'Importação via IAs concluída!');
             } catch (err) {
-                log('error', 'Falha na importação nacional: ' + err.message);
-                log('warn', 'Inserindo banco de emergência de 50 torres...');
-                await inserirBancoEmergencia(dbTowers);
+                log('warn', 'IAs falharam: ' + err.message);
             }
-        } else {
-            // Banco com poucas torres mas lock ativo: insere emergência
-            if (count < 50) {
-                await inserirBancoEmergencia(dbTowers);
-            }
+        }
+
+        // Se nada funcionou, insere banco de emergência
+        if (!importado || count < 50) {
+            log('warn', 'Nenhuma fonte externa disponível. Inserindo banco de emergência...');
+            await inserirBancoEmergencia(dbTowers);
         }
     } else {
         log('info', 'Banco de torres OK: ' + count.toLocaleString() + ' torres.');
@@ -275,7 +286,7 @@ async function iniciarServidor() {
 
     app.listen(port, () => {
         log('info', 'AI-DEPOM 5.8.7 rodando na porta ' + port);
-        log('info', 'Importação nacional: AUTOMÁTICA (3 IAs)');
+        log('info', 'Fontes de importação: OpenCellID, Anatel, IAs, Emergência');
         log('info', 'Protocolo Hermes v4.1: ATIVO');
         log('info', 'SEGURANÇA: BLINDADO');
     });
