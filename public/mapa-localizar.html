@@ -1,49 +1,65 @@
 <!--
     ARQUIVO: public/mapa-localizar.html
-    DATA: 28/07/2026
-    MOTIVO: Marca atualizada para AI-DEPOM.
-            Tela de apresentação de 5s com "AI - DEPOM".
-            Compatível com ORION 5.6.
+    DATA: 28 de Julho de 2026
+    HORÁRIO: 14:45 (Horário Oficial — Salvador, Bahia, Brasil)
+    FUSO: América do Sul / Brasil / Bahia (GMT-3)
+    MOTIVO: Splash screen de 10 segundos com a mensagem
+            "CARREGANDO AI - DEPOM Sistema de GeoLocalização...".
+            Compatível com ORION 5.8.3 e ORION Agent.
 -->
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI-DEPOM — Sistema de Localização</title>
+    <title>AI-DEPOM — Sistema de Geolocalização</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
-        /* Splash Screen */
+        /* Splash Screen — 10 segundos */
         #splash {
             position: fixed;
             top: 0; left: 0; width: 100%; height: 100%;
             background: #0a0a1a;
             display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
             z-index: 9999;
-            animation: fadeOut 1s ease 4s forwards;
+            animation: fadeOut 1.5s ease 8.5s forwards;
         }
         #splash .logo {
             font-family: 'Segoe UI', Arial, sans-serif;
-            font-size: 48px;
+            font-size: 36px;
             font-weight: 900;
             color: #e94560;
-            letter-spacing: 8px;
-            animation: pulse 0.8s ease-in-out infinite alternate;
+            letter-spacing: 6px;
+            text-align: center;
+            animation: pulse 1s ease-in-out infinite alternate;
+        }
+        #splash .subtitle {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 16px;
+            color: #4fc3f7;
+            margin-top: 15px;
+            text-align: center;
+            animation: fadeText 0.5s ease-in-out infinite alternate;
         }
         @keyframes pulse {
-            from { opacity: 0.6; transform: scale(0.95); }
-            to { opacity: 1; transform: scale(1.05); }
+            from { opacity: 0.7; transform: scale(0.98); }
+            to { opacity: 1; transform: scale(1.02); }
+        }
+        @keyframes fadeText {
+            from { opacity: 0.5; }
+            to { opacity: 1; }
         }
         @keyframes fadeOut {
             to { opacity: 0; visibility: hidden; }
         }
 
-        /* Interface principal */
+        /* Interface Principal */
         body { font-family: 'Segoe UI', Arial, sans-serif; background: #1a1a2e; color: #eee; height: 100vh; display: flex; flex-direction: column; }
         #header { background: #16213e; padding: 15px 20px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-bottom: 2px solid #0f3460; }
         #header h1 { font-size: 20px; color: #e94560; white-space: nowrap; }
@@ -61,9 +77,10 @@
 </head>
 <body>
 
-    <!-- SPLASH SCREEN AI-DEPOM -->
+    <!-- SPLASH SCREEN — 10 SEGUNDOS -->
     <div id="splash">
         <div class="logo">AI &mdash; DEPOM</div>
+        <div class="subtitle">CARREGANDO AI - DEPOM<br>Sistema de GeoLocalização...</div>
     </div>
 
     <!-- INTERFACE PRINCIPAL -->
