@@ -31,7 +31,19 @@ Object.values(PATHS).forEach(dir => {
 const DB_MAIN = path.join(PATHS.data, 'orion.db');
 const DB_TOWERS = path.join(PATHS.data, 'cell_towers.db');
 
-app.use(helmet());
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"],
+        imgSrc: ["'self'", "data:", "https://*.tile.openstreetmap.org"],
+        connectSrc: ["'self'", "https://*.tile.openstreetmap.org"]
+      },
+    },
+  })
+);
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(PATHS.public));
