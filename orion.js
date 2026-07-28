@@ -1,6 +1,6 @@
 // ============================================================
-// ORION — Servidor Principal v5.1 (Completo)
-// Atualizado: 28/07/2026 00:30 — Rotas unificadas + cadastro automático
+// ORION — Servidor Principal v5.1 (Build Final)
+// Atualizado: 28/07/2026 — Todas as rotas e correções integradas
 // ============================================================
 
 require('dotenv').config();
@@ -15,13 +15,16 @@ const fs = require('fs');
 const app = express();
 const port = process.env.PORT || 3000;
 
+// ============================================================
+// CONFIGURAÇÃO DE DIRETÓRIOS
+// ============================================================
 const PROJECT_ROOT = __dirname;
 const PATHS = {
     data: path.join(PROJECT_ROOT, 'data'),
     logs: path.join(PROJECT_ROOT, 'logs'),
     public: path.join(PROJECT_ROOT, 'public'),
     src: path.join(PROJECT_ROOT, 'src'),
-    scripts: path.join(PROJECT_ROOT, 'scripts'),
+    scripts: path.join(PROJECT_ROOT, 'scripts')
 };
 
 Object.values(PATHS).forEach(dir => {
@@ -30,20 +33,21 @@ Object.values(PATHS).forEach(dir => {
 
 const DB_MAIN = path.join(PATHS.data, 'orion.db');
 const DB_TOWERS = path.join(PATHS.data, 'cell_towers.db');
-// Não cria o arquivo aqui — o import-render.js fará isso
-app.use(
-  helmet({
+
+// ============================================================
+// MIDDLEWARE DE SEGURANÇA
+// ============================================================
+app.use(helmet({
     contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"],
-        styleSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"],
-        imgSrc: ["'self'", "data:", "https://*.tile.openstreetmap.org"],
-        connectSrc: ["'self'", "https://*.tile.openstreetmap.org"]
-      },
-    },
-  })
-);
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"],
+            styleSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"],
+            imgSrc: ["'self'", "data:", "https://*.tile.openstreetmap.org"],
+            connectSrc: ["'self'", "https://*.tile.openstreetmap.org"]
+        }
+    }
+}));
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(PATHS.public));
@@ -51,25 +55,45 @@ app.use(express.static(PATHS.public));
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
 app.use('/api/', limiter);
 
-const log = (level, msg) => console.log(`[${new Date().toISOString()}] [${level.toUpperCase()}] ${msg}`);
+// ============================================================
+// LOGGER
+// ============================================================
+const log = (level, msg) => {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] [${level.toUpperCase()}] ${msg}`);
+};
 
+// ============================================================
+// BANCO DE DADOS PRINCIPAL
+// ============================================================
 const dbMain = new sqlite3.Database(DB_MAIN);
-dbMain.exec(`CREATE TABLE IF NOT EXISTS targets (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT, phone TEXT, status TEXT DEFAULT 'active',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS locations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    target_id INTEGER, latitude REAL, longitude REAL,
-    radius INTEGER, source TEXT, metodo TEXT,
-    torres_usadas INTEGER, cell_data TEXT,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);`);
+dbMain.exec(`
+    CREATE TABLE IF NOT EXISTS targets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        phone TEXT UNIQUE,
+        status TEXT DEFAULT 'active',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS locations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        target_id INTEGER,
+        latitude REAL,
+        longitude REAL,
+        radius INTEGER,
+        source TEXT,
+        metodo TEXT,
+        torres_usadas INTEGER,
+        cell_data TEXT,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+`);
+
 // ============================================================
-// ROTAS
+// ROTAS DA API
 // ============================================================
 
+// Health Check
 app.get('/health', (req, res) => {
     res.json({
         servidor: 'Orion',
@@ -80,110 +104,197 @@ app.get('/health', (req, res) => {
     });
 });
 
+// Raiz
 app.get('/', (req, res) => {
     res.json({
         servidor: 'Orion',
         status: 'online',
-        endpoints: ['/health', '/api/localizar-por-cells', '/api/rastrear/:numero', '/api/buscar/:numero', '/api/cellular/status', '/api/cadastrar']
+        endpoints: [
+            '/health',
+            '/api/cadastrar',
+            '/api/rastrear/:numero',
+            '/api/buscar/:numero',
+            '/api/localizar-por-cells',
+            '/api/cellular/status',
+            '/api/ticket/:id'
+        ]
     });
 });
 
-// Cadastro de alvo
+// Cadastro de Alvo
 app.post('/api/cadastrar', (req, res) => {
     const { numero, nome } = req.body;
     if (!numero) return res.status(400).json({ erro: 'Numero obrigatorio' });
-    dbMain.run('INSERT INTO targets (name, phone) VALUES (?, ?)', [nome || 'Alvo', numero], function(err) {
-        if (err) return res.status(500).json({ erro: err.message });
-        res.json({ status: 'sucesso', id: this.lastID, mensagem: 'Alvo cadastrado' });
-    });
-});
 
-// Rota do Mapa (compatibilidade com frontend)
-app.get('/api/rastrear/:numero', (req, res) => {
-    const numero = req.params.numero;
-    dbMain.get('SELECT * FROM targets WHERE phone = ?', [numero], (err, target) => {
-        if (err || !target) {
-            dbMain.run('INSERT INTO targets (name, phone) VALUES (?, ?)', ['Alvo ' + numero.slice(-4), numero], () => {
-                res.json({ status: 'cadastrado', numero, mensagem: 'Alvo cadastrado. Sem dados de localizacao.' });
-            });
-            return;
-        }
-        dbMain.get('SELECT * FROM locations WHERE target_id = ? ORDER BY timestamp DESC LIMIT 1', [target.id], (err, row) => {
-            if (err || !row) return res.json({ status: 'sem_dados', numero, alvo: target.name, mensagem: 'Alvo cadastrado. Sem dados de localizacao.' });
-            res.json({
-                status: 'sucesso',
-                numero,
-                alvo: target.name,
-                position: { latitude: row.latitude, longitude: row.longitude, raio_estimado: row.radius },
-                timestamp: row.timestamp,
-                fonte: 'historico_real'
-            });
-        });
-    });
-});
-
-// Busca ativa
-app.get('/api/buscar/:numero', (req, res) => {
-    const numero = req.params.numero;
-    dbMain.get('SELECT * FROM targets WHERE phone = ?', [numero], (err, target) => {
-        if (err || !target) {
-            dbMain.run('INSERT INTO targets (name, phone) VALUES (?, ?)', ['Alvo ' + numero.slice(-4), numero]);
-            return res.json({ status: 'cadastrado', numero, mensagem: 'Alvo cadastrado automaticamente. Sem dados de localizacao.' });
-        }
-        dbMain.get('SELECT * FROM locations WHERE target_id = ? ORDER BY timestamp DESC LIMIT 1', [target.id], (err, row) => {
-            if (err || !row) return res.json({ status: 'sem_dados', numero, alvo: target.name, mensagem: 'Sem dados de localizacao.' });
-            res.json({
-                status: 'sucesso',
-                numero,
-                alvo: target.name,
-                position: { latitude: row.latitude, longitude: row.longitude, raio_estimado: row.radius },
-                timestamp: row.timestamp,
-                fonte: 'historico_real'
-            });
-        });
-    });
-});
-// Localização por Cell IDs
-app.post('/api/localizar-por-cells', (req, res) => {
-    const { numero, cells } = req.body;
-    if (!cells || !Array.isArray(cells) || cells.length === 0) {
-        return res.status(400).json({ erro: 'Array de cells obrigatorio' });
-    }
-      // Garante que o alvo existe (cadastra automaticamente se necessário)
-    dbMain.get('SELECT id FROM targets WHERE phone = ?', [numero], (err, target) => {
-        if (err || !target) {
-            // Cria o alvo primeiro
-            dbMain.run('INSERT INTO targets (name, phone) VALUES (?, ?)', 
-                ['Alvo ' + (numero || '').slice(-4), numero], 
-                function(insertErr) {
-                    if (insertErr) return res.status(500).json({ erro: insertErr.message });
-                    // Agora salva a localização com o novo ID
-                    salvarLocalizacao(this.lastID, cells, res);
-                });
-        } else {
-            // Alvo já existe, salva com o ID encontrado
-            salvarLocalizacao(target.id, cells, res);
-        }
-    });
-});
-// Função auxiliar para salvar localização
-function salvarLocalizacao(targetId, cells, res) {
-    // Calcula posição aproximada (média simples das coordenadas se disponíveis)
-    // Na versão real, consultaria o banco de torres
-    dbMain.run(
-        'INSERT INTO locations (target_id, cell_data, source, metodo, torres_usadas, latitude, longitude, radius) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [targetId, JSON.stringify(cells), 'api', 'celulas_recebidas', cells.length, -12.9714, -38.5016, 500],
+    dbMain.run('INSERT OR IGNORE INTO targets (name, phone) VALUES (?, ?)',
+        [nome || 'Alvo', numero],
         function(err) {
             if (err) return res.status(500).json({ erro: err.message });
             res.json({
-                status: 'recebido',
-                mensagem: cells.length + ' celulas registradas. Localizacao de referencia salva.',
-                target_id: targetId,
-                timestamp: new Date().toISOString()
+                status: 'sucesso',
+                id: this.lastID,
+                mensagem: 'Alvo cadastrado com sucesso'
             });
+        });
+});
+
+// Rastreamento para o Mapa
+app.get('/api/rastrear/:numero', (req, res) => {
+    const numero = req.params.numero;
+
+    dbMain.get('SELECT id, name FROM targets WHERE phone = ?', [numero], (err, target) => {
+        if (err || !target) {
+            // Cadastra automaticamente
+            dbMain.run('INSERT OR IGNORE INTO targets (name, phone) VALUES (?, ?)',
+                ['Alvo ' + numero.slice(-4), numero],
+                () => {
+                    return res.json({
+                        status: 'cadastrado',
+                        numero: numero,
+                        mensagem: 'Alvo cadastrado. Sem dados de localizacao ainda.',
+                        position: null
+                    });
+                });
+            return;
         }
-    );
+
+        dbMain.get('SELECT latitude, longitude, radius, timestamp FROM locations WHERE target_id = ? ORDER BY timestamp DESC LIMIT 1',
+            [target.id], (err, row) => {
+                if (err || !row) {
+                    return res.json({
+                        status: 'sem_dados',
+                        numero: numero,
+                        alvo: target.name,
+                        mensagem: 'Alvo encontrado, mas sem dados de localizacao.',
+                        position: null
+                    });
+                }
+                res.json({
+                    status: 'sucesso',
+                    numero: numero,
+                    alvo: target.name,
+                    position: {
+                        latitude: row.latitude,
+                        longitude: row.longitude,
+                        raio_estimado: row.radius || 500
+                    },
+                    timestamp: row.timestamp,
+                    fonte: 'historico_real'
+                });
+            });
+    });
+});
+
+// Busca Ativa
+app.get('/api/buscar/:numero', (req, res) => {
+    const numero = req.params.numero;
+
+    dbMain.get('SELECT id, name FROM targets WHERE phone = ?', [numero], (err, target) => {
+        if (err || !target) {
+            dbMain.run('INSERT OR IGNORE INTO targets (name, phone) VALUES (?, ?)',
+                ['Alvo ' + numero.slice(-4), numero],
+                () => {
+                    return res.json({
+                        status: 'cadastrado',
+                        numero: numero,
+                        mensagem: 'Alvo cadastrado automaticamente. Sem dados de localizacao.'
+                    });
+                });
+            return;
+        }
+
+        dbMain.get('SELECT * FROM locations WHERE target_id = ? ORDER BY timestamp DESC LIMIT 1',
+            [target.id], (err, row) => {
+                if (err || !row) {
+                    return res.json({
+                        status: 'sem_dados',
+                        numero: numero,
+                        alvo: target.name,
+                        mensagem: 'Sem dados de localizacao.'
+                    });
+                }
+                res.json({
+                    status: 'sucesso',
+                    numero: numero,
+                    alvo: target.name,
+                    position: {
+                        latitude: row.latitude,
+                        longitude: row.longitude,
+                        raio_estimado: row.radius
+                    },
+                    timestamp: row.timestamp,
+                    fonte: 'historico_real'
+                });
+            });
+    });
+});
+
+// Recebimento de Células (Agente/SDR)
+app.post('/api/localizar-por-cells', (req, res) => {
+    const { numero, cells } = req.body;
+
+    if (!cells || !Array.isArray(cells) || cells.length === 0) {
+        return res.status(400).json({ erro: 'Array de celulas obrigatorio.' });
+    }
+
+    dbMain.get('SELECT id FROM targets WHERE phone = ?', [numero], (err, target) => {
+        if (err || !target) {
+            dbMain.run('INSERT INTO targets (name, phone) VALUES (?, ?)',
+                ['Alvo ' + (numero || '').slice(-4), numero],
+                function(insertErr) {
+                    if (insertErr) return res.status(500).json({ erro: insertErr.message });
+                    salvarCelulas(this.lastID, cells, res);
+                });
+        } else {
+            salvarCelulas(target.id, cells, res);
+        }
+    });
+});
+
+function salvarCelulas(targetId, cells, res) {
+    const dbTowers = new sqlite3.Database(DB_TOWERS);
+    
+    // Tenta buscar coordenadas das torres
+    const cellIds = cells.map(c => c.cellId);
+    const placeholders = cellIds.map(() => '?').join(',');
+    
+    dbTowers.all('SELECT cell, lat, lon, range FROM cell_towers WHERE cell IN (' + placeholders + ')',
+        cellIds, (err, torres) => {
+            dbTowers.close();
+            
+            let lat = null, lon = null, radius = null;
+            
+            if (torres && torres.length > 0) {
+                // Triangulação ponderada
+                let pesoTotal = 0;
+                torres.forEach(t => {
+                    const peso = 1 / Math.max(t.range || 500, 1);
+                    lat = (lat || 0) + t.lat * peso;
+                    lon = (lon || 0) + t.lon * peso;
+                    pesoTotal += peso;
+                });
+                lat /= pesoTotal;
+                lon /= pesoTotal;
+                radius = Math.round(torres.reduce((a, t) => a + (t.range || 500), 0) / torres.length / Math.sqrt(torres.length));
+            }
+            
+            dbMain.run(
+                'INSERT INTO locations (target_id, cell_data, source, metodo, torres_usadas, latitude, longitude, radius) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                [targetId, JSON.stringify(cells), 'api', lat ? 'triangulacao' : 'dados_brutos', cells.length, lat, lon, radius],
+                function(err) {
+                    if (err) return res.status(500).json({ erro: err.message });
+                    res.json({
+                        status: lat ? 'localizado' : 'recebido',
+                        mensagem: lat ? 'Localizacao calculada com sucesso.' : 'Celulas registradas. Banco de torres indisponivel para triangulacao.',
+                        position: lat ? { latitude: lat, longitude: lon, raio_estimado: radius } : null,
+                        timestamp: new Date().toISOString()
+                    });
+                }
+            );
+        });
 }
+
+// Monitor Celular
 app.get('/api/cellular/status', (req, res) => {
     res.json({ status: 'monitorando', timestamp: new Date().toISOString() });
 });
@@ -200,29 +311,25 @@ app.post('/api/cellular/paging', (req, res) => {
     res.json({ status: 'ok', tipo: 'paging', dados: req.body });
 });
 
+// Ticket de Busca
 app.get('/api/ticket/:id', (req, res) => {
-    res.json({ ticket_id: parseInt(req.params.id), status: 'monitorando' });
+    res.json({ ticket_id: parseInt(req.params.id), status: 'monitorando', mensagem: 'Sistema ativo' });
 });
 
 // ============================================================
 // INICIALIZAÇÃO
 // ============================================================
-// ============================================================
-// INICIALIZAÇÃO COM IMPORTAÇÃO AUTOMÁTICA
-// ============================================================
-
 async function iniciarServidor() {
-    // Verifica se o banco de torres existe e tem dados
     let precisaImportar = true;
-    
+
     if (fs.existsSync(DB_TOWERS)) {
         const dbCheck = new sqlite3.Database(DB_TOWERS);
-        const row = await new Promise((resolve) => {
+        const tableExists = await new Promise((resolve) => {
             dbCheck.get("SELECT name FROM sqlite_master WHERE type='table' AND name='cell_towers'", (err, row) => {
-                resolve(row);
+                resolve(!!row);
             });
         });
-        if (row) {
+        if (tableExists) {
             const count = await new Promise((resolve) => {
                 dbCheck.get('SELECT COUNT(*) as c FROM cell_towers', (err, r) => {
                     resolve(r ? r.c : 0);
@@ -234,22 +341,21 @@ async function iniciarServidor() {
     }
 
     if (precisaImportar) {
-        log('info', 'Banco de torres vazio ou ausente. Iniciando importacao...');
+        log('info', 'Banco de torres vazio. Iniciando importacao...');
         try {
             const { execSync } = require('child_process');
             execSync('node scripts/import-render.js', { stdio: 'inherit', timeout: 600000 });
-            log('info', 'Importacao concluida com sucesso!');
+            log('info', 'Importacao concluida!');
         } catch (err) {
             log('error', 'Falha na importacao: ' + err.message);
-            log('warn', 'Servidor iniciara sem banco de torres.');
         }
     } else {
         log('info', 'Banco de torres OK');
     }
 
     app.listen(port, () => {
-        log('info', `ORION 5.1 rodando na porta ${port}`);
-        log('info', `Banco de torres: ${fs.existsSync(DB_TOWERS) ? 'OK' : 'PENDENTE'}`);
+        log('info', 'ORION 5.1 rodando na porta ' + port);
+        log('info', 'Banco de torres: ' + (fs.existsSync(DB_TOWERS) ? 'OK' : 'PENDENTE'));
     });
 }
 
