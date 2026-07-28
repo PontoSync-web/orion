@@ -1,11 +1,11 @@
 <!--
     ARQUIVO: public/mapa-localizar.html
     DATA: 28 de Julho de 2026
-    HORÁRIO: 14:45 (Horário Oficial — Salvador, Bahia, Brasil)
+    HORÁRIO: 15:45 (Horário Oficial — Salvador, Bahia, Brasil)
     FUSO: América do Sul / Brasil / Bahia (GMT-3)
-    MOTIVO: Splash screen de 10 segundos com a mensagem
-            "CARREGANDO AI - DEPOM Sistema de GeoLocalização...".
-            Compatível com ORION 5.8.3 e ORION Agent.
+    MOTIVO: Exibição de endereço completo e ERBs fornecedoras
+            ao localizar um número. Splash screen de 10s.
+            Compatível com ORION 5.8.4 Blindado.
 -->
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -18,48 +18,26 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
-        /* Splash Screen — 10 segundos */
         #splash {
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: #0a0a1a;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            z-index: 9999;
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #0a0a1a; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; z-index: 9999;
             animation: fadeOut 1.5s ease 8.5s forwards;
         }
         #splash .logo {
-            font-family: 'Segoe UI', Arial, sans-serif;
-            font-size: 36px;
-            font-weight: 900;
-            color: #e94560;
-            letter-spacing: 6px;
-            text-align: center;
-            animation: pulse 1s ease-in-out infinite alternate;
+            font-family: 'Segoe UI', Arial, sans-serif; font-size: 36px;
+            font-weight: 900; color: #e94560; letter-spacing: 6px;
+            text-align: center; animation: pulse 1s ease-in-out infinite alternate;
         }
         #splash .subtitle {
-            font-family: 'Segoe UI', Arial, sans-serif;
-            font-size: 16px;
-            color: #4fc3f7;
-            margin-top: 15px;
-            text-align: center;
+            font-family: 'Segoe UI', Arial, sans-serif; font-size: 16px;
+            color: #4fc3f7; margin-top: 15px; text-align: center;
             animation: fadeText 0.5s ease-in-out infinite alternate;
         }
-        @keyframes pulse {
-            from { opacity: 0.7; transform: scale(0.98); }
-            to { opacity: 1; transform: scale(1.02); }
-        }
-        @keyframes fadeText {
-            from { opacity: 0.5; }
-            to { opacity: 1; }
-        }
-        @keyframes fadeOut {
-            to { opacity: 0; visibility: hidden; }
-        }
+        @keyframes pulse { from { opacity: 0.7; transform: scale(0.98); } to { opacity: 1; transform: scale(1.02); } }
+        @keyframes fadeText { from { opacity: 0.5; } to { opacity: 1; } }
+        @keyframes fadeOut { to { opacity: 0; visibility: hidden; } }
 
-        /* Interface Principal */
         body { font-family: 'Segoe UI', Arial, sans-serif; background: #1a1a2e; color: #eee; height: 100vh; display: flex; flex-direction: column; }
         #header { background: #16213e; padding: 15px 20px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-bottom: 2px solid #0f3460; }
         #header h1 { font-size: 20px; color: #e94560; white-space: nowrap; }
@@ -68,8 +46,11 @@
         #header button:hover { background: #c23152; }
         #status { font-size: 13px; color: #aaa; margin-left: auto; white-space: nowrap; }
         #map { flex: 1; width: 100%; }
-        #info { background: #16213e; padding: 10px 20px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; font-size: 13px; border-top: 2px solid #0f3460; }
-        #info span { white-space: nowrap; }
+        #info { background: #16213e; padding: 10px 20px; border-top: 2px solid #0f3460; font-size: 13px; }
+        #info .row { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 5px; }
+        #info .row span { white-space: nowrap; }
+        #info .endereco { color: #4fc3f7; font-weight: bold; margin-top: 5px; padding-top: 5px; border-top: 1px solid #0f3460; }
+        #info .erbs { color: #aaa; font-size: 12px; margin-top: 3px; }
         #alertBox { padding: 10px; margin: 0; text-align: center; font-weight: bold; display: none; }
         .alert-info { background: #0f3460; color: #4fc3f7; display: block !important; }
         .alert-error { background: #3e1a1a; color: #ef5350; display: block !important; }
@@ -77,13 +58,11 @@
 </head>
 <body>
 
-    <!-- SPLASH SCREEN — 10 SEGUNDOS -->
     <div id="splash">
         <div class="logo">AI &mdash; DEPOM</div>
         <div class="subtitle">CARREGANDO AI - DEPOM<br>Sistema de GeoLocalização...</div>
     </div>
 
-    <!-- INTERFACE PRINCIPAL -->
     <div id="alertBox"></div>
     <div id="header">
         <h1>&#128752; AI-DEPOM</h1>
@@ -93,15 +72,23 @@
     </div>
     <div id="map"></div>
     <div id="info">
-        <span id="infoNumero"><b>Número:</b> —</span>
-        <span id="infoCoordenadas"><b>Coordenadas:</b> —</span>
-        <span id="infoPrecisao"><b>Precisão:</b> —</span>
-        <span id="infoTorres"><b>Torres:</b> —</span>
-        <span id="infoFonte"><b>Fonte:</b> —</span>
+        <div class="row">
+            <span id="infoNumero"><b>Número:</b> —</span>
+            <span id="infoCoordenadas"><b>Coordenadas:</b> —</span>
+            <span id="infoPrecisao"><b>Precisão:</b> —</span>
+        </div>
+        <div class="row">
+            <span id="infoTorres"><b>Torres:</b> —</span>
+            <span id="infoFonte"><b>Fonte:</b> —</span>
+            <span id="infoTimestamp"><b>Data/Hora:</b> —</span>
+        </div>
+        <div id="infoEndereco" class="endereco" style="display:none;"></div>
+        <div id="infoERBs" class="erbs" style="display:none;"></div>
     </div>
 
     <script>
         const API_BASE = '/api/rastrear/';
+        const GEOCODE_URL = 'https://nominatim.openstreetmap.org/reverse?format=json&zoom=18&addressdetails=1';
 
         const map = L.map('map').setView([-14.235, -51.925], 4);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -120,19 +107,35 @@
             box._timeout = setTimeout(() => { box.className = ''; }, 10000);
         }
 
-        function atualizarMapa(lat, lng, raio, numero, torres, fonte) {
+        async function obterEndereco(lat, lng) {
+            try {
+                const res = await fetch(GEOCODE_URL + '&lat=' + lat + '&lon=' + lng);
+                const data = await res.json();
+                if (data && data.display_name) {
+                    return data.display_name;
+                }
+            } catch (e) {
+                console.log('Geocoding indisponível:', e.message);
+            }
+            return 'Endereço não disponível';
+        }
+
+        async function atualizarMapa(lat, lng, raio, numero, torres, fonte, timestamp, cellData) {
             if (marker) map.removeLayer(marker);
             if (circle) map.removeLayer(circle);
 
-            marker = L.marker([lat, lng]).addTo(map);
-            marker.bindPopup(
-                '<b>&#128241; ' + numero + '</b><br>' +
+            const endereco = await obterEndereco(lat, lng);
+
+            let popupContent = '<b>&#128241; ' + numero + '</b><br>' +
                 'Lat: ' + lat.toFixed(6) + '<br>' +
                 'Lng: ' + lng.toFixed(6) + '<br>' +
                 'Raio: ' + raio + 'm<br>' +
                 'Torres: ' + torres + '<br>' +
-                'Fonte: ' + fonte
-            ).openPopup();
+                'Fonte: ' + fonte + '<br>' +
+                '<small>' + endereco + '</small>';
+
+            marker = L.marker([lat, lng]).addTo(map);
+            marker.bindPopup(popupContent).openPopup();
 
             circle = L.circle([lat, lng], {
                 radius: raio,
@@ -141,13 +144,35 @@
                 fillOpacity: 0.15
             }).addTo(map);
 
-            map.setView([lat, lng], 14);
+            map.setView([lat, lng], 15);
 
             document.getElementById('infoNumero').innerHTML = '<b>Número:</b> ' + numero;
             document.getElementById('infoCoordenadas').innerHTML = '<b>Coordenadas:</b> ' + lat.toFixed(6) + ', ' + lng.toFixed(6);
             document.getElementById('infoPrecisao').innerHTML = '<b>Precisão:</b> ' + raio + 'm';
             document.getElementById('infoTorres').innerHTML = '<b>Torres:</b> ' + torres;
             document.getElementById('infoFonte').innerHTML = '<b>Fonte:</b> ' + fonte;
+            document.getElementById('infoTimestamp').innerHTML = '<b>Data/Hora:</b> ' + new Date(timestamp).toLocaleString('pt-BR');
+
+            const enderecoDiv = document.getElementById('infoEndereco');
+            enderecoDiv.style.display = 'block';
+            enderecoDiv.innerHTML = '&#128205; <b>Endereço:</b> ' + endereco;
+
+            const erbsDiv = document.getElementById('infoERBs');
+            if (cellData) {
+                erbsDiv.style.display = 'block';
+                try {
+                    const cells = typeof cellData === 'string' ? JSON.parse(cellData) : cellData;
+                    let erbsHtml = '&#128246; <b>ERBs Fornecedoras:</b> ';
+                    if (Array.isArray(cells)) {
+                        erbsHtml += cells.map(c => 'Cell ID: ' + (c.cellId || c.cell_id) + ' (RSSI: ' + (c.rssi || 'N/A') + 'dBm)').join(' | ');
+                    }
+                    erbsDiv.innerHTML = erbsHtml;
+                } catch (e) {
+                    erbsDiv.innerHTML = '&#128246; <b>ERBs:</b> Dados disponíveis na resposta da API';
+                }
+            } else {
+                erbsDiv.style.display = 'none';
+            }
         }
 
         function limparInfo() {
@@ -156,6 +181,9 @@
             document.getElementById('infoPrecisao').innerHTML = '<b>Precisão:</b> —';
             document.getElementById('infoTorres').innerHTML = '<b>Torres:</b> —';
             document.getElementById('infoFonte').innerHTML = '<b>Fonte:</b> —';
+            document.getElementById('infoTimestamp').innerHTML = '<b>Data/Hora:</b> —';
+            document.getElementById('infoEndereco').style.display = 'none';
+            document.getElementById('infoERBs').style.display = 'none';
         }
 
         async function buscarLocalizacao() {
@@ -178,7 +206,6 @@
                     statusEl.innerHTML = '⚠️ Aguardando dados';
                     statusEl.style.color = '#ffaa00';
                     document.getElementById('infoNumero').innerHTML = '<b>Número:</b> ' + numero;
-                    document.getElementById('infoCoordenadas').innerHTML = '<b>Status:</b> Cadastrado';
                     return;
                 }
 
@@ -187,7 +214,6 @@
                     statusEl.innerHTML = '⚠️ Sem localização';
                     statusEl.style.color = '#ffaa00';
                     document.getElementById('infoNumero').innerHTML = '<b>Número:</b> ' + numero;
-                    document.getElementById('infoCoordenadas').innerHTML = '<b>Alvo:</b> ' + (data.alvo || 'Desconhecido');
                     return;
                 }
 
@@ -196,18 +222,19 @@
                     statusEl.innerHTML = '⚠️ Dados recebidos';
                     statusEl.style.color = '#ffaa00';
                     document.getElementById('infoNumero').innerHTML = '<b>Número:</b> ' + numero;
-                    document.getElementById('infoCoordenadas').innerHTML = '<b>Status:</b> ' + data.status;
                     return;
                 }
 
                 if ((data.status === 'sucesso' || data.status === 'localizado') && data.position && data.position.latitude) {
-                    atualizarMapa(
+                    await atualizarMapa(
                         data.position.latitude,
                         data.position.longitude,
                         data.position.raio_estimado || 500,
                         data.numero || numero,
                         data.torres_usadas || '1',
-                        data.fonte || 'real'
+                        data.fonte || 'real',
+                        data.timestamp,
+                        data.cell_data || null
                     );
                     statusEl.innerHTML = '✅ Localizado!';
                     statusEl.style.color = '#4CAF50';
