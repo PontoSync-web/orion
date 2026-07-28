@@ -54,7 +54,7 @@ if (fs.existsSync(DB_PATH)) {
     log(`Torres existentes no banco: ${totalExistente.toLocaleString()}`);
     
     if (totalExistente > 1000000) {
-        log('Banco ja possui mais de 1 milhao de torres. Importacao desnecessaria.');
+       log('Banco de dados criado/aberto com sucesso.');
         db.close();
         process.exit(0);
     }
