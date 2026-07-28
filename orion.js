@@ -1,11 +1,10 @@
 // ============================================================
 // ARQUIVO: orion.js
-// DATA: 28/07/2026
-// HORÁRIO: 18:45 (horário de Brasília)
+// DATA: 28 de Julho de 2026
+// HORÁRIO: 11:39 (Horário Oficial — Salvador, Bahia, Brasil)
+// FUSO: América do Sul / Brasil / Bahia (GMT-3)
 // MOTIVO: Token do Unwired Labs incorporado.
-//         Motor de Rede Completo: Unwired Labs (primária),
-//         Banco Local, MLS, OpenCellID, Wi-Fi, IP, Cache,
-//         Google Geolocation API, RSSI. Sem conflitos.
+//         AI-DEPOM 5.7 — Motor de Rede Completo ativado.
 // ============================================================
 
 require('dotenv').config();
