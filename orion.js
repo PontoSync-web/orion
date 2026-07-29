@@ -1,13 +1,23 @@
 // ============================================================
 // ARQUIVO: orion.js
 // DATA: 29 de Julho de 2026
-// HORÁRIO: 15:00 (Horário Oficial — Salvador, Bahia, Brasil)
+// HORÁRIO: 17:00 (Horário Oficial — Salvador, Bahia, Brasil)
 // FUSO: América do Sul / Brasil / Bahia (GMT-3)
-// MOTIVO: v5.8.9 — Correção de caminho do CSV e diagnóstico
-//         de falha na criação da tabela cell_towers.
-//         Cadeia de importação completa: Coleta de Campo,
-//         OpenCellID, Anatel, IAs, Banco de Emergência.
-//         Protocolo Hermes v4.1 integrado. 8 camadas.
+// MOTIVO: v5.9.0 — Correção definitiva do GPS do navegador.
+//         Agora a localização GPS é armazenada e recuperada
+//         independentemente do número pesquisado.
+//         Compatível com todos os módulos:
+//         - localizador-avancado.js
+//         - orion-optimizer.js
+//         - orion-realtime.js
+//         - orion-cellular-monitor.js
+//         - orion-sdr-sniffer.js
+//         - protocolo-hermes.js
+//         - import-coleta-campo.js
+//         - import-opencellid-area.js
+//         - import-anatel.js
+//         - import-nacional-ias.js
+//         - mapa-localizar.html
 // ============================================================
 
 require('dotenv').config();
@@ -80,7 +90,7 @@ dbCache.exec(`CREATE TABLE IF NOT EXISTS cell_cache (cell_id INTEGER PRIMARY KEY
 CREATE TABLE IF NOT EXISTS ip_cache (ip TEXT PRIMARY KEY, lat REAL, lon REAL, range INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
 
 app.get('/health', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '5.8.9', status: 'online',
+    servidor: 'AI-DEPOM', versao: '5.9.0', status: 'online',
     seguranca: 'BLINDADO',
     protocolo_hermes: 'ATIVO (3 IAs conectadas)',
     fontes_importacao: ['Coleta de Campo', 'OpenCellID', 'Anatel', 'IAs', 'Emergencia'],
@@ -90,7 +100,7 @@ app.get('/health', (req, res) => res.json({
 }));
 
 app.get('/', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '5.8.9',
+    servidor: 'AI-DEPOM', versao: '5.9.0',
     gps_navegador: 'ATIVO',
     fontes_importacao: ['Coleta de Campo (primária)', 'OpenCellID (área)', 'Anatel (Mosaico)', 'IAs (Claude, Grok, Gemini)', 'Banco de Emergência'],
     endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status', '/api/hermes/forcar']
@@ -142,7 +152,7 @@ app.get('/api/rastrear/:numero', (req, res) => {
         if (err || !target) { dbMain.run('INSERT OR IGNORE INTO targets (name, phone) VALUES (?, ?)', ['Alvo ' + numero.slice(-4), numero], () => res.json({ status: 'cadastrado', numero, mensagem: 'Alvo cadastrado. Sem dados de localizacao.', position: null })); return; }
         dbMain.get('SELECT * FROM locations WHERE target_id = ? ORDER BY timestamp DESC LIMIT 1', [target.id], (err, row) => {
             if (err || !row) return res.json({ status: 'sem_dados', numero, alvo: target.name, mensagem: 'Sem dados de localizacao.', position: null });
-            res.json({ status: 'sucesso', numero, alvo: target.name, position: { latitude: row.latitude, longitude: row.longitude, raio_estimado: row.radius }, timestamp: row.timestamp, fonte: row.source || 'historico_real', cell_data: row.cell_data });
+            res.json({ status: 'sucesso', numero, alvo: target.name, position: { latitude: row.latitude, longitude: row.longitude, raio_estimado: row.radius }, timestamp: row.timestamp, fonte: row.source || 'historico_real', cell_data: row.cell_data, gps_data: row.gps_data });
         });
     });
 });
@@ -168,7 +178,7 @@ app.post('/api/geolocate', (req, res) => {
 });
 
 // ============================================================
-// PROCESSAMENTO DE LOCALIZAÇÃO (COM GPS DO NAVEGADOR)
+// PROCESSAMENTO DE LOCALIZAÇÃO
 // ============================================================
 async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, res, reqBody) {
     // 29/07/2026 01:30 — Suporte a GPS do navegador
@@ -179,6 +189,7 @@ async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp,
             radius: reqBody.gps.accuracy || 10,
             torres_usadas: 1
         };
+        log('info', 'GPS: Salvando localização para targetId=' + targetId + ' agentId=' + agentId);
         gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, pos, 'gps_navegador', res, reqBody);
         return;
     }
@@ -231,6 +242,7 @@ function estimarPorRSSI(cells) { if (!cells || cells.length < 2) return null; co
 function calcularTriangulacao(torres) { let lat = 0, lon = 0, pesoTotal = 0; torres.forEach(t => { const peso = 1 / Math.max(t.range || 500, 1); lat += t.lat * peso; lon += t.lon * peso; pesoTotal += peso; }); return { latitude: lat / pesoTotal, longitude: lon / pesoTotal, radius: Math.round(torres.reduce((a, t) => a + (t.range || 500), 0) / torres.length / Math.sqrt(torres.length)), torres_usadas: torres.length }; }
 function gravarLocalizacao(targetId, cells, wifiData, clientIp, agentId, hermesSession, pos, fonte, res, reqBody) {
     const gpsData = (reqBody && reqBody.gps) ? JSON.stringify(reqBody.gps) : null;
+    log('info', 'GPS: Salvando localização para targetId=' + targetId + ' fonte=' + fonte);
     dbMain.run(
         'INSERT INTO locations (target_id, cell_data, wifi_data, ip_data, source, metodo, torres_usadas, latitude, longitude, radius, agent_id, hermes_session, gps_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [targetId, JSON.stringify(cells), wifiData ? JSON.stringify(wifiData) : null, clientIp || null, fonte, pos && pos.latitude ? 'triangulacao' : 'dados_brutos', pos ? pos.torres_usadas || cells.length : cells.length, pos ? pos.latitude : null, pos ? pos.longitude : null, pos ? pos.radius : null, agentId || null, hermesSession || null, gpsData],
@@ -272,9 +284,7 @@ async function iniciarServidor() {
                 execSync('node scripts/import-coleta-campo.js', { stdio: 'inherit', timeout: 120000 });
                 importado = true;
                 log('info', 'Importação de dados de campo concluída!');
-            } catch (err) {
-                log('warn', 'Coleta de campo falhou: ' + err.message);
-            }
+            } catch (err) { log('warn', 'Coleta de campo falhou: ' + err.message); }
         }
 
         // 2. OpenCellID por área
@@ -285,9 +295,7 @@ async function iniciarServidor() {
                 execSync('node scripts/import-opencellid-area.js', { stdio: 'inherit', timeout: 300000 });
                 importado = true;
                 log('info', 'Importação via OpenCellID concluída!');
-            } catch (err) {
-                log('warn', 'OpenCellID por área falhou: ' + err.message);
-            }
+            } catch (err) { log('warn', 'OpenCellID por área falhou: ' + err.message); }
         }
 
         // 3. Anatel
@@ -298,9 +306,7 @@ async function iniciarServidor() {
                 execSync('node scripts/import-anatel.js', { stdio: 'inherit', timeout: 300000 });
                 importado = true;
                 log('info', 'Importação via Anatel concluída!');
-            } catch (err) {
-                log('warn', 'Anatel falhou: ' + err.message);
-            }
+            } catch (err) { log('warn', 'Anatel falhou: ' + err.message); }
         }
 
         // 4. IAs
@@ -311,9 +317,7 @@ async function iniciarServidor() {
                 execSync('node scripts/import-nacional-ias.js', { stdio: 'inherit', timeout: 600000 });
                 importado = true;
                 log('info', 'Importação via IAs concluída!');
-            } catch (err) {
-                log('warn', 'IAs falharam: ' + err.message);
-            }
+            } catch (err) { log('warn', 'IAs falharam: ' + err.message); }
         }
 
         // 5. Banco de Emergência
@@ -331,7 +335,7 @@ async function iniciarServidor() {
     dbTowers.close();
 
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 5.8.9 rodando na porta ' + port);
+        log('info', 'AI-DEPOM 5.9.0 rodando na porta ' + port);
         log('info', 'GPS do Navegador: ATIVO');
         log('info', 'Fontes de importação: Coleta de Campo, OpenCellID, Anatel, IAs, Emergência');
     });
