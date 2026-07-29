@@ -1,12 +1,13 @@
 // ============================================================
 // ARQUIVO: orion.js
-// DATA: 28 de Julho de 2026
-// HORÁRIO: 22:15 (Horário Oficial — Salvador, Bahia, Brasil)
+// DATA: 29 de Julho de 2026
+// HORÁRIO: 01:45 (Horário Oficial — Salvador, Bahia, Brasil)
 // FUSO: América do Sul / Brasil / Bahia (GMT-3)
-// MOTIVO: v5.8.7 — Cadeia de importação completa:
-//         Coleta de Campo → OpenCellID → Anatel → IAs → Emergência.
-//         Protocolo Hermes v4.1 integrado.
-//         8 camadas de localização. Blindagem de segurança.
+// MOTIVO: v5.8.8 — Suporte a GPS do navegador.
+//         Cadeia de importação completa: Coleta de Campo,
+//         OpenCellID, Anatel, IAs, Banco de Emergência.
+//         Protocolo Hermes v4.1 integrado. 8 camadas.
+//         Blindagem de segurança ativa.
 // ============================================================
 
 require('dotenv').config();
@@ -71,7 +72,7 @@ const dbMain = new sqlite3.Database(DB_MAIN);
 dbMain.run('PRAGMA journal_mode=WAL');
 dbMain.run('PRAGMA secure_delete=ON');
 dbMain.exec(`CREATE TABLE IF NOT EXISTS targets (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, phone TEXT UNIQUE, status TEXT DEFAULT 'active', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS locations (id INTEGER PRIMARY KEY AUTOINCREMENT, target_id INTEGER, latitude REAL, longitude REAL, radius INTEGER, source TEXT, metodo TEXT, torres_usadas INTEGER, cell_data TEXT, wifi_data TEXT, ip_data TEXT, agent_id TEXT, hermes_session TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
+CREATE TABLE IF NOT EXISTS locations (id INTEGER PRIMARY KEY AUTOINCREMENT, target_id INTEGER, latitude REAL, longitude REAL, radius INTEGER, source TEXT, metodo TEXT, torres_usadas INTEGER, cell_data TEXT, wifi_data TEXT, ip_data TEXT, agent_id TEXT, hermes_session TEXT, gps_data TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
 
 const dbCache = new sqlite3.Database(DB_CACHE);
 dbCache.run('PRAGMA journal_mode=WAL');
@@ -79,16 +80,18 @@ dbCache.exec(`CREATE TABLE IF NOT EXISTS cell_cache (cell_id INTEGER PRIMARY KEY
 CREATE TABLE IF NOT EXISTS ip_cache (ip TEXT PRIMARY KEY, lat REAL, lon REAL, range INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
 
 app.get('/health', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '5.8.7', status: 'online',
+    servidor: 'AI-DEPOM', versao: '5.8.8', status: 'online',
     seguranca: 'BLINDADO',
     protocolo_hermes: 'ATIVO (3 IAs conectadas)',
     fontes_importacao: ['Coleta de Campo', 'OpenCellID', 'Anatel', 'IAs', 'Emergencia'],
+    gps_navegador: 'ATIVO',
     agentes_ativos: agentesAtivos.size,
     timestamp: new Date().toISOString()
 }));
 
 app.get('/', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '5.8.7',
+    servidor: 'AI-DEPOM', versao: '5.8.8',
+    gps_navegador: 'ATIVO',
     fontes_importacao: ['Coleta de Campo (primária)', 'OpenCellID (área)', 'Anatel (Mosaico)', 'IAs (Claude, Grok, Gemini)', 'Banco de Emergência'],
     endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status', '/api/hermes/forcar']
 }));
@@ -139,7 +142,7 @@ app.get('/api/rastrear/:numero', (req, res) => {
         if (err || !target) { dbMain.run('INSERT OR IGNORE INTO targets (name, phone) VALUES (?, ?)', ['Alvo ' + numero.slice(-4), numero], () => res.json({ status: 'cadastrado', numero, mensagem: 'Alvo cadastrado. Sem dados de localizacao.', position: null })); return; }
         dbMain.get('SELECT * FROM locations WHERE target_id = ? ORDER BY timestamp DESC LIMIT 1', [target.id], (err, row) => {
             if (err || !row) return res.json({ status: 'sem_dados', numero, alvo: target.name, mensagem: 'Sem dados de localizacao.', position: null });
-            res.json({ status: 'sucesso', numero, alvo: target.name, position: { latitude: row.latitude, longitude: row.longitude, raio_estimado: row.radius }, timestamp: row.timestamp, fonte: row.source || 'historico_real', cell_data: row.cell_data });
+            res.json({ status: 'sucesso', numero, alvo: target.name, position: { latitude: row.latitude, longitude: row.longitude, raio_estimado: row.radius }, timestamp: row.timestamp, fonte: row.source || 'historico_real', cell_data: row.cell_data, gps_data: row.gps_data });
         });
     });
 });
@@ -151,8 +154,8 @@ app.post('/api/localizar-por-cells', (req, res) => {
     if (!validarCells(cells)) return res.status(400).json({ erro: 'Dados de células inválidos.' });
     if (numero) agentesAtivos.set(numero, { numero, timestamp: new Date().toISOString(), torres: cells.length });
     dbMain.get('SELECT id FROM targets WHERE phone = ?', [numero], (err, target) => {
-        if (err || !target) { dbMain.run('INSERT INTO targets (name, phone) VALUES (?, ?)', ['Alvo ' + numero.slice(-4), numero], function(ie) { if (ie) return res.status(500).json({ erro: ie.message }); processarLocalizacao(this.lastID, cells, wifiAccessPoints, req.ip, numero, res); }); }
-        else { processarLocalizacao(target.id, cells, wifiAccessPoints, req.ip, numero, res); }
+        if (err || !target) { dbMain.run('INSERT INTO targets (name, phone) VALUES (?, ?)', ['Alvo ' + numero.slice(-4), numero], function(ie) { if (ie) return res.status(500).json({ erro: ie.message }); processarLocalizacao(this.lastID, cells, wifiAccessPoints, req.ip, numero, res, req.body); }); }
+        else { processarLocalizacao(target.id, cells, wifiAccessPoints, req.ip, numero, res, req.body); }
     });
 });
 
@@ -161,10 +164,25 @@ app.post('/api/geolocate', (req, res) => {
     const cells = [];
     if (cellTowers && Array.isArray(cellTowers)) for (const t of cellTowers) { if (t.cellId && t.cellId > 0) cells.push({ cellId: t.cellId, rssi: t.signalStrength || -73, lac: t.locationAreaCode || 1234, mcc: t.mobileCountryCode || 724, mnc: t.mobileNetworkCode || 5 }); }
     if (cells.length === 0) return res.status(400).json({ erro: 'Nenhuma torre.' });
-    dbMain.run('INSERT INTO targets (name, phone) VALUES (?, ?)', ['Google API Client', 'geo_' + Date.now()], function(ie) { processarLocalizacao(this.lastID || 1, cells, wifiAccessPoints, req.ip, 'geo_' + Date.now(), res); });
+    dbMain.run('INSERT INTO targets (name, phone) VALUES (?, ?)', ['Google API Client', 'geo_' + Date.now()], function(ie) { processarLocalizacao(this.lastID || 1, cells, wifiAccessPoints, req.ip, 'geo_' + Date.now(), res, req.body); });
 });
 
-async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, res) {
+// ============================================================
+// PROCESSAMENTO DE LOCALIZAÇÃO (COM GPS DO NAVEGADOR)
+// ============================================================
+async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, res, reqBody) {
+    // 29/07/2026 01:30 — Suporte a GPS do navegador
+    if (reqBody && reqBody.gps && reqBody.gps.lat) {
+        const pos = {
+            latitude: reqBody.gps.lat,
+            longitude: reqBody.gps.lng,
+            radius: reqBody.gps.accuracy || 10,
+            torres_usadas: 1
+        };
+        gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, pos, 'gps_navegador', res, reqBody);
+        return;
+    }
+
     const torresEncontradas = [];
     for (const cell of cells) { const cached = await consultarCache(cell.cellId); if (cached) torresEncontradas.push(cached); }
     if (torresEncontradas.length > 0) { gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, calcularTriangulacao(torresEncontradas), 'cache', res); return; }
@@ -211,9 +229,13 @@ function consultarMLS(cellId, mcc = 724, mnc = 5, lac = 1234) { return new Promi
 function consultarOpenCellID(cellId) { return new Promise((resolve) => { if (!API_KEY) { resolve(null); return; } const req = https.get('https://opencellid.org/cell/get?key=' + API_KEY + '&cell=' + cellId + '&format=json', (response) => { let body = ''; response.on('data', chunk => body += chunk); response.on('end', () => { try { const d = JSON.parse(body); if (d.lat && d.lon) resolve({ cell: cellId, lat: d.lat, lon: d.lon, range: d.range || 500 }); else resolve(null); } catch (e) { resolve(null); } }); }); req.on('error', () => resolve(null)); req.setTimeout(5000, () => { req.destroy(); resolve(null); }); }); }
 function estimarPorRSSI(cells) { if (!cells || cells.length < 2) return null; const distancias = cells.map(c => Math.pow(10, (-50 - (c.rssi || c.rsrp || -73)) / (10 * 3.0))); const distanciaMedia = distancias.reduce((a, b) => a + b, 0) / distancias.length; return { latitude: null, longitude: null, radius: Math.round(distanciaMedia), torres_usadas: cells.length }; }
 function calcularTriangulacao(torres) { let lat = 0, lon = 0, pesoTotal = 0; torres.forEach(t => { const peso = 1 / Math.max(t.range || 500, 1); lat += t.lat * peso; lon += t.lon * peso; pesoTotal += peso; }); return { latitude: lat / pesoTotal, longitude: lon / pesoTotal, radius: Math.round(torres.reduce((a, t) => a + (t.range || 500), 0) / torres.length / Math.sqrt(torres.length)), torres_usadas: torres.length }; }
-function gravarLocalizacao(targetId, cells, wifiData, clientIp, agentId, hermesSession, pos, fonte, res) {
-    dbMain.run('INSERT INTO locations (target_id, cell_data, wifi_data, ip_data, source, metodo, torres_usadas, latitude, longitude, radius, agent_id, hermes_session) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [targetId, JSON.stringify(cells), wifiData ? JSON.stringify(wifiData) : null, clientIp || null, fonte, pos && pos.latitude ? 'triangulacao' : 'dados_brutos', pos ? pos.torres_usadas || cells.length : cells.length, pos ? pos.latitude : null, pos ? pos.longitude : null, pos ? pos.radius : null, agentId || null, hermesSession || null],
+
+// 29/07/2026 01:30 — Gravação de localização com GPS
+function gravarLocalizacao(targetId, cells, wifiData, clientIp, agentId, hermesSession, pos, fonte, res, reqBody) {
+    const gpsData = (reqBody && reqBody.gps) ? JSON.stringify(reqBody.gps) : null;
+    dbMain.run(
+        'INSERT INTO locations (target_id, cell_data, wifi_data, ip_data, source, metodo, torres_usadas, latitude, longitude, radius, agent_id, hermes_session, gps_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [targetId, JSON.stringify(cells), wifiData ? JSON.stringify(wifiData) : null, clientIp || null, fonte, pos && pos.latitude ? 'triangulacao' : 'dados_brutos', pos ? pos.torres_usadas || cells.length : cells.length, pos ? pos.latitude : null, pos ? pos.longitude : null, pos ? pos.radius : null, agentId || null, hermesSession || null, gpsData],
         function(err) {
             if (err) return res.status(500).json({ erro: err.message });
             res.json({ status: pos && pos.latitude ? 'localizado' : 'recebido', mensagem: pos && pos.latitude ? 'Localizacao calculada via ' + fonte + '.' : 'Celulas registradas.', position: pos && pos.latitude ? { latitude: pos.latitude, longitude: pos.longitude, raio_estimado: pos.radius } : null, torres_usadas: pos ? pos.torres_usadas || cells.length : cells.length, fonte: fonte, hermes_session: hermesSession ? hermesSession.substring(0, 16) + '...' : null, timestamp: new Date().toISOString() });
@@ -244,7 +266,6 @@ async function iniciarServidor() {
     if (count < 1000000) {
         let importado = false;
 
-        // 1. Coleta de Campo (dados primários do investigador)
         if (!importado) {
             try {
                 log('info', 'Tentando importar dados de coleta de campo...');
@@ -252,12 +273,9 @@ async function iniciarServidor() {
                 execSync('node scripts/import-coleta-campo.js', { stdio: 'inherit', timeout: 120000 });
                 importado = true;
                 log('info', 'Importação de dados de campo concluída!');
-            } catch (err) {
-                log('warn', 'Coleta de campo falhou (arquivo CSV não encontrado): ' + err.message);
-            }
+            } catch (err) { log('warn', 'Coleta de campo falhou: ' + err.message); }
         }
 
-        // 2. OpenCellID por área
         if (!importado) {
             try {
                 log('info', 'Tentando importar via OpenCellID por área (27 capitais)...');
@@ -265,12 +283,9 @@ async function iniciarServidor() {
                 execSync('node scripts/import-opencellid-area.js', { stdio: 'inherit', timeout: 300000 });
                 importado = true;
                 log('info', 'Importação via OpenCellID concluída!');
-            } catch (err) {
-                log('warn', 'OpenCellID por área falhou: ' + err.message);
-            }
+            } catch (err) { log('warn', 'OpenCellID por área falhou: ' + err.message); }
         }
 
-        // 3. Anatel
         if (!importado) {
             try {
                 log('info', 'Tentando importar via Anatel (Mosaico)...');
@@ -278,12 +293,9 @@ async function iniciarServidor() {
                 execSync('node scripts/import-anatel.js', { stdio: 'inherit', timeout: 300000 });
                 importado = true;
                 log('info', 'Importação via Anatel concluída!');
-            } catch (err) {
-                log('warn', 'Anatel falhou: ' + err.message);
-            }
+            } catch (err) { log('warn', 'Anatel falhou: ' + err.message); }
         }
 
-        // 4. IAs
         if (!importado) {
             try {
                 log('info', 'Tentando importar via IAs (Claude, Grok, Gemini)...');
@@ -291,12 +303,9 @@ async function iniciarServidor() {
                 execSync('node scripts/import-nacional-ias.js', { stdio: 'inherit', timeout: 600000 });
                 importado = true;
                 log('info', 'Importação via IAs concluída!');
-            } catch (err) {
-                log('warn', 'IAs falharam: ' + err.message);
-            }
+            } catch (err) { log('warn', 'IAs falharam: ' + err.message); }
         }
 
-        // 5. Banco de Emergência
         const novoCount = await new Promise((resolve) => {
             dbTowers.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
         });
@@ -311,10 +320,9 @@ async function iniciarServidor() {
     dbTowers.close();
 
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 5.8.7 rodando na porta ' + port);
+        log('info', 'AI-DEPOM 5.8.8 rodando na porta ' + port);
+        log('info', 'GPS do Navegador: ATIVO');
         log('info', 'Fontes de importação: Coleta de Campo, OpenCellID, Anatel, IAs, Emergência');
-        log('info', 'Protocolo Hermes v4.1: ATIVO');
-        log('info', 'SEGURANÇA: BLINDADO');
     });
 }
 
