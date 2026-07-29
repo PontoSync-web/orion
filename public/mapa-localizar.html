@@ -1,11 +1,11 @@
 <!--
     ARQUIVO: public/mapa-localizar.html
-    DATA: 28 de Julho de 2026
-    HORÁRIO: 15:45 (Horário Oficial — Salvador, Bahia, Brasil)
+    DATA: 29 de Julho de 2026
+    HORÁRIO: 01:30 (Horário Oficial — Salvador, Bahia, Brasil)
     FUSO: América do Sul / Brasil / Bahia (GMT-3)
-    MOTIVO: Exibição de endereço completo e ERBs fornecedoras
-            ao localizar um número. Splash screen de 10s.
-            Compatível com ORION 5.8.4 Blindado.
+    MOTIVO: Adicionado botão de localização GPS via navegador.
+            Splash screen de 10s, endereço completo, ERBs.
+            Compatível com ORION 5.8.7.
 -->
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -44,6 +44,7 @@
         #header input { flex: 1; min-width: 180px; padding: 10px; border-radius: 6px; border: 1px solid #0f3460; background: #0f3460; color: #eee; font-size: 14px; }
         #header button { padding: 10px 20px; border-radius: 6px; border: none; background: #e94560; color: #fff; font-weight: bold; cursor: pointer; font-size: 14px; transition: background 0.2s; }
         #header button:hover { background: #c23152; }
+        #gpsBtn { background: #4fc3f7 !important; color: #000 !important; }
         #status { font-size: 13px; color: #aaa; margin-left: auto; white-space: nowrap; }
         #map { flex: 1; width: 100%; }
         #info { background: #16213e; padding: 10px 20px; border-top: 2px solid #0f3460; font-size: 13px; }
@@ -68,6 +69,7 @@
         <h1>&#128752; AI-DEPOM</h1>
         <input type="text" id="numeroInput" placeholder="Digite o número do alvo..." />
         <button id="buscarBtn">&#128270; Localizar</button>
+        <button id="gpsBtn">&#128205; Minha Localização (GPS)</button>
         <span id="status">&#9989; Online</span>
     </div>
     <div id="map"></div>
@@ -249,6 +251,44 @@
                 showAlert('❌ ' + error.message, 'error');
             }
         }
+
+        // 29/07/2026 01:30 — Botão GPS
+        document.getElementById('gpsBtn').addEventListener('click', () => {
+            if (!navigator.geolocation) {
+                alert('Geolocalização não suportada pelo navegador.');
+                return;
+            }
+            navigator.geolocation.getCurrentPosition(
+                async (pos) => {
+                    const lat = pos.coords.latitude;
+                    const lng = pos.coords.longitude;
+                    const precisao = pos.coords.accuracy;
+                    const numero = document.getElementById('numeroInput').value.trim() || ('gps_' + Date.now());
+
+                    atualizarMapa(lat, lng, Math.round(precisao), numero, '1', 'gps_navegador', new Date().toISOString(), null);
+                    document.getElementById('status').innerHTML = '✅ GPS Localizado!';
+                    document.getElementById('status').style.color = '#4CAF50';
+
+                    try {
+                        await fetch('/api/localizar-por-cells', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                numero: numero,
+                                cells: [{ cellId: 0, rssi: 0 }],
+                                gps: { lat, lng, accuracy: precisao }
+                            })
+                        });
+                    } catch (e) {
+                        console.log('Erro ao enviar GPS:', e);
+                    }
+                },
+                (err) => {
+                    alert('Erro ao obter localização: ' + err.message);
+                },
+                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+            );
+        });
 
         document.getElementById('buscarBtn').addEventListener('click', buscarLocalizacao);
         document.getElementById('numeroInput').addEventListener('keydown', (e) => {
