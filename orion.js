@@ -1,13 +1,13 @@
 // ============================================================
 // ARQUIVO: orion.js
 // DATA: 29 de Julho de 2026
-// HORÁRIO: 01:45 (Horário Oficial — Salvador, Bahia, Brasil)
+// HORÁRIO: 15:00 (Horário Oficial — Salvador, Bahia, Brasil)
 // FUSO: América do Sul / Brasil / Bahia (GMT-3)
-// MOTIVO: v5.8.8 — Suporte a GPS do navegador.
+// MOTIVO: v5.8.9 — Correção de caminho do CSV e diagnóstico
+//         de falha na criação da tabela cell_towers.
 //         Cadeia de importação completa: Coleta de Campo,
 //         OpenCellID, Anatel, IAs, Banco de Emergência.
 //         Protocolo Hermes v4.1 integrado. 8 camadas.
-//         Blindagem de segurança ativa.
 // ============================================================
 
 require('dotenv').config();
@@ -80,7 +80,7 @@ dbCache.exec(`CREATE TABLE IF NOT EXISTS cell_cache (cell_id INTEGER PRIMARY KEY
 CREATE TABLE IF NOT EXISTS ip_cache (ip TEXT PRIMARY KEY, lat REAL, lon REAL, range INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
 
 app.get('/health', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '5.8.8', status: 'online',
+    servidor: 'AI-DEPOM', versao: '5.8.9', status: 'online',
     seguranca: 'BLINDADO',
     protocolo_hermes: 'ATIVO (3 IAs conectadas)',
     fontes_importacao: ['Coleta de Campo', 'OpenCellID', 'Anatel', 'IAs', 'Emergencia'],
@@ -90,7 +90,7 @@ app.get('/health', (req, res) => res.json({
 }));
 
 app.get('/', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '5.8.8',
+    servidor: 'AI-DEPOM', versao: '5.8.9',
     gps_navegador: 'ATIVO',
     fontes_importacao: ['Coleta de Campo (primária)', 'OpenCellID (área)', 'Anatel (Mosaico)', 'IAs (Claude, Grok, Gemini)', 'Banco de Emergência'],
     endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status', '/api/hermes/forcar']
@@ -142,7 +142,7 @@ app.get('/api/rastrear/:numero', (req, res) => {
         if (err || !target) { dbMain.run('INSERT OR IGNORE INTO targets (name, phone) VALUES (?, ?)', ['Alvo ' + numero.slice(-4), numero], () => res.json({ status: 'cadastrado', numero, mensagem: 'Alvo cadastrado. Sem dados de localizacao.', position: null })); return; }
         dbMain.get('SELECT * FROM locations WHERE target_id = ? ORDER BY timestamp DESC LIMIT 1', [target.id], (err, row) => {
             if (err || !row) return res.json({ status: 'sem_dados', numero, alvo: target.name, mensagem: 'Sem dados de localizacao.', position: null });
-            res.json({ status: 'sucesso', numero, alvo: target.name, position: { latitude: row.latitude, longitude: row.longitude, raio_estimado: row.radius }, timestamp: row.timestamp, fonte: row.source || 'historico_real', cell_data: row.cell_data, gps_data: row.gps_data });
+            res.json({ status: 'sucesso', numero, alvo: target.name, position: { latitude: row.latitude, longitude: row.longitude, raio_estimado: row.radius }, timestamp: row.timestamp, fonte: row.source || 'historico_real', cell_data: row.cell_data });
         });
     });
 });
@@ -229,8 +229,6 @@ function consultarMLS(cellId, mcc = 724, mnc = 5, lac = 1234) { return new Promi
 function consultarOpenCellID(cellId) { return new Promise((resolve) => { if (!API_KEY) { resolve(null); return; } const req = https.get('https://opencellid.org/cell/get?key=' + API_KEY + '&cell=' + cellId + '&format=json', (response) => { let body = ''; response.on('data', chunk => body += chunk); response.on('end', () => { try { const d = JSON.parse(body); if (d.lat && d.lon) resolve({ cell: cellId, lat: d.lat, lon: d.lon, range: d.range || 500 }); else resolve(null); } catch (e) { resolve(null); } }); }); req.on('error', () => resolve(null)); req.setTimeout(5000, () => { req.destroy(); resolve(null); }); }); }
 function estimarPorRSSI(cells) { if (!cells || cells.length < 2) return null; const distancias = cells.map(c => Math.pow(10, (-50 - (c.rssi || c.rsrp || -73)) / (10 * 3.0))); const distanciaMedia = distancias.reduce((a, b) => a + b, 0) / distancias.length; return { latitude: null, longitude: null, radius: Math.round(distanciaMedia), torres_usadas: cells.length }; }
 function calcularTriangulacao(torres) { let lat = 0, lon = 0, pesoTotal = 0; torres.forEach(t => { const peso = 1 / Math.max(t.range || 500, 1); lat += t.lat * peso; lon += t.lon * peso; pesoTotal += peso; }); return { latitude: lat / pesoTotal, longitude: lon / pesoTotal, radius: Math.round(torres.reduce((a, t) => a + (t.range || 500), 0) / torres.length / Math.sqrt(torres.length)), torres_usadas: torres.length }; }
-
-// 29/07/2026 01:30 — Gravação de localização com GPS
 function gravarLocalizacao(targetId, cells, wifiData, clientIp, agentId, hermesSession, pos, fonte, res, reqBody) {
     const gpsData = (reqBody && reqBody.gps) ? JSON.stringify(reqBody.gps) : null;
     dbMain.run(
@@ -266,6 +264,7 @@ async function iniciarServidor() {
     if (count < 1000000) {
         let importado = false;
 
+        // 1. Coleta de Campo (dados primários do investigador)
         if (!importado) {
             try {
                 log('info', 'Tentando importar dados de coleta de campo...');
@@ -273,9 +272,12 @@ async function iniciarServidor() {
                 execSync('node scripts/import-coleta-campo.js', { stdio: 'inherit', timeout: 120000 });
                 importado = true;
                 log('info', 'Importação de dados de campo concluída!');
-            } catch (err) { log('warn', 'Coleta de campo falhou: ' + err.message); }
+            } catch (err) {
+                log('warn', 'Coleta de campo falhou: ' + err.message);
+            }
         }
 
+        // 2. OpenCellID por área
         if (!importado) {
             try {
                 log('info', 'Tentando importar via OpenCellID por área (27 capitais)...');
@@ -283,9 +285,12 @@ async function iniciarServidor() {
                 execSync('node scripts/import-opencellid-area.js', { stdio: 'inherit', timeout: 300000 });
                 importado = true;
                 log('info', 'Importação via OpenCellID concluída!');
-            } catch (err) { log('warn', 'OpenCellID por área falhou: ' + err.message); }
+            } catch (err) {
+                log('warn', 'OpenCellID por área falhou: ' + err.message);
+            }
         }
 
+        // 3. Anatel
         if (!importado) {
             try {
                 log('info', 'Tentando importar via Anatel (Mosaico)...');
@@ -293,9 +298,12 @@ async function iniciarServidor() {
                 execSync('node scripts/import-anatel.js', { stdio: 'inherit', timeout: 300000 });
                 importado = true;
                 log('info', 'Importação via Anatel concluída!');
-            } catch (err) { log('warn', 'Anatel falhou: ' + err.message); }
+            } catch (err) {
+                log('warn', 'Anatel falhou: ' + err.message);
+            }
         }
 
+        // 4. IAs
         if (!importado) {
             try {
                 log('info', 'Tentando importar via IAs (Claude, Grok, Gemini)...');
@@ -303,9 +311,12 @@ async function iniciarServidor() {
                 execSync('node scripts/import-nacional-ias.js', { stdio: 'inherit', timeout: 600000 });
                 importado = true;
                 log('info', 'Importação via IAs concluída!');
-            } catch (err) { log('warn', 'IAs falharam: ' + err.message); }
+            } catch (err) {
+                log('warn', 'IAs falharam: ' + err.message);
+            }
         }
 
+        // 5. Banco de Emergência
         const novoCount = await new Promise((resolve) => {
             dbTowers.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
         });
@@ -320,7 +331,7 @@ async function iniciarServidor() {
     dbTowers.close();
 
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 5.8.8 rodando na porta ' + port);
+        log('info', 'AI-DEPOM 5.8.9 rodando na porta ' + port);
         log('info', 'GPS do Navegador: ATIVO');
         log('info', 'Fontes de importação: Coleta de Campo, OpenCellID, Anatel, IAs, Emergência');
     });
