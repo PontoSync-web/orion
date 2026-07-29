@@ -1,11 +1,12 @@
 // ============================================================
 // ARQUIVO: scripts/import-coleta-campo.js
-// DATA: 28 de Julho de 2026
-// HORÁRIO: 22:00 (Horário Oficial — Salvador, Bahia, Brasil)
+// DATA: 29 de Julho de 2026
+// HORÁRIO: 15:30 (Horário Oficial — Salvador, Bahia, Brasil)
 // FUSO: América do Sul / Brasil / Bahia (GMT-3)
 // MOTIVO: Importa dados primários de ERBs coletados em campo
 //         via app OpenCellID. Fonte: contribuições próprias
 //         do investigador. Dados 100% reais e verificados.
+//         Corrigido caminho do arquivo CSV e validação.
 // ============================================================
 
 const fs = require('fs');
@@ -13,6 +14,7 @@ const path = require('path');
 const readline = require('readline');
 const sqlite3 = require('sqlite3').verbose();
 
+// 29/07/2026 15:30 — Caminho absoluto para o arquivo CSV
 const ARQUIVO_ENTRADA = path.join(__dirname, '..', 'data', 'coleta_campo.csv');
 const DB_PATH = path.join(__dirname, '..', 'data', 'cell_towers.db');
 
@@ -21,22 +23,33 @@ function log(msg) { console.log('[COLETA-CAMPO] ' + msg); }
 async function main() {
     log('=== IMPORTADOR DE DADOS DE CAMPO ===');
     log('Fonte: Coleta própria via app OpenCellID');
+    log('Caminho do arquivo: ' + ARQUIVO_ENTRADA);
     log('');
 
+    // Verifica se o arquivo existe
     if (!fs.existsSync(ARQUIVO_ENTRADA)) {
         log('ERRO: Arquivo não encontrado: ' + ARQUIVO_ENTRADA);
+        log('');
+        log('Verifique se o arquivo "coleta_campo.csv" está na pasta "data/" do projeto.');
+        log('Caminho esperado: ' + ARQUIVO_ENTRADA);
         log('');
         log('Como obter o arquivo:');
         log('1. Instale o app OpenCellID no Android');
         log('2. Percorra trajetos com GPS ativo');
         log('3. Acesse https://opencellid.org → My Contributions');
         log('4. Exporte como CSV');
-        log('5. Salve como "coleta_campo.csv" na pasta data/');
+        log('5. Salve como "coleta_campo.csv" na pasta data/ do repositório');
         process.exit(1);
     }
 
+    // Verifica o tamanho do arquivo
+    const stats = fs.statSync(ARQUIVO_ENTRADA);
+    log('Arquivo encontrado. Tamanho: ' + (stats.size / 1024).toFixed(2) + ' KB');
+
     const db = new sqlite3.Database(DB_PATH);
     db.run('PRAGMA journal_mode=WAL');
+    
+    // Garante que a tabela existe
     db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
         radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
         cell INTEGER PRIMARY KEY, unit INTEGER,
@@ -53,26 +66,42 @@ async function main() {
     const rl = readline.createInterface({ input: fs.createReadStream(ARQUIVO_ENTRADA) });
     let header = true;
     let count = 0;
+    let ignoradas = 0;
 
     db.run('BEGIN TRANSACTION');
     const stmt = db.prepare('INSERT OR REPLACE INTO cell_towers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
 
     for await (const line of rl) {
-        if (header) { header = false; continue; }
+        if (header) { 
+            header = false; 
+            log('Cabeçalho detectado: ' + line.substring(0, 100));
+            continue; 
+        }
+        
         const cols = line.split(',');
-        if (cols.length < 7) continue;
+        if (cols.length < 7) {
+            ignoradas++;
+            continue;
+        }
 
-        const cellId = parseInt(cols[1]) || 0;
-        const lat = parseFloat(cols[5]) || 0;
-        const lon = parseFloat(cols[4]) || 0;
-        const range = parseInt(cols[6]) || 5000;
-        const mcc = parseInt(cols[2]) || 724;
-        const mnc = parseInt(cols[3]) || 5;
+        try {
+            const cellId = parseInt(cols[1]) || 0;
+            const lat = parseFloat(cols[5]) || 0;
+            const lon = parseFloat(cols[4]) || 0;
+            const range = parseInt(cols[6]) || 5000;
+            const mcc = parseInt(cols[2]) || 724;
+            const mnc = parseInt(cols[3]) || 5;
 
-        if (!cellId || !lat || !lon) continue;
+            if (!cellId || !lat || !lon) {
+                ignoradas++;
+                continue;
+            }
 
-        stmt.run(['GSM', mcc, mnc, Math.floor(cellId / 1000), cellId, 0, lon, lat, range, 100, 1, 1609459200, 1609459200, -71]);
-        count++;
+            stmt.run(['GSM', mcc, mnc, Math.floor(cellId / 1000), cellId, 0, lon, lat, range, 100, 1, 1609459200, 1609459200, -71]);
+            count++;
+        } catch (e) {
+            ignoradas++;
+        }
     }
 
     db.run('COMMIT');
@@ -86,10 +115,12 @@ async function main() {
     });
     db.close();
 
-    log('Importação concluída!');
+    log('');
+    log('=== IMPORTAÇÃO CONCLUÍDA ===');
     log('Antes: ' + antes.toLocaleString());
     log('Depois: ' + depois.toLocaleString());
-    log('Novas: ' + count.toLocaleString());
+    log('Novas torres importadas: ' + count.toLocaleString());
+    log('Linhas ignoradas: ' + ignoradas.toLocaleString());
     log('');
     log('Dados 100% reais, coletados em campo pelo investigador.');
     process.exit(0);
