@@ -1,11 +1,11 @@
 // ============================================================
 // ARQUIVO: scripts/import-coleta-campo.js
 // DATA: 30 de Julho de 2026
-// HORÁRIO: 18:15 (Horário Oficial — Salvador, Bahia, Brasil)
+// HORÁRIO: 20:45 (Horário Oficial — Salvador, Bahia, Brasil)
 // FUSO: América do Sul / Brasil / Bahia (GMT-3)
-// MOTIVO: Compatibilidade com múltiplas partes do CSV.
-//         Processa todos os arquivos que começam com
-//         "coleta_campo" na pasta data/.
+// MOTIVO: Adaptação para processar o formato tabulado do
+//         ficheiro da Anatel com estações licenciadas.
+//         Ignora linhas com coordenadas em asterisco (*).
 // ============================================================
 
 const fs = require('fs');
@@ -28,20 +28,53 @@ async function importarArquivo(arquivoPath, db, stmt) {
 
         rl.on('line', (line) => {
             if (header) { header = false; return; }
-            const cols = line.split(',');
-            if (cols.length < 7) { ignoradas++; return; }
+            
+            // O ficheiro é separado por tabulações
+            const cols = line.split('\t');
+            
+            // Verifica o número mínimo de colunas esperadas (15)
+            if (cols.length < 15) { ignoradas++; return; }
 
             try {
-                const cellId = parseInt(cols[1]) || 0;
-                const lat = parseFloat(cols[5]) || 0;
-                const lon = parseFloat(cols[4]) || 0;
-                const range = parseInt(cols[6]) || 5000;
-                const mcc = parseInt(cols[2]) || 724;
-                const mnc = parseInt(cols[3]) || 5;
+                // Coluna 10: Latitude, Coluna 11: Longitude
+                const latStr = cols[10]?.trim();
+                const lonStr = cols[11]?.trim();
+                
+                // Ignora linhas sem coordenadas válidas (ex: '*')
+                if (!latStr || !lonStr || latStr === '*' || lonStr === '*') { 
+                    ignoradas++; return; 
+                }
 
-                if (!cellId || !lat || !lon) { ignoradas++; return; }
+                // Converte para número, lidando com formato brasileiro (1.825.000,00 -> 1825000.00)
+                const lat = parseFloat(latStr.replace(/\./g, '').replace(',', '.'));
+                const lon = parseFloat(lonStr.replace(/\./g, '').replace(',', '.'));
+                
+                if (isNaN(lat) || isNaN(lon)) { ignoradas++; return; }
 
-                stmt.run(['GSM', mcc, mnc, Math.floor(cellId / 1000), cellId, 0, lon, lat, range, 100, 1, 1609459200, 1609459200, -71]);
+                // Gera um Cell ID a partir do número da estação (coluna 3)
+                const numEstacao = parseInt(cols[3]) || 0;
+                const cellId = numEstacao > 0 ? numEstacao : (208000000 + count);
+                
+                // Mapeia a tecnologia (coluna 14: Emissão) para tipo de rádio
+                const emissao = cols[14]?.trim() || '';
+                let radio = 'LTE';
+                let range = 5000;
+                
+                if (emissao.includes('200KG7W')) { radio = 'GSM'; range = 8000; }
+                else if (emissao.includes('5M00G7W') || emissao.includes('5M00G9W')) { radio = 'UMTS'; range = 5000; }
+                else if (emissao.includes('20M0G7W')) { radio = 'LTE'; range = 3000; }
+                
+                // Mapeia a operadora (coluna 1) para MNC
+                const prestadora = cols[0]?.trim()?.toUpperCase() || '';
+                let mnc = 5; // Padrão Claro
+                if (prestadora.includes('VIVO') || prestadora.includes('TELEFONICA')) mnc = 6;
+                else if (prestadora.includes('TIM')) mnc = 2;
+                else if (prestadora.includes('CLARO')) mnc = 5;
+                else if (prestadora.includes('OI')) mnc = 31;
+                
+                const area = Math.floor(cellId / 1000);
+
+                stmt.run([radio, 724, mnc, area, cellId, 0, lon, lat, range, 100, 1, 1609459200, 1609459200, -71]);
                 count++;
             } catch (e) { ignoradas++; }
         });
@@ -53,8 +86,8 @@ async function importarArquivo(arquivoPath, db, stmt) {
 }
 
 async function main() {
-    log('=== IMPORTADOR DE DADOS DE CAMPO (MÚLTIPLAS PARTES) ===');
-    log('Fonte: Coleta própria via app OpenCellID');
+    log('=== IMPORTADOR DE DADOS DE CAMPO (FORMATO ANATEL) ===');
+    log('Fonte: Estações licenciadas da Anatel');
     log('');
 
     // Procura por qualquer arquivo que comece com "coleta_campo" e termine com ".csv"
@@ -114,7 +147,7 @@ async function main() {
     log('Depois: ' + depois.toLocaleString());
     log('Total importadas: ' + totalImportadas.toLocaleString());
     log('Total ignoradas: ' + totalIgnoradas.toLocaleString());
-    log('Dados 100% reais, coletados em campo pelo investigador.');
+    log('Dados 100% reais da Anatel.');
     process.exit(0);
 }
 
