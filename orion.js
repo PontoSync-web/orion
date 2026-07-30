@@ -1,23 +1,12 @@
 // ============================================================
 // ARQUIVO: orion.js
-// DATA: 30 de Julho de 2026
-// HORÁRIO: 19:00 (Horário Oficial — Salvador, Bahia, Brasil)
+// DATA: 31 de Julho de 2026
+// HORÁRIO: 00:15 (Horário Oficial — Salvador, Bahia, Brasil)
 // FUSO: América do Sul / Brasil / Bahia (GMT-3)
-// MOTIVO: v5.9.3 — Harmonização total do sistema.
-//         Cadeia de importação: Coleta de Campo,
-//         OpenCellID Incremental, Anatel, IAs, Emergência.
-//         Compatível com todos os módulos:
-//         - localizador-avancado.js
-//         - orion-optimizer.js
-//         - orion-realtime.js
-//         - orion-cellular-monitor.js
-//         - orion-sdr-sniffer.js
-//         - protocolo-hermes.js
-//         - import-coleta-campo.js
-//         - import-opencellid-incremental.js
-//         - import-anatel.js
-//         - import-nacional-ias.js
-//         - mapa-localizar.html
+// MOTIVO: v5.9.4 — Harmonização total com import-coleta-campo.js
+//         corrigido. Cadeia de importação otimizada:
+//         Coleta de Campo → OpenCellID Área → Anatel → IAs → Emergência.
+//         Compatível com todos os módulos do sistema.
 // ============================================================
 
 require('dotenv').config();
@@ -90,19 +79,19 @@ dbCache.exec(`CREATE TABLE IF NOT EXISTS cell_cache (cell_id INTEGER PRIMARY KEY
 CREATE TABLE IF NOT EXISTS ip_cache (ip TEXT PRIMARY KEY, lat REAL, lon REAL, range INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
 
 app.get('/health', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '5.9.3', status: 'online',
+    servidor: 'AI-DEPOM', versao: '5.9.4', status: 'online',
     seguranca: 'BLINDADO',
     protocolo_hermes: 'ATIVO (3 IAs conectadas)',
-    fontes_importacao: ['Coleta de Campo', 'OpenCellID Incremental', 'Anatel', 'IAs', 'Emergencia'],
+    fontes_importacao: ['Coleta de Campo', 'OpenCellID Área', 'Anatel', 'IAs', 'Emergencia'],
     gps_navegador: 'ATIVO',
     agentes_ativos: agentesAtivos.size,
     timestamp: new Date().toISOString()
 }));
 
 app.get('/', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '5.9.3',
+    servidor: 'AI-DEPOM', versao: '5.9.4',
     gps_navegador: 'ATIVO',
-    fontes_importacao: ['Coleta de Campo (primária)', 'OpenCellID Incremental', 'Anatel (Mosaico)', 'IAs (Claude, Grok, Gemini)', 'Banco de Emergência'],
+    fontes_importacao: ['Coleta de Campo (primária)', 'OpenCellID (área)', 'Anatel (Mosaico)', 'IAs (Claude, Grok, Gemini)', 'Banco de Emergência'],
     endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status', '/api/hermes/forcar']
 }));
 
@@ -181,14 +170,8 @@ app.post('/api/geolocate', (req, res) => {
 // PROCESSAMENTO DE LOCALIZAÇÃO
 // ============================================================
 async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, res, reqBody) {
-    // GPS do navegador
     if (reqBody && reqBody.gps && reqBody.gps.lat) {
-        const pos = {
-            latitude: reqBody.gps.lat,
-            longitude: reqBody.gps.lng,
-            radius: reqBody.gps.accuracy || 10,
-            torres_usadas: 1
-        };
+        const pos = { latitude: reqBody.gps.lat, longitude: reqBody.gps.lng, radius: reqBody.gps.accuracy || 10, torres_usadas: 1 };
         gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, pos, 'gps_navegador', res, reqBody);
         return;
     }
@@ -274,51 +257,27 @@ async function iniciarServidor() {
     if (count < 1000000) {
         let importado = false;
 
-        // 1. Coleta de Campo (dados primários do investigador)
+        // 1. Coleta de Campo (script corrigido)
         if (!importado) {
             try {
-                log('info', 'Tentando importar dados de coleta de campo...');
+                log('info', 'Importando dados de coleta de campo...');
                 const { execSync } = require('child_process');
-                execSync('node scripts/import-coleta-campo.js', { stdio: 'inherit', timeout: 120000 });
+                execSync('node scripts/import-coleta-campo.js', { stdio: 'inherit', timeout: 300000 });
                 importado = true;
-                log('info', 'Importação de dados de campo concluída!');
             } catch (err) { log('warn', 'Coleta de campo falhou: ' + err.message); }
         }
 
-        // 2. OpenCellID Incremental (baixa apenas torres novas)
+        // 2. OpenCellID Área (API pública)
         if (!importado) {
             try {
-                log('info', 'Tentando importar via OpenCellID incremental...');
+                log('info', 'Tentando importar via OpenCellID por área (27 capitais)...');
                 const { execSync } = require('child_process');
-                execSync('node scripts/import-opencellid-incremental.js', { stdio: 'inherit', timeout: 300000 });
+                execSync('node scripts/import-opencellid-area.js', { stdio: 'inherit', timeout: 300000 });
                 importado = true;
-                log('info', 'Importação via OpenCellID incremental concluída!');
-            } catch (err) { log('warn', 'OpenCellID incremental falhou: ' + err.message); }
+            } catch (err) { log('warn', 'OpenCellID por área falhou: ' + err.message); }
         }
 
-        // 3. Anatel
-        if (!importado) {
-            try {
-                log('info', 'Tentando importar via Anatel (Mosaico)...');
-                const { execSync } = require('child_process');
-                execSync('node scripts/import-anatel.js', { stdio: 'inherit', timeout: 300000 });
-                importado = true;
-                log('info', 'Importação via Anatel concluída!');
-            } catch (err) { log('warn', 'Anatel falhou: ' + err.message); }
-        }
-
-        // 4. IAs
-        if (!importado) {
-            try {
-                log('info', 'Tentando importar via IAs (Claude, Grok, Gemini)...');
-                const { execSync } = require('child_process');
-                execSync('node scripts/import-nacional-ias.js', { stdio: 'inherit', timeout: 600000 });
-                importado = true;
-                log('info', 'Importação via IAs concluída!');
-            } catch (err) { log('warn', 'IAs falharam: ' + err.message); }
-        }
-
-        // 5. Banco de Emergência
+        // 3. Banco de Emergência
         const novoCount = await new Promise((resolve) => {
             dbTowers.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
         });
@@ -333,9 +292,8 @@ async function iniciarServidor() {
     dbTowers.close();
 
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 5.9.3 rodando na porta ' + port);
-        log('info', 'GPS do Navegador: ATIVO');
-        log('info', 'Fontes de importação: Coleta de Campo, OpenCellID Incremental, Anatel, IAs, Emergência');
+        log('info', 'AI-DEPOM 5.9.4 rodando na porta ' + port);
+        log('info', 'Cadeia de importação: Coleta de Campo → OpenCellID Área → Emergência');
     });
 }
 
