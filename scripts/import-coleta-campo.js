@@ -1,10 +1,11 @@
 // ============================================================
 // ARQUIVO: scripts/import-coleta-campo.js
 // DATA: 30 de Julho de 2026
-// HORÁRIO: 18:00 (Horário Oficial — Salvador, Bahia, Brasil)
+// HORÁRIO: 18:15 (Horário Oficial — Salvador, Bahia, Brasil)
+// FUSO: América do Sul / Brasil / Bahia (GMT-3)
 // MOTIVO: Compatibilidade com múltiplas partes do CSV.
-//         Processa todos os arquivos coleta_campo_parte*.csv
-//         encontrados na pasta data/.
+//         Processa todos os arquivos que começam com
+//         "coleta_campo" na pasta data/.
 // ============================================================
 
 const fs = require('fs');
@@ -56,14 +57,15 @@ async function main() {
     log('Fonte: Coleta própria via app OpenCellID');
     log('');
 
-    const arquivos = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('coleta_campo_parte') && f.endsWith('.csv'));
+    // Procura por qualquer arquivo que comece com "coleta_campo" e termine com ".csv"
+    const arquivos = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('coleta_campo') && f.endsWith('.csv'));
 
     if (arquivos.length === 0) {
-        log('Nenhum arquivo coleta_campo_parte*.csv encontrado. Nada a importar.');
+        log('Nenhum arquivo coleta_campo*.csv encontrado. Nada a importar.');
         process.exit(0);
     }
 
-    log(`Encontrados ${arquivos.length} arquivos de partes para importar.`);
+    log(`Encontrados ${arquivos.length} arquivos para importar.`);
 
     const db = new sqlite3.Database(DB_PATH);
     db.run('PRAGMA journal_mode=WAL');
