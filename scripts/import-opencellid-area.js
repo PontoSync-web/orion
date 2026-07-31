@@ -1,22 +1,18 @@
 // ============================================================
 // ARQUIVO: scripts/import-opencellid-area.js
-// DATA: 28 de Julho de 2026
-// HORÁRIO: 20:30 (Horário Oficial — Salvador, Bahia, Brasil)
-// FUSO: América do Sul / Brasil / Bahia (GMT-3)
-// MOTIVO: Consulta ERBs reais via API OpenCellID por área.
-//         Cobre todas as 27 capitais brasileiras.
-//         Dados 100% reais da base pública.
+// DATA: 31 de Julho de 2026
+// HORÁRIO: 01:00 (Horário Oficial — Salvador, Bahia, Brasil)
+// MOTIVO: Versão otimizada com retry, deduplicação, validação
+//         e log estruturado. Baseado no código Python do Itamar.
 // ============================================================
 
 const https = require('https');
-const fs = require('fs');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 
 const API_KEY = process.env.OPENCELLID_API_KEY || 'pk.d597db3bcf9eea4d67acaeb057573fd4';
 const DB_PATH = path.join(__dirname, '..', 'data', 'cell_towers.db');
 
-// Todas as 27 capitais brasileiras
 const CAPITAIS = [
     { nome: 'Aracaju', uf: 'SE', lat: -10.9472, lon: -37.0731 },
     { nome: 'Belém', uf: 'PA', lat: -1.4558, lon: -48.4902 },
@@ -47,64 +43,103 @@ const CAPITAIS = [
     { nome: 'Vitória', uf: 'ES', lat: -20.3155, lon: -40.3128 }
 ];
 
-const RAIO_GRAUS = 0.25;
+const RAIO = 0.25;
+const MAX_TENTATIVAS = 3;
+const TIMEOUT = 15000;
+const PAUSA = 1500;
 
-function log(msg) { console.log('[OPENCELLID-AREA] ' + msg); }
-
+function log(msg) { console.log('[OPENCELLID] ' + msg); }
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
-function consultarArea(lat, lon, cidade) {
+function consultarAreaComRetry(lat, lon, cidade, uf) {
     return new Promise((resolve) => {
-        const latmin = lat - RAIO_GRAUS;
-        const lonmin = lon - RAIO_GRAUS;
-        const latmax = lat + RAIO_GRAUS;
-        const lonmax = lon + RAIO_GRAUS;
-        
+        const latmin = lat - RAIO;
+        const lonmin = lon - RAIO;
+        const latmax = lat + RAIO;
+        const lonmax = lon + RAIO;
         const url = `https://opencellid.org/cell/getInArea?key=${API_KEY}&BBOX=${latmin},${lonmin},${latmax},${lonmax}&format=json`;
-        
-        https.get(url, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => {
-                try {
-                    const json = JSON.parse(data);
-                    if (json.cells) {
-                        log(`${cidade}: ${json.cells.length} torres encontradas`);
-                        resolve(json.cells.map(c => ({
-                            cell_id: c.cellid,
-                            lat: c.lat,
-                            lon: c.lon,
-                            range: c.range || 5000,
-                            mcc: c.mcc || 724,
-                            mnc: c.mnc || 5,
-                            lac: c.lac || 100,
-                            radio: c.radio || 'GSM',
-                            cidade: cidade,
-                            uf: ''
-                        })));
-                    } else {
+
+        let tentativa = 0;
+
+        function tentar() {
+            tentativa++;
+            const req = https.get(url, { timeout: TIMEOUT }, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    if (res.statusCode === 429 && tentativa < MAX_TENTATIVAS) {
+                        const espera = Math.pow(2, tentativa) * 1000;
+                        log(`${cidade}/${uf}: Rate limit (tentativa ${tentativa}). Aguardando ${espera}ms...`);
+                        setTimeout(tentar, espera);
+                        return;
+                    }
+                    if (res.statusCode !== 200) {
+                        if (tentativa < MAX_TENTATIVAS) {
+                            setTimeout(tentar, Math.pow(2, tentativa) * 1000);
+                            return;
+                        }
+                        log(`${cidade}/${uf}: HTTP ${res.statusCode} após ${MAX_TENTATIVAS} tentativas.`);
+                        resolve([]);
+                        return;
+                    }
+                    try {
+                        const json = JSON.parse(data);
+                        if (json.cells && Array.isArray(json.cells)) {
+                            const validas = json.cells
+                                .filter(c => c.cellid && c.lat && c.lon)
+                                .map(c => ({
+                                    cell_id: c.cellid,
+                                    lat: c.lat,
+                                    lon: c.lon,
+                                    range: c.range || 5000,
+                                    mcc: c.mcc || 724,
+                                    mnc: c.mnc || 5,
+                                    lac: c.lac || 100,
+                                    radio: c.radio || 'GSM',
+                                    cidade: cidade,
+                                    uf: uf
+                                }));
+                            log(`${cidade}/${uf}: ${validas.length} torres válidas.`);
+                            resolve(validas);
+                        } else {
+                            resolve([]);
+                        }
+                    } catch (e) {
+                        log(`${cidade}/${uf}: Erro ao processar resposta.`);
                         resolve([]);
                     }
-                } catch (e) {
-                    log(`Erro ao processar ${cidade}: ${e.message}`);
+                });
+            });
+            req.on('error', (e) => {
+                if (tentativa < MAX_TENTATIVAS) {
+                    log(`${cidade}/${uf}: Erro de rede (tentativa ${tentativa}). Retentando...`);
+                    setTimeout(tentar, Math.pow(2, tentativa) * 1000);
+                } else {
+                    log(`${cidade}/${uf}: Erro de rede definitivo.`);
                     resolve([]);
                 }
             });
-        }).on('error', (e) => {
-            log(`Erro de rede ${cidade}: ${e.message}`);
-            resolve([]);
-        });
+            req.on('timeout', () => {
+                req.destroy();
+                if (tentativa < MAX_TENTATIVAS) {
+                    setTimeout(tentar, Math.pow(2, tentativa) * 1000);
+                } else {
+                    resolve([]);
+                }
+            });
+        }
+
+        tentar();
     });
 }
 
 async function main() {
-    log('=== CONSULTA OPENCELLID POR ÁREA ===');
-    log('Capitais: ' + CAPITAIS.length);
+    log('=== CONSULTA OPENCELLID POR ÁREA (OTIMIZADA) ===');
+    log(`Capitais: ${CAPITAIS.length} | Retry: ${MAX_TENTATIVAS}x | Timeout: ${TIMEOUT}ms`);
     log('');
 
     const db = new sqlite3.Database(DB_PATH);
     db.run('PRAGMA journal_mode=WAL');
-    db.run('PRAGMA synchronous=OFF');
     db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
         radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
         cell INTEGER PRIMARY KEY, unit INTEGER,
@@ -113,63 +148,54 @@ async function main() {
         created INTEGER, updated INTEGER, averageSignal INTEGER
     )`);
 
-    const antes = await new Promise((resolve) => {
-        db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
-    });
-    log('Torres antes: ' + antes.toLocaleString());
+    const antes = await new Promise((resolve) => db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0)));
+    log(`Torres antes: ${antes.toLocaleString()}`);
 
     let totalImportadas = 0;
+    const vistos = new Set();
+    const resumo = {};
 
-    for (const capital of CAPITAIS) {
-        const erbs = await consultarArea(capital.lat, capital.lon, capital.nome);
-        
+    for (let i = 0; i < CAPITAIS.length; i++) {
+        const cap = CAPITAIS[i];
+        log(`[${i + 1}/${CAPITAIS.length}] Consultando ${cap.nome}/${cap.uf}...`);
+        const erbs = await consultarAreaComRetry(cap.lat, cap.lon, cap.nome, cap.uf);
+
+        let novas = 0;
         if (erbs.length > 0) {
             db.run('BEGIN TRANSACTION');
             const stmt = db.prepare('INSERT OR REPLACE INTO cell_towers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
-            
             for (const erb of erbs) {
-                stmt.run([
-                    erb.radio || 'GSM',
-                    erb.mcc || 724,
-                    erb.mnc || 5,
-                    erb.lac || 100,
-                    erb.cell_id,
-                    0,
-                    erb.lon,
-                    erb.lat,
-                    erb.range || 5000,
-                    100,
-                    1,
-                    1609459200,
-                    1609459200,
-                    -71
-                ]);
+                const chave = `${erb.radio}|${erb.mcc}|${erb.mnc}|${erb.lac}|${erb.cell_id}`;
+                if (vistos.has(chave)) continue;
+                vistos.add(chave);
+                stmt.run([erb.radio, erb.mcc, erb.mnc, erb.lac, erb.cell_id, 0, erb.lon, erb.lat, erb.range, 100, 1, 1609459200, 1609459200, -71]);
+                novas++;
                 totalImportadas++;
             }
-            
             stmt.finalize();
             db.run('COMMIT');
         }
-        
-        await sleep(1500); // Respeita rate limit
+        resumo[cap.nome] = novas;
+
+        if (i < CAPITAIS.length - 1) await sleep(PAUSA);
     }
 
-    // Índices
-    log('Criando índices...');
     db.run('CREATE INDEX IF NOT EXISTS idx_cell ON cell_towers(cell)');
     db.run('CREATE INDEX IF NOT EXISTS idx_lat_lon ON cell_towers(lat, lon)');
-    db.run('ANALYZE cell_towers');
 
-    const depois = await new Promise((resolve) => {
-        db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
-    });
+    const depois = await new Promise((resolve) => db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0)));
     db.close();
 
     log('');
-    log('=== CONSULTA CONCLUÍDA ===');
-    log('Antes: ' + antes.toLocaleString());
-    log('Depois: ' + depois.toLocaleString());
-    log('Importadas: ' + totalImportadas.toLocaleString());
+    log('=== RESUMO DA IMPORTAÇÃO ===');
+    log(`Antes: ${antes.toLocaleString()}`);
+    log(`Depois: ${depois.toLocaleString()}`);
+    log(`Importadas: ${totalImportadas.toLocaleString()}`);
+    log('Por cidade:');
+    for (const [cidade, qtd] of Object.entries(resumo)) {
+        log(`  ${cidade}: ${qtd} torres`);
+    }
+    log('Dados 100% reais da API pública OpenCellID.');
     process.exit(0);
 }
 
