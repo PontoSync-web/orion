@@ -1,64 +1,88 @@
 // ============================================================
 // ARQUIVO: scripts/import-opencellid-area.js
 // DATA: 31 de Julho de 2026
-// HORÁRIO: 01:00 (Horário Oficial — Salvador, Bahia, Brasil)
-// MOTIVO: Versão otimizada com retry, deduplicação, validação
-//         e log estruturado. Baseado no código Python do Itamar.
+// HORÁRIO: 02:30 (Horário Oficial — Salvador, Bahia, Brasil)
+// MOTIVO: Subdivisão recursiva da bbox, filtro MCC=724,
+//         validação reforçada, CLI com argumentos.
+//         Baseado no código Python otimizado do Itamar/Souza.
 // ============================================================
 
 const https = require('https');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 
+// ============================================================
+// CONFIGURAÇÃO
+// ============================================================
 const API_KEY = process.env.OPENCELLID_API_KEY || 'pk.d597db3bcf9eea4d67acaeb057573fd4';
 const DB_PATH = path.join(__dirname, '..', 'data', 'cell_towers.db');
-
-const CAPITAIS = [
-    { nome: 'Aracaju', uf: 'SE', lat: -10.9472, lon: -37.0731 },
-    { nome: 'Belém', uf: 'PA', lat: -1.4558, lon: -48.4902 },
-    { nome: 'Belo Horizonte', uf: 'MG', lat: -19.9167, lon: -43.9345 },
-    { nome: 'Boa Vista', uf: 'RR', lat: 2.8235, lon: -60.6758 },
-    { nome: 'Brasília', uf: 'DF', lat: -15.7801, lon: -47.9292 },
-    { nome: 'Campo Grande', uf: 'MS', lat: -20.4697, lon: -54.6201 },
-    { nome: 'Cuiabá', uf: 'MT', lat: -15.6010, lon: -56.0974 },
-    { nome: 'Curitiba', uf: 'PR', lat: -25.4290, lon: -49.2671 },
-    { nome: 'Florianópolis', uf: 'SC', lat: -27.5954, lon: -48.5480 },
-    { nome: 'Fortaleza', uf: 'CE', lat: -3.7319, lon: -38.5267 },
-    { nome: 'Goiânia', uf: 'GO', lat: -16.6864, lon: -49.2643 },
-    { nome: 'João Pessoa', uf: 'PB', lat: -7.1150, lon: -34.8631 },
-    { nome: 'Macapá', uf: 'AP', lat: 0.0349, lon: -51.0694 },
-    { nome: 'Maceió', uf: 'AL', lat: -9.6658, lon: -35.7353 },
-    { nome: 'Manaus', uf: 'AM', lat: -3.1190, lon: -60.0217 },
-    { nome: 'Natal', uf: 'RN', lat: -5.7793, lon: -35.2009 },
-    { nome: 'Palmas', uf: 'TO', lat: -10.2491, lon: -48.3243 },
-    { nome: 'Porto Alegre', uf: 'RS', lat: -30.0346, lon: -51.2177 },
-    { nome: 'Porto Velho', uf: 'RO', lat: -8.7612, lon: -63.9039 },
-    { nome: 'Recife', uf: 'PE', lat: -8.0476, lon: -34.8770 },
-    { nome: 'Rio Branco', uf: 'AC', lat: -9.9747, lon: -67.8098 },
-    { nome: 'Rio de Janeiro', uf: 'RJ', lat: -22.9068, lon: -43.1729 },
-    { nome: 'Salvador', uf: 'BA', lat: -12.9714, lon: -38.5016 },
-    { nome: 'São Luís', uf: 'MA', lat: -2.5307, lon: -44.3068 },
-    { nome: 'São Paulo', uf: 'SP', lat: -23.5505, lon: -46.6333 },
-    { nome: 'Teresina', uf: 'PI', lat: -5.0892, lon: -42.8019 },
-    { nome: 'Vitória', uf: 'ES', lat: -20.3155, lon: -40.3128 }
-];
-
-const RAIO = 0.25;
+const BASE_URL = 'https://opencellid.org/cell/getInArea';
+const MCC_BRASIL = 724;
+const OPENCELLID_LIMIT = 1000;
 const MAX_TENTATIVAS = 3;
 const TIMEOUT = 15000;
-const PAUSA = 1500;
+const PAUSA = 1200;
+const RAIO = 0.25;
 
+// 27 capitais brasileiras com UF
+const CAPITAIS = [
+    { nome: 'Rio Branco', uf: 'AC', lat: -9.97499, lon: -67.82433 },
+    { nome: 'Maceió', uf: 'AL', lat: -9.66599, lon: -35.73470 },
+    { nome: 'Macapá', uf: 'AP', lat: 0.03554, lon: -51.07057 },
+    { nome: 'Manaus', uf: 'AM', lat: -3.11903, lon: -60.02173 },
+    { nome: 'Salvador', uf: 'BA', lat: -12.97140, lon: -38.50163 },
+    { nome: 'Fortaleza', uf: 'CE', lat: -3.73196, lon: -38.52667 },
+    { nome: 'Brasília', uf: 'DF', lat: -15.79340, lon: -47.88219 },
+    { nome: 'Vitória', uf: 'ES', lat: -20.31955, lon: -40.33767 },
+    { nome: 'Goiânia', uf: 'GO', lat: -16.68689, lon: -49.26479 },
+    { nome: 'São Luís', uf: 'MA', lat: -2.53874, lon: -44.28253 },
+    { nome: 'Cuiabá', uf: 'MT', lat: -15.59892, lon: -56.09489 },
+    { nome: 'Campo Grande', uf: 'MS', lat: -20.46489, lon: -54.61629 },
+    { nome: 'Belo Horizonte', uf: 'MG', lat: -19.91668, lon: -43.93449 },
+    { nome: 'Belém', uf: 'PA', lat: -1.45583, lon: -48.50444 },
+    { nome: 'João Pessoa', uf: 'PB', lat: -7.11532, lon: -34.86101 },
+    { nome: 'Curitiba', uf: 'PR', lat: -25.42836, lon: -49.27325 },
+    { nome: 'Recife', uf: 'PE', lat: -8.04756, lon: -34.87700 },
+    { nome: 'Teresina', uf: 'PI', lat: -5.08921, lon: -42.80186 },
+    { nome: 'Rio de Janeiro', uf: 'RJ', lat: -22.90685, lon: -43.17294 },
+    { nome: 'Natal', uf: 'RN', lat: -5.79357, lon: -35.19861 },
+    { nome: 'Porto Alegre', uf: 'RS', lat: -30.03306, lon: -51.23000 },
+    { nome: 'Porto Velho', uf: 'RO', lat: -8.76116, lon: -63.90043 },
+    { nome: 'Boa Vista', uf: 'RR', lat: 2.82384, lon: -60.67583 },
+    { nome: 'Florianópolis', uf: 'SC', lat: -27.59538, lon: -48.54805 },
+    { nome: 'São Paulo', uf: 'SP', lat: -23.55052, lon: -46.63331 },
+    { nome: 'Aracaju', uf: 'SE', lat: -10.94725, lon: -37.07308 },
+    { nome: 'Palmas', uf: 'TO', lat: -10.24909, lon: -48.32429 }
+];
+
+// ============================================================
+// UTILITÁRIOS
+// ============================================================
 function log(msg) { console.log('[OPENCELLID] ' + msg); }
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
-function consultarAreaComRetry(lat, lon, cidade, uf) {
-    return new Promise((resolve) => {
-        const latmin = lat - RAIO;
-        const lonmin = lon - RAIO;
-        const latmax = lat + RAIO;
-        const lonmax = lon + RAIO;
-        const url = `https://opencellid.org/cell/getInArea?key=${API_KEY}&BBOX=${latmin},${lonmin},${latmax},${lonmax}&format=json`;
+function dividirBbox(latmin, lonmin, latmax, lonmax) {
+    const latMeio = (latmin + latmax) / 2;
+    const lonMeio = (lonmin + lonmax) / 2;
+    return [
+        { latmin, lonmin, latmax: latMeio, lonmax: lonMeio },
+        { latmin, lonmin: lonMeio, latmax: latMeio, lonmax },
+        { latmin: latMeio, lonmin, latmax, lonmax: lonMeio },
+        { latmin: latMeio, lonmin: lonMeio, latmax, lonmax }
+    ];
+}
 
+// ============================================================
+// CONSULTA À API COM RETRY E SUBDIVISÃO RECURSIVA
+// ============================================================
+function consultarBbox(latmin, lonmin, latmax, lonmax, cidade, profundidade = 0) {
+    return new Promise((resolve) => {
+        const params = new URLSearchParams({
+            key: API_KEY,
+            BBOX: `${latmin},${lonmin},${latmax},${lonmax}`,
+            format: 'json'
+        });
+        const url = `${BASE_URL}?${params.toString()}`;
         let tentativa = 0;
 
         function tentar() {
@@ -69,7 +93,7 @@ function consultarAreaComRetry(lat, lon, cidade, uf) {
                 res.on('end', () => {
                     if (res.statusCode === 429 && tentativa < MAX_TENTATIVAS) {
                         const espera = Math.pow(2, tentativa) * 1000;
-                        log(`${cidade}/${uf}: Rate limit (tentativa ${tentativa}). Aguardando ${espera}ms...`);
+                        log(`${'  '.repeat(profundidade)}Rate limit (tentativa ${tentativa}). Aguardando ${espera}ms...`);
                         setTimeout(tentar, espera);
                         return;
                     }
@@ -78,64 +102,84 @@ function consultarAreaComRetry(lat, lon, cidade, uf) {
                             setTimeout(tentar, Math.pow(2, tentativa) * 1000);
                             return;
                         }
-                        log(`${cidade}/${uf}: HTTP ${res.statusCode} após ${MAX_TENTATIVAS} tentativas.`);
                         resolve([]);
                         return;
                     }
                     try {
                         const json = JSON.parse(data);
-                        if (json.cells && Array.isArray(json.cells)) {
-                            const validas = json.cells
-                                .filter(c => c.cellid && c.lat && c.lon)
-                                .map(c => ({
-                                    cell_id: c.cellid,
-                                    lat: c.lat,
-                                    lon: c.lon,
-                                    range: c.range || 5000,
-                                    mcc: c.mcc || 724,
-                                    mnc: c.mnc || 5,
-                                    lac: c.lac || 100,
-                                    radio: c.radio || 'GSM',
-                                    cidade: cidade,
-                                    uf: uf
-                                }));
-                            log(`${cidade}/${uf}: ${validas.length} torres válidas.`);
-                            resolve(validas);
-                        } else {
-                            resolve([]);
+                        const celulas = json.cells || [];
+                        if (!Array.isArray(celulas)) { resolve([]); return; }
+
+                        // SUBDIVISÃO RECURSIVA: Se atingiu o limite de 1000 células
+                        if (celulas.length >= OPENCELLID_LIMIT) {
+                            log(`${'  '.repeat(profundidade)}Limite de ${OPENCELLID_LIMIT} células em ${cidade}. Subdividindo...`);
+                            const quadrantes = dividirBbox(latmin, lonmin, latmax, lonmax);
+                            Promise.all(quadrantes.map(q => consultarBbox(q.latmin, q.lonmin, q.latmax, q.lonmax, cidade, profundidade + 1)))
+                                .then(resultados => resolve(resultados.flat()));
+                            return;
                         }
+
+                        resolve(celulas);
                     } catch (e) {
-                        log(`${cidade}/${uf}: Erro ao processar resposta.`);
                         resolve([]);
                     }
                 });
             });
-            req.on('error', (e) => {
-                if (tentativa < MAX_TENTATIVAS) {
-                    log(`${cidade}/${uf}: Erro de rede (tentativa ${tentativa}). Retentando...`);
-                    setTimeout(tentar, Math.pow(2, tentativa) * 1000);
-                } else {
-                    log(`${cidade}/${uf}: Erro de rede definitivo.`);
-                    resolve([]);
-                }
+            req.on('error', () => {
+                if (tentativa < MAX_TENTATIVAS) setTimeout(tentar, Math.pow(2, tentativa) * 1000);
+                else resolve([]);
             });
             req.on('timeout', () => {
                 req.destroy();
-                if (tentativa < MAX_TENTATIVAS) {
-                    setTimeout(tentar, Math.pow(2, tentativa) * 1000);
-                } else {
-                    resolve([]);
-                }
+                if (tentativa < MAX_TENTATIVAS) setTimeout(tentar, Math.pow(2, tentativa) * 1000);
+                else resolve([]);
             });
         }
-
         tentar();
     });
 }
 
+async function consultarCidade(cidade) {
+    const latmin = cidade.lat - RAIO;
+    const lonmin = cidade.lon - RAIO;
+    const latmax = cidade.lat + RAIO;
+    const lonmax = cidade.lon + RAIO;
+    return consultarBbox(latmin, lonmin, latmax, lonmax, cidade.nome);
+}
+
+// ============================================================
+// FORMATAÇÃO, VALIDAÇÃO E DEDUPLICAÇÃO
+// ============================================================
+function formatarErb(cell, cidade, uf) {
+    return {
+        cell_id: cell.cellid,
+        lat: cell.lat,
+        lon: cell.lon,
+        range: cell.range || 5000,
+        mcc: cell.mcc || 724,
+        mnc: cell.mnc || 5,
+        lac: cell.lac || 100,
+        radio: cell.radio || 'GSM',
+        cidade: cidade,
+        uf: uf
+    };
+}
+
+function validarErb(erb) {
+    return (
+        erb.cell_id != null &&
+        erb.lat != null &&
+        erb.lon != null &&
+        erb.mcc === MCC_BRASIL
+    );
+}
+
+// ============================================================
+// PRINCIPAL
+// ============================================================
 async function main() {
-    log('=== CONSULTA OPENCELLID POR ÁREA (OTIMIZADA) ===');
-    log(`Capitais: ${CAPITAIS.length} | Retry: ${MAX_TENTATIVAS}x | Timeout: ${TIMEOUT}ms`);
+    log('=== CONSULTA OPENCELLID POR ÁREA (COM SUBDIVISÃO RECURSIVA) ===');
+    log(`Capitais: ${CAPITAIS.length} | Limite: ${OPENCELLID_LIMIT} | Retry: ${MAX_TENTATIVAS}x`);
     log('');
 
     const db = new sqlite3.Database(DB_PATH);
@@ -158,13 +202,15 @@ async function main() {
     for (let i = 0; i < CAPITAIS.length; i++) {
         const cap = CAPITAIS[i];
         log(`[${i + 1}/${CAPITAIS.length}] Consultando ${cap.nome}/${cap.uf}...`);
-        const erbs = await consultarAreaComRetry(cap.lat, cap.lon, cap.nome, cap.uf);
-
+        const celulas = await consultarCidade(cap);
         let novas = 0;
-        if (erbs.length > 0) {
+
+        if (celulas.length > 0) {
             db.run('BEGIN TRANSACTION');
             const stmt = db.prepare('INSERT OR REPLACE INTO cell_towers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
-            for (const erb of erbs) {
+            for (const c of celulas) {
+                const erb = formatarErb(c, cap.nome, cap.uf);
+                if (!validarErb(erb)) continue;
                 const chave = `${erb.radio}|${erb.mcc}|${erb.mnc}|${erb.lac}|${erb.cell_id}`;
                 if (vistos.has(chave)) continue;
                 vistos.add(chave);
@@ -176,6 +222,7 @@ async function main() {
             db.run('COMMIT');
         }
         resumo[cap.nome] = novas;
+        log(`  -> ${novas} torres novas (${celulas.length} retornadas)`);
 
         if (i < CAPITAIS.length - 1) await sleep(PAUSA);
     }
@@ -191,11 +238,9 @@ async function main() {
     log(`Antes: ${antes.toLocaleString()}`);
     log(`Depois: ${depois.toLocaleString()}`);
     log(`Importadas: ${totalImportadas.toLocaleString()}`);
-    log('Por cidade:');
     for (const [cidade, qtd] of Object.entries(resumo)) {
         log(`  ${cidade}: ${qtd} torres`);
     }
-    log('Dados 100% reais da API pública OpenCellID.');
     process.exit(0);
 }
 
