@@ -1,11 +1,10 @@
 // ============================================================
 // ARQUIVO: orion.js
 // DATA: 31 de Julho de 2026
-// HORÁRIO: 00:15 (Horário Oficial — Salvador, Bahia, Brasil)
+// HORÁRIO: 01:30 (Horário Oficial — Salvador, Bahia, Brasil)
 // FUSO: América do Sul / Brasil / Bahia (GMT-3)
-// MOTIVO: v5.9.4 — Harmonização total com import-coleta-campo.js
-//         corrigido. Cadeia de importação otimizada:
-//         Coleta de Campo → OpenCellID Área → Anatel → IAs → Emergência.
+// MOTIVO: v5.9.5 — Harmonização final com OpenCellID otimizado.
+//         Cadeia: Coleta de Campo → OpenCellID Área → Emergência.
 //         Compatível com todos os módulos do sistema.
 // ============================================================
 
@@ -79,19 +78,19 @@ dbCache.exec(`CREATE TABLE IF NOT EXISTS cell_cache (cell_id INTEGER PRIMARY KEY
 CREATE TABLE IF NOT EXISTS ip_cache (ip TEXT PRIMARY KEY, lat REAL, lon REAL, range INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
 
 app.get('/health', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '5.9.4', status: 'online',
+    servidor: 'AI-DEPOM', versao: '5.9.5', status: 'online',
     seguranca: 'BLINDADO',
     protocolo_hermes: 'ATIVO (3 IAs conectadas)',
-    fontes_importacao: ['Coleta de Campo', 'OpenCellID Área', 'Anatel', 'IAs', 'Emergencia'],
+    fontes_importacao: ['Coleta de Campo', 'OpenCellID Área (otimizado)', 'Banco de Emergência'],
     gps_navegador: 'ATIVO',
     agentes_ativos: agentesAtivos.size,
     timestamp: new Date().toISOString()
 }));
 
 app.get('/', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '5.9.4',
+    servidor: 'AI-DEPOM', versao: '5.9.5',
     gps_navegador: 'ATIVO',
-    fontes_importacao: ['Coleta de Campo (primária)', 'OpenCellID (área)', 'Anatel (Mosaico)', 'IAs (Claude, Grok, Gemini)', 'Banco de Emergência'],
+    fontes_importacao: ['Coleta de Campo (primária)', 'OpenCellID Área (otimizado)', 'Banco de Emergência'],
     endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status', '/api/hermes/forcar']
 }));
 
@@ -257,24 +256,24 @@ async function iniciarServidor() {
     if (count < 1000000) {
         let importado = false;
 
-        // 1. Coleta de Campo (script corrigido)
+        // 1. Coleta de Campo (CSV do investigador)
         if (!importado) {
             try {
                 log('info', 'Importando dados de coleta de campo...');
                 const { execSync } = require('child_process');
                 execSync('node scripts/import-coleta-campo.js', { stdio: 'inherit', timeout: 300000 });
                 importado = true;
-            } catch (err) { log('warn', 'Coleta de campo falhou: ' + err.message); }
+            } catch (err) { log('warn', 'Coleta de campo: ' + err.message); }
         }
 
-        // 2. OpenCellID Área (API pública)
+        // 2. OpenCellID Área Otimizado (API pública com retry e deduplicação)
         if (!importado) {
             try {
-                log('info', 'Tentando importar via OpenCellID por área (27 capitais)...');
+                log('info', 'Consultando OpenCellID (27 capitais, otimizado)...');
                 const { execSync } = require('child_process');
                 execSync('node scripts/import-opencellid-area.js', { stdio: 'inherit', timeout: 300000 });
                 importado = true;
-            } catch (err) { log('warn', 'OpenCellID por área falhou: ' + err.message); }
+            } catch (err) { log('warn', 'OpenCellID: ' + err.message); }
         }
 
         // 3. Banco de Emergência
@@ -282,7 +281,7 @@ async function iniciarServidor() {
             dbTowers.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
         });
         if (novoCount < 50) {
-            log('warn', 'Nenhuma fonte externa disponível. Inserindo banco de emergência...');
+            log('warn', 'Nenhuma fonte disponível. Inserindo banco de emergência...');
             await inserirBancoEmergencia(dbTowers);
         }
     } else {
@@ -292,13 +291,12 @@ async function iniciarServidor() {
     dbTowers.close();
 
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 5.9.4 rodando na porta ' + port);
-        log('info', 'Cadeia de importação: Coleta de Campo → OpenCellID Área → Emergência');
+        log('info', 'AI-DEPOM 5.9.5 rodando na porta ' + port);
+        log('info', 'Cadeia: Coleta de Campo → OpenCellID Otimizado → Emergência');
     });
 }
 
 async function inserirBancoEmergencia(dbTowers) {
-    log('info', 'Inserindo 5 torres de emergência...');
     const torres = [
         ['GSM', 724, 5, 100, 208020001, 0, -38.5016, -12.9714, 5000, 100, 1, 1609459200, 1609459200, -71],
         ['GSM', 724, 5, 200, 208017145, 0, -46.6333, -23.5505, 5000, 100, 1, 1609459200, 1609459200, -73],
