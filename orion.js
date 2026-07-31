@@ -1,11 +1,11 @@
 // ============================================================
 // ARQUIVO: orion.js
 // DATA: 31 de Julho de 2026
-// HORÁRIO: 01:30 (Horário Oficial — Salvador, Bahia, Brasil)
+// HORÁRIO: 03:00 (Horário Oficial — Salvador, Bahia, Brasil)
 // FUSO: América do Sul / Brasil / Bahia (GMT-3)
-// MOTIVO: v5.9.5 — Harmonização final com OpenCellID otimizado.
-//         Cadeia: Coleta de Campo → OpenCellID Área → Emergência.
-//         Compatível com todos os módulos do sistema.
+// MOTIVO: v5.9.6 — Harmonização com subdivisão recursiva do
+//         OpenCellID. Cadeia: Coleta de Campo → OpenCellID
+//         Área Otimizada → Banco de Emergência.
 // ============================================================
 
 require('dotenv').config();
@@ -78,19 +78,19 @@ dbCache.exec(`CREATE TABLE IF NOT EXISTS cell_cache (cell_id INTEGER PRIMARY KEY
 CREATE TABLE IF NOT EXISTS ip_cache (ip TEXT PRIMARY KEY, lat REAL, lon REAL, range INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
 
 app.get('/health', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '5.9.5', status: 'online',
+    servidor: 'AI-DEPOM', versao: '5.9.6', status: 'online',
     seguranca: 'BLINDADO',
     protocolo_hermes: 'ATIVO (3 IAs conectadas)',
-    fontes_importacao: ['Coleta de Campo', 'OpenCellID Área (otimizado)', 'Banco de Emergência'],
+    fontes_importacao: ['Coleta de Campo', 'OpenCellID Área (subdivisão recursiva)', 'Banco de Emergência'],
     gps_navegador: 'ATIVO',
     agentes_ativos: agentesAtivos.size,
     timestamp: new Date().toISOString()
 }));
 
 app.get('/', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '5.9.5',
+    servidor: 'AI-DEPOM', versao: '5.9.6',
     gps_navegador: 'ATIVO',
-    fontes_importacao: ['Coleta de Campo (primária)', 'OpenCellID Área (otimizado)', 'Banco de Emergência'],
+    fontes_importacao: ['Coleta de Campo (primária)', 'OpenCellID Área (subdivisão recursiva)', 'Banco de Emergência'],
     endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status', '/api/hermes/forcar']
 }));
 
@@ -266,10 +266,10 @@ async function iniciarServidor() {
             } catch (err) { log('warn', 'Coleta de campo: ' + err.message); }
         }
 
-        // 2. OpenCellID Área Otimizado (API pública com retry e deduplicação)
+        // 2. OpenCellID Área Otimizado (com subdivisão recursiva)
         if (!importado) {
             try {
-                log('info', 'Consultando OpenCellID (27 capitais, otimizado)...');
+                log('info', 'Consultando OpenCellID (subdivisão recursiva)...');
                 const { execSync } = require('child_process');
                 execSync('node scripts/import-opencellid-area.js', { stdio: 'inherit', timeout: 300000 });
                 importado = true;
@@ -291,7 +291,7 @@ async function iniciarServidor() {
     dbTowers.close();
 
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 5.9.5 rodando na porta ' + port);
+        log('info', 'AI-DEPOM 5.9.6 rodando na porta ' + port);
         log('info', 'Cadeia: Coleta de Campo → OpenCellID Otimizado → Emergência');
     });
 }
