@@ -43,7 +43,8 @@ async function main() {
         cell INTEGER PRIMARY KEY, unit INTEGER,
         lon REAL, lat REAL, range INTEGER,
         samples INTEGER, changeable INTEGER,
-        created INTEGER, updated INTEGER, averageSignal INTEGER
+        created INTEGER, updated INTEGER, averageSignal INTEGER,
+        call_id TEXT
     )`);
 
     const antes = await new Promise((resolve) => {
@@ -56,7 +57,7 @@ async function main() {
     let ignoradas = 0;
 
     db.run('BEGIN TRANSACTION');
-    const stmt = db.prepare('INSERT OR REPLACE INTO cell_towers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+    const stmt = db.prepare('INSERT OR REPLACE INTO cell_towers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
 
     for await (const line of rl) {
         const cols = line.split('\t'); // Anatel usa tabulação como separador
@@ -91,7 +92,7 @@ async function main() {
             const mnc = TECH_TO_MNC[tecnologia] || 6;
             const area = Math.floor(cellId / 1000);
 
-            stmt.run([radio, 724, mnc, area, cellId, 0, lon, lat, range, 100, 1, 1609459200, 1609459200, -71]);
+            stmt.run([radio, 724, mnc, area, cellId, 0, lon, lat, range, 100, 1, 1609459200, 1609459200, -71, null]);
             count++;
             
             if (count % 1000 === 0) {
