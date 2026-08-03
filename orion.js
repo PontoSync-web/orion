@@ -1,12 +1,11 @@
 // ============================================================
 // ARQUIVO: orion.js
 // DATA: 03 de Agosto de 2026
-// HORÁRIO: 15:30 (Horário Oficial — Salvador, Bahia, Brasil)
+// HORÁRIO: 16:00 (Horário Oficial — Salvador, Bahia, Brasil)
 // FUSO: América do Sul / Brasil / Bahia (GMT-3)
 // AUTOR: Eng Souza
-// MOTIVO: v5.9.8 — Compatível com novos arquivos de coleta
-//         de campo. Cadeia: Coleta de Campo → OpenCellID
-//         Área Otimizada → Banco de Emergência.
+// MOTIVO: v5.9.9 — Compatibilidade com novos dados de torres.
+//         Cadeia: Coleta de Campo → OpenCellID → Emergência.
 // ============================================================
 
 require('dotenv').config();
@@ -79,19 +78,19 @@ dbCache.exec(`CREATE TABLE IF NOT EXISTS cell_cache (cell_id INTEGER PRIMARY KEY
 CREATE TABLE IF NOT EXISTS ip_cache (ip TEXT PRIMARY KEY, lat REAL, lon REAL, range INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
 
 app.get('/health', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '5.9.8', autor: 'Eng Souza', status: 'online',
+    servidor: 'AI-DEPOM', versao: '5.9.9', autor: 'Eng Souza', status: 'online',
     seguranca: 'BLINDADO',
     protocolo_hermes: 'ATIVO (3 IAs conectadas)',
-    fontes_importacao: ['Coleta de Campo', 'OpenCellID Área (subdivisão recursiva)', 'Banco de Emergência'],
+    fontes_importacao: ['Coleta de Campo', 'OpenCellID Área', 'Banco de Emergência'],
     gps_navegador: 'ATIVO',
     agentes_ativos: agentesAtivos.size,
     timestamp: new Date().toISOString()
 }));
 
 app.get('/', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '5.9.8', autor: 'Eng Souza',
+    servidor: 'AI-DEPOM', versao: '5.9.9', autor: 'Eng Souza',
     gps_navegador: 'ATIVO',
-    fontes_importacao: ['Coleta de Campo (primária)', 'OpenCellID Área (subdivisão recursiva)', 'Banco de Emergência'],
+    fontes_importacao: ['Coleta de Campo (primária)', 'OpenCellID Área', 'Banco de Emergência'],
     endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status', '/api/hermes/forcar', '/api/import/cells']
 }));
 
@@ -134,7 +133,6 @@ app.post('/api/hermes/forcar', async (req, res) => {
     } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// 03/08/2026 — Rota para forçar importação de Cell IDs específicos
 app.post('/api/import/cells', (req, res) => {
     log('info', 'Forçando importação de Cell IDs específicos...');
     try {
@@ -306,9 +304,8 @@ async function iniciarServidor() {
     dbTowers.close();
 
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 5.9.8 rodando na porta ' + port);
+        log('info', 'AI-DEPOM 5.9.9 rodando na porta ' + port);
         log('info', 'Cadeia: Coleta de Campo → OpenCellID Otimizado → Emergência');
-        log('info', 'Rota /api/import/cells disponível para importação manual');
     });
 }
 
