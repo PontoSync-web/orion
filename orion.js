@@ -1,11 +1,11 @@
 // ============================================================
 // ARQUIVO: orion.js
-// DATA: 31 de Julho de 2026
-// HORÁRIO: 03:00 (Horário Oficial — Salvador, Bahia, Brasil)
+// DATA: 03 de Agosto de 2026
+// HORÁRIO: 12:15 (Horário Oficial — Salvador, Bahia, Brasil)
 // FUSO: América do Sul / Brasil / Bahia (GMT-3)
-// MOTIVO: v5.9.6 — Harmonização com subdivisão recursiva do
-//         OpenCellID. Cadeia: Coleta de Campo → OpenCellID
-//         Área Otimizada → Banco de Emergência.
+// AUTOR: Eng Souza
+// MOTIVO: v5.9.7 — Adicionada rota POST /api/import/cells
+//         para forçar importação de Cell IDs específicos.
 // ============================================================
 
 require('dotenv').config();
@@ -78,7 +78,7 @@ dbCache.exec(`CREATE TABLE IF NOT EXISTS cell_cache (cell_id INTEGER PRIMARY KEY
 CREATE TABLE IF NOT EXISTS ip_cache (ip TEXT PRIMARY KEY, lat REAL, lon REAL, range INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
 
 app.get('/health', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '5.9.6', status: 'online',
+    servidor: 'AI-DEPOM', versao: '5.9.7', autor: 'Eng Souza', status: 'online',
     seguranca: 'BLINDADO',
     protocolo_hermes: 'ATIVO (3 IAs conectadas)',
     fontes_importacao: ['Coleta de Campo', 'OpenCellID Área (subdivisão recursiva)', 'Banco de Emergência'],
@@ -88,10 +88,10 @@ app.get('/health', (req, res) => res.json({
 }));
 
 app.get('/', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '5.9.6',
+    servidor: 'AI-DEPOM', versao: '5.9.7', autor: 'Eng Souza',
     gps_navegador: 'ATIVO',
     fontes_importacao: ['Coleta de Campo (primária)', 'OpenCellID Área (subdivisão recursiva)', 'Banco de Emergência'],
-    endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status', '/api/hermes/forcar']
+    endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status', '/api/hermes/forcar', '/api/import/cells']
 }));
 
 app.get('/api/agent/status', (req, res) => {
@@ -131,6 +131,20 @@ app.post('/api/hermes/forcar', async (req, res) => {
             res.json({ status: 'falha', mensagem: 'Nenhuma IA retornou ERBs.', timestamp: new Date().toISOString() });
         }
     } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// 03/08/2026 — Rota para forçar importação de Cell IDs específicos
+app.post('/api/import/cells', (req, res) => {
+    log('info', 'Forçando importação de Cell IDs específicos...');
+    try {
+        const { execSync } = require('child_process');
+        const resultado = execSync('node scripts/import-cell-ids.js', { stdio: 'pipe', timeout: 60000 }).toString();
+        log('info', 'Importação concluída: ' + resultado.substring(0, 200));
+        res.json({ status: 'sucesso', mensagem: 'Importação executada. Verifique os logs.', log: resultado.substring(0, 500) });
+    } catch (err) {
+        log('error', 'Falha na importação: ' + err.message);
+        res.status(500).json({ status: 'falha', erro: err.message, stderr: err.stderr ? err.stderr.toString().substring(0, 500) : '' });
+    }
 });
 
 app.get('/api/rastrear/:numero', (req, res) => {
@@ -291,8 +305,9 @@ async function iniciarServidor() {
     dbTowers.close();
 
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 5.9.6 rodando na porta ' + port);
+        log('info', 'AI-DEPOM 5.9.7 rodando na porta ' + port);
         log('info', 'Cadeia: Coleta de Campo → OpenCellID Otimizado → Emergência');
+        log('info', 'Rota /api/import/cells disponível para importação manual');
     });
 }
 
