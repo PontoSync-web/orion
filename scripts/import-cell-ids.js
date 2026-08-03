@@ -71,7 +71,8 @@ async function main() {
         cell INTEGER PRIMARY KEY, unit INTEGER,
         lon REAL, lat REAL, range INTEGER,
         samples INTEGER, changeable INTEGER,
-        created INTEGER, updated INTEGER, averageSignal INTEGER
+        created INTEGER, updated INTEGER, averageSignal INTEGER,
+        call_id TEXT
     )`);
 
     const antes = await new Promise((resolve) => db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0)));
@@ -84,8 +85,8 @@ async function main() {
         const torre = await consultarCell(c.cell);
         if (torre) {
             db.run('BEGIN TRANSACTION');
-            const stmt = db.prepare('INSERT OR REPLACE INTO cell_towers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
-            stmt.run([torre.radio, torre.mcc, torre.mnc, torre.lac, torre.cell, 0, torre.lon, torre.lat, torre.range, 100, 1, 1609459200, 1609459200, -71]);
+            const stmt = db.prepare('INSERT OR REPLACE INTO cell_towers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+            stmt.run([torre.radio, torre.mcc, torre.mnc, torre.lac, torre.cell, 0, torre.lon, torre.lat, torre.range, 100, 1, 1609459200, 1609459200, -71, null]);
             stmt.finalize();
             db.run('COMMIT');
             importadas++;
