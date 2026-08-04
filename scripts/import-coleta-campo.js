@@ -1,103 +1,112 @@
 // ============================================================
 // ARQUIVO: scripts/import-coleta-campo.js
-// VERSÃO: 2.1 (Corrigida – sem filtro de asterisco)
+// VERSÃO: 3.0 (Stream + Lotes)
 // DATA: 04/08/2026
-// MOTIVO: Removeu a lógica que descartava linhas com "*".
-//         Agora descarta apenas cabeçalhos e linhas vazias.
-//         Detecta separador automaticamente (; ou ,).
+// MOTIVO: Processa arquivo por arquivo via stream, sem 
+//         carregar tudo em memória. Usa transações em lote.
+//         Processa APENAS o arquivo alvo (coleta_campo - Copia-039.csv)
+//         se existir, ou todos se nenhum alvo especificado.
 // ============================================================
 
 const fs = require('fs');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
+const readline = require('readline');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_TOWERS = path.join(DATA_DIR, 'cell_towers.db');
+
+// Arquivo alvo – pode ser definido por variável de ambiente
+// ou nome fixo para priorizar o arquivo do investigador.
+const TARGET_FILE = process.env.IMPORT_TARGET || 'coleta_campo - Copia-039.csv';
 
 function log(msg) {
     console.log(`[COLETA-CAMPO] ${msg}`);
 }
 
 /**
- * Processa um único arquivo CSV e insere as torres no banco de dados.
- * @param {sqlite3.Database} db - Conexão com o banco cell_towers.db
- * @param {string} filePath - Caminho completo do arquivo CSV
+ * Processa um único arquivo CSV usando stream e insere em lotes.
+ * @param {sqlite3.Database} db - Conexão com o banco.
+ * @param {string} filePath - Caminho do CSV.
+ * @param {string} fileName - Nome do arquivo (para log).
+ * @param {number} batchSize - Quantas linhas por transação.
  * @returns {Promise<{importadas: number, ignoradas: number}>}
  */
-function processarArquivo(db, filePath) {
-    return new Promise((resolve) => {
-        const content = fs.readFileSync(filePath, 'utf8');
-        const lines = content.split(/\r?\n/);
+function processarArquivoStream(db, filePath, fileName, batchSize = 5000) {
+    return new Promise((resolve, reject) => {
+        const rl = readline.createInterface({
+            input: fs.createReadStream(filePath),
+            crlfDelay: Infinity
+        });
+
         let importadas = 0;
         let ignoradas = 0;
+        let isHeader = true;
+        let linhasBuffer = [];
+        let separator = ',';
 
-        if (lines.length === 0) {
-            resolve({ importadas, ignoradas });
-            return;
-        }
-
-        // Detecta o separador: se a primeira linha tiver ';' usa ponto-e-vírgula, senão vírgula
-        const firstLine = lines[0] || '';
-        const separator = firstLine.includes(';') ? ';' : ',';
-
-        // Pula cabeçalho se a primeira linha parecer cabeçalho (contém 'cell', 'lat', etc.)
-        let startIndex = 0;
-        const lower = firstLine.toLowerCase();
-        if (lower.includes('cell') || lower.includes('lat') || lower.includes('lon') || lower.includes('longitude')) {
-            startIndex = 1;
-            log(`  (cabeçalho identificado, pulando linha 1)`);
-        }
-
-        // Prepara a instrução SQL
+        // Preparar statement
         const stmt = db.prepare(`
             INSERT OR REPLACE INTO cell_towers 
             (radio, mcc, net, area, cell, unit, lon, lat, range, samples, changeable, created, updated, averageSignal)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
-        for (let i = startIndex; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (!line) {
+        const flushBuffer = () => {
+            if (linhasBuffer.length === 0) return;
+            db.run('BEGIN TRANSACTION');
+            for (const params of linhasBuffer) {
+                stmt.run(params);
+            }
+            db.run('COMMIT');
+            importadas += linhasBuffer.length;
+            linhasBuffer = [];
+        };
+
+        rl.on('line', (line) => {
+            const trimmed = line.trim();
+            if (!trimmed) {
                 ignoradas++;
-                continue;
+                return;
             }
 
-            const cols = line.split(separator);
+            // Detecta separador na primeira linha que não estiver vazia
+            if (isHeader) {
+                separator = trimmed.includes(';') ? ';' : ',';
+                // Pula cabeçalho se contiver palavras-chave
+                const lower = trimmed.toLowerCase();
+                if (lower.includes('cell') || lower.includes('lat') || lower.includes('lon')) {
+                    isHeader = false;
+                    return;
+                }
+                isHeader = false;
+            }
+
+            const cols = trimmed.split(separator);
             if (cols.length < 3) {
                 ignoradas++;
-                continue;
+                return;
             }
 
-            // Tenta extrair cellId, lat, lon
-            // Estratégia: procurar números em cada coluna
-            let cellId = null;
-            let lat = null;
-            let lon = null;
+            // Extrair cell, lat, lon (mesma lógica de detecção robusta)
+            let cellId = null, lat = null, lon = null;
 
-            // Primeiro, tenta interpretar as três primeiras colunas como [cell, lat, lon]
+            // Primeiro tenta as três primeiras colunas
             const testCell = parseInt(cols[0]);
             const testLat = parseFloat(cols[1]);
             const testLon = parseFloat(cols[2]);
-
             if (!isNaN(testCell) && testCell > 0 && !isNaN(testLat) && !isNaN(testLon)) {
                 cellId = testCell;
                 lat = testLat;
                 lon = testLon;
             } else {
-                // Se falhar, varre todas as colunas para encontrar um número que possa ser cell, lat, lon
-                // Identifica cell: número inteiro > 0
-                // Identifica lat: número entre -90 e 90
-                // Identifica lon: número entre -180 e 180
+                // Varre todas as colunas
                 let candidates = cols.map((v, idx) => ({ val: v.trim(), idx }));
                 for (let c of candidates) {
                     const num = parseFloat(c.val);
                     if (!isNaN(num)) {
-                        if (Number.isInteger(num) && num > 0 && cellId === null) {
-                            // Pode ser cellId
-                            // Verifica se não é um código de área (lac) ou mcc
-                            if (num < 1000000000) {
-                                cellId = num;
-                            }
+                        if (Number.isInteger(num) && num > 0 && cellId === null && num < 1000000000) {
+                            cellId = num;
                         } else if (num >= -90 && num <= 90 && lat === null) {
                             lat = num;
                         } else if (num >= -180 && num <= 180 && lon === null) {
@@ -105,16 +114,14 @@ function processarArquivo(db, filePath) {
                         }
                     }
                 }
-                // Se ainda não encontrou lat/lon, tenta as duas primeiras colunas numéricas (fora cell)
+                // Se ainda faltar, pega os dois primeiros números restantes
                 if (lat === null || lon === null) {
                     let nums = [];
                     for (let c of candidates) {
                         const num = parseFloat(c.val);
                         if (!isNaN(num)) nums.push({ num, idx: c.idx });
                     }
-                    // Ordena por índice
                     nums.sort((a, b) => a.idx - b.idx);
-                    // Pega os dois primeiros que não sejam cellId
                     for (let n of nums) {
                         if (n.num !== cellId) {
                             if (lat === null && n.num >= -90 && n.num <= 90) lat = n.num;
@@ -124,24 +131,20 @@ function processarArquivo(db, filePath) {
                 }
             }
 
-            // Se ainda não temos todos os dados, ignora
             if (cellId === null || lat === null || lon === null) {
                 ignoradas++;
-                continue;
+                return;
             }
 
-            // Extrai range (opcional) – tenta a quarta coluna
+            // Range
             let range = 1500;
             if (cols.length > 3) {
                 const r = parseInt(cols[3]);
                 if (!isNaN(r) && r > 0) range = r;
             }
 
-            // MCC e MNC padrão (724/5) – podem ser extraídos de outras colunas se existirem
-            let mcc = 724;
-            let mnc = 5;
-            let lac = 1234;
-            // Tenta encontrar mcc, mnc, lac entre as colunas
+            // MCC/MNC/LAC (opcional)
+            let mcc = 724, mnc = 5, lac = 1234;
             for (let c of cols) {
                 const num = parseInt(c);
                 if (!isNaN(num)) {
@@ -151,8 +154,8 @@ function processarArquivo(db, filePath) {
                 }
             }
 
-            // Insere no banco
-            stmt.run(
+            // Monta os parâmetros
+            const params = [
                 'GSM',
                 mcc,
                 mnc,
@@ -167,26 +170,57 @@ function processarArquivo(db, filePath) {
                 Math.floor(Date.now() / 1000),
                 Math.floor(Date.now() / 1000),
                 -71
-            );
-            importadas++;
-        }
+            ];
 
-        stmt.finalize();
-        resolve({ importadas, ignoradas });
+            linhasBuffer.push(params);
+            if (linhasBuffer.length >= batchSize) {
+                flushBuffer();
+            }
+        });
+
+        rl.on('close', () => {
+            flushBuffer(); // último lote
+            stmt.finalize();
+            resolve({ importadas, ignoradas });
+        });
+
+        rl.on('error', (err) => {
+            reject(err);
+        });
     });
 }
 
-/**
- * Função principal
- */
 async function main() {
-    log('=== IMPORTADOR DE DADOS (CORRIGIDO – SEM FILTRO DE *) ===');
-    const files = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('coleta_campo'));
-    log(`Encontrados ${files.length} arquivos.`);
+    log('=== IMPORTADOR DE DADOS (STREAM + LOTE) ===');
+    log(`Arquivo alvo: ${TARGET_FILE}`);
 
+    // Lista todos os arquivos que começam com 'coleta_campo'
+    let allFiles = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('coleta_campo'));
+    log(`Encontrados ${allFiles.length} arquivos.`);
+
+    // Se o arquivo alvo existir, processa apenas ele
+    let filesToProcess = [];
+    if (allFiles.includes(TARGET_FILE)) {
+        filesToProcess = [TARGET_FILE];
+        log(`Processando apenas o arquivo alvo: ${TARGET_FILE}`);
+    } else {
+        log(`Arquivo alvo não encontrado. Processando todos os ${allFiles.length} arquivos.`);
+        filesToProcess = allFiles;
+    }
+
+    // Abre o banco de dados
     const db = new sqlite3.Database(DB_TOWERS);
     db.run('PRAGMA journal_mode=WAL');
     db.run('PRAGMA secure_delete=ON');
+    // Cria a tabela se não existir
+    db.run(`
+        CREATE TABLE IF NOT EXISTS cell_towers (
+            radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
+            cell INTEGER PRIMARY KEY, unit INTEGER, lon REAL, lat REAL,
+            range INTEGER, samples INTEGER, changeable INTEGER,
+            created INTEGER, updated INTEGER, averageSignal INTEGER
+        )
+    `);
 
     // Contagem antes
     const antes = await new Promise((resolve) => {
@@ -197,13 +231,17 @@ async function main() {
     let totalImportadas = 0;
     let totalIgnoradas = 0;
 
-    for (const file of files) {
+    for (const file of filesToProcess) {
         const filePath = path.join(DATA_DIR, file);
         log(`Processando: ${file}...`);
-        const result = await processarArquivo(db, filePath);
-        log(`  -> ${result.importadas} importadas, ${result.ignoradas} ignoradas.`);
-        totalImportadas += result.importadas;
-        totalIgnoradas += result.ignoradas;
+        try {
+            const result = await processarArquivoStream(db, filePath, file);
+            log(`  -> ${result.importadas} importadas, ${result.ignoradas} ignoradas.`);
+            totalImportadas += result.importadas;
+            totalIgnoradas += result.ignoradas;
+        } catch (err) {
+            log(`  ERRO ao processar ${file}: ${err.message}`);
+        }
     }
 
     // Depois
@@ -220,6 +258,6 @@ async function main() {
 }
 
 main().catch(err => {
-    console.error('[COLETA-CAMPO] ERRO:', err.message);
+    console.error('[COLETA-CAMPO] ERRO FATAL:', err.message);
     process.exit(1);
 });
