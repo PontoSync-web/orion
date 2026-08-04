@@ -1,8 +1,10 @@
 // ============================================================
 // ARQUIVO: scripts/import-teleco.js
-// VERSÃO: 1.0
+// VERSÃO: 1.1 (Corrigida para evitar corrupção)
 // DATA: 04/08/2026
-// MOTIVO: Importar base nacional de ERBs da Teleco/Anatel
+// MOTIVO: Aumentar robustez contra SQLITE_CORRUPT.
+//         Desativa WAL, usa synchronous NORMAL,
+//         reduz batch para 500 e verifica integridade.
 // ============================================================
 
 const fs = require('fs');
@@ -12,15 +14,40 @@ const readline = require('readline');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_TOWERS = path.join(DATA_DIR, 'cell_towers.db');
-
-// Nome padrão do arquivo – pode ser alterado via variável de ambiente
 const FILE_NAME = process.env.TELECO_FILE || 'erbs_brasil.csv';
+const BATCH_SIZE = 500; // Reduzido para evitar sobrecarga
 
 function log(msg) {
     console.log(`[IMPORT-TELECO] ${msg}`);
 }
 
-async function importarArquivo(db, filePath, batchSize = 1000) {
+// Remove o banco antigo se existir (para garantir estado limpo)
+function resetDatabase() {
+    if (fs.existsSync(DB_TOWERS)) {
+        log('Removendo banco antigo (pode estar corrompido)...');
+        try {
+            fs.unlinkSync(DB_TOWERS);
+        } catch (err) {
+            log('Erro ao remover banco: ' + err.message);
+        }
+    }
+}
+
+// Verifica se o banco é válido
+function checkDatabaseIntegrity(db) {
+    return new Promise((resolve) => {
+        db.get('PRAGMA integrity_check', (err, row) => {
+            if (err || !row || row.integrity_check !== 'ok') {
+                log('Integridade do banco falhou: ' + (err ? err.message : 'corrompido'));
+                resolve(false);
+            } else {
+                resolve(true);
+            }
+        });
+    });
+}
+
+async function importarArquivo(db, filePath, batchSize = BATCH_SIZE) {
     return new Promise((resolve, reject) => {
         const rl = readline.createInterface({
             input: fs.createReadStream(filePath, { encoding: 'utf8' }),
@@ -40,7 +67,7 @@ async function importarArquivo(db, filePath, batchSize = 1000) {
             ).join(',');
             const query = `INSERT OR REPLACE INTO cell_towers (radio, mcc, net, area, cell, unit, lon, lat, range, samples, changeable, created, updated, averageSignal) VALUES ${values};`;
             try {
-                db.exec('BEGIN TRANSACTION;');
+                db.exec('BEGIN IMMEDIATE;');
                 db.exec(query);
                 db.exec('COMMIT;');
                 importadas += linhasBuffer.length;
@@ -151,6 +178,7 @@ async function importarArquivo(db, filePath, batchSize = 1000) {
 
 async function main() {
     log('=== IMPORTADOR DE ERBs (TELECO/ANATEL) ===');
+    
     const files = fs.readdirSync(DATA_DIR).filter(f => f === FILE_NAME);
     if (files.length === 0) {
         log(`Arquivo "${FILE_NAME}" não encontrado em ${DATA_DIR}.`);
@@ -161,22 +189,39 @@ async function main() {
     const filePath = path.join(DATA_DIR, files[0]);
     log(`Processando: ${files[0]}`);
 
+    // Remove banco antigo para evitar corrupção
+    resetDatabase();
+
     const db = new sqlite3.Database(DB_TOWERS);
-    db.run('PRAGMA journal_mode=WAL');
+    // Desativa WAL e define synchronous para NORMAL (equilíbrio entre performance e integridade)
+    db.run('PRAGMA journal_mode=DELETE');
+    db.run('PRAGMA synchronous=NORMAL');
     db.run('PRAGMA secure_delete=ON');
 
-    db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
-        radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
-        cell INTEGER PRIMARY KEY, unit INTEGER, lon REAL, lat REAL,
-        range INTEGER, samples INTEGER, changeable INTEGER,
-        created INTEGER, updated INTEGER, averageSignal INTEGER
-    )`, (err) => {
-        if (err) {
-            log('Erro ao criar tabela: ' + err.message);
-            db.close();
-            process.exit(1);
-        }
+    // Cria a tabela
+    await new Promise((resolve, reject) => {
+        db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
+            radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
+            cell INTEGER PRIMARY KEY, unit INTEGER, lon REAL, lat REAL,
+            range INTEGER, samples INTEGER, changeable INTEGER,
+            created INTEGER, updated INTEGER, averageSignal INTEGER
+        )`, (err) => {
+            if (err) {
+                log('Erro ao criar tabela: ' + err.message);
+                reject(err);
+            } else {
+                resolve();
+            }
+        });
     });
+
+    // Verifica integridade inicial
+    const integro = await checkDatabaseIntegrity(db);
+    if (!integro) {
+        log('Banco de dados corrompido. Abortando.');
+        db.close();
+        process.exit(1);
+    }
 
     const antes = await new Promise((resolve) => {
         db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
@@ -193,6 +238,14 @@ async function main() {
     log(`Depois: ${depois}`);
     log(`Importadas: ${result.importadas}`);
     log(`Ignoradas: ${result.ignoradas}`);
+
+    // Verifica integridade final
+    const integroFinal = await checkDatabaseIntegrity(db);
+    if (!integroFinal) {
+        log('⚠️ ALERTA: Banco de dados corrompido após importação. Tente novamente com batch menor.');
+    } else {
+        log('✅ Integridade do banco verificada com sucesso.');
+    }
 
     db.close();
 }
