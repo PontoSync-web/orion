@@ -1,131 +1,225 @@
 // ============================================================
 // ARQUIVO: scripts/import-coleta-campo.js
-// DATA: 31 de Julho de 2026
-// MOTIVO: Filtro reforçado para eliminar linhas com '*'.
-//         Só processa linhas com coordenadas numéricas válidas.
+// VERSÃO: 2.1 (Corrigida – sem filtro de asterisco)
+// DATA: 04/08/2026
+// MOTIVO: Removeu a lógica que descartava linhas com "*".
+//         Agora descarta apenas cabeçalhos e linhas vazias.
+//         Detecta separador automaticamente (; ou ,).
 // ============================================================
 
 const fs = require('fs');
 const path = require('path');
-const readline = require('readline');
 const sqlite3 = require('sqlite3').verbose();
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
-const DB_PATH = path.join(DATA_DIR, 'cell_towers.db');
+const DB_TOWERS = path.join(DATA_DIR, 'cell_towers.db');
 
-function log(msg) { console.log('[COLETA-CAMPO] ' + msg); }
-
-function parseNumeroBr(valor) {
-    if (!valor || valor.trim() === '' || valor.trim() === '*') return NaN;
-    let limpo = valor.trim();
-    if (limpo.includes(',') && limpo.includes('.')) {
-        limpo = limpo.replace(/\./g, '').replace(',', '.');
-    } else if (limpo.includes(',')) {
-        limpo = limpo.replace(',', '.');
-    }
-    return parseFloat(limpo);
+function log(msg) {
+    console.log(`[COLETA-CAMPO] ${msg}`);
 }
 
-async function importarArquivo(arquivoPath, db, stmt) {
+/**
+ * Processa um único arquivo CSV e insere as torres no banco de dados.
+ * @param {sqlite3.Database} db - Conexão com o banco cell_towers.db
+ * @param {string} filePath - Caminho completo do arquivo CSV
+ * @returns {Promise<{importadas: number, ignoradas: number}>}
+ */
+function processarArquivo(db, filePath) {
     return new Promise((resolve) => {
-        let count = 0;
+        const content = fs.readFileSync(filePath, 'utf8');
+        const lines = content.split(/\r?\n/);
+        let importadas = 0;
         let ignoradas = 0;
-        let header = true;
 
-        const rl = readline.createInterface({ input: fs.createReadStream(arquivoPath) });
+        if (lines.length === 0) {
+            resolve({ importadas, ignoradas });
+            return;
+        }
 
-        rl.on('line', (line) => {
-            if (header) { header = false; return; }
+        // Detecta o separador: se a primeira linha tiver ';' usa ponto-e-vírgula, senão vírgula
+        const firstLine = lines[0] || '';
+        const separator = firstLine.includes(';') ? ';' : ',';
 
-            const cols = line.split('\t');
-            if (cols.length < 15) { ignoradas++; return; }
+        // Pula cabeçalho se a primeira linha parecer cabeçalho (contém 'cell', 'lat', etc.)
+        let startIndex = 0;
+        const lower = firstLine.toLowerCase();
+        if (lower.includes('cell') || lower.includes('lat') || lower.includes('lon') || lower.includes('longitude')) {
+            startIndex = 1;
+            log(`  (cabeçalho identificado, pulando linha 1)`);
+        }
 
-            // FILTRO REFORÇADO: Verifica se as colunas de Latitude (9) e Longitude (10) são válidas
-            const latStr = cols[9]?.trim() || '';
-            const lonStr = cols[10]?.trim() || '';
-            
-            // ELIMINA asteriscos e outros valores não numéricos
-            if (latStr === '*' || lonStr === '*' || latStr === '' || lonStr === '') {
+        // Prepara a instrução SQL
+        const stmt = db.prepare(`
+            INSERT OR REPLACE INTO cell_towers 
+            (radio, mcc, net, area, cell, unit, lon, lat, range, samples, changeable, created, updated, averageSignal)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        for (let i = startIndex; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) {
                 ignoradas++;
-                return;
+                continue;
             }
 
-            const lat = parseNumeroBr(cols[9]);
-            const lon = parseNumeroBr(cols[10]);
+            const cols = line.split(separator);
+            if (cols.length < 3) {
+                ignoradas++;
+                continue;
+            }
 
-            if (isNaN(lat) || isNaN(lon)) { ignoradas++; return; }
+            // Tenta extrair cellId, lat, lon
+            // Estratégia: procurar números em cada coluna
+            let cellId = null;
+            let lat = null;
+            let lon = null;
 
-            const numEstacao = parseInt(cols[2]) || 0;
-            const cellId = numEstacao > 0 ? numEstacao : (208000000 + count);
+            // Primeiro, tenta interpretar as três primeiras colunas como [cell, lat, lon]
+            const testCell = parseInt(cols[0]);
+            const testLat = parseFloat(cols[1]);
+            const testLon = parseFloat(cols[2]);
 
-            const emissao = cols[14]?.trim() || '';
-            let radio = 'LTE';
-            let range = 5000;
-            if (emissao.includes('200KG7W')) { radio = 'GSM'; range = 8000; }
-            else if (emissao.includes('5M00')) { radio = 'UMTS'; range = 5000; }
-            else if (emissao.includes('20M0')) { radio = 'LTE'; range = 3000; }
+            if (!isNaN(testCell) && testCell > 0 && !isNaN(testLat) && !isNaN(testLon)) {
+                cellId = testCell;
+                lat = testLat;
+                lon = testLon;
+            } else {
+                // Se falhar, varre todas as colunas para encontrar um número que possa ser cell, lat, lon
+                // Identifica cell: número inteiro > 0
+                // Identifica lat: número entre -90 e 90
+                // Identifica lon: número entre -180 e 180
+                let candidates = cols.map((v, idx) => ({ val: v.trim(), idx }));
+                for (let c of candidates) {
+                    const num = parseFloat(c.val);
+                    if (!isNaN(num)) {
+                        if (Number.isInteger(num) && num > 0 && cellId === null) {
+                            // Pode ser cellId
+                            // Verifica se não é um código de área (lac) ou mcc
+                            if (num < 1000000000) {
+                                cellId = num;
+                            }
+                        } else if (num >= -90 && num <= 90 && lat === null) {
+                            lat = num;
+                        } else if (num >= -180 && num <= 180 && lon === null) {
+                            lon = num;
+                        }
+                    }
+                }
+                // Se ainda não encontrou lat/lon, tenta as duas primeiras colunas numéricas (fora cell)
+                if (lat === null || lon === null) {
+                    let nums = [];
+                    for (let c of candidates) {
+                        const num = parseFloat(c.val);
+                        if (!isNaN(num)) nums.push({ num, idx: c.idx });
+                    }
+                    // Ordena por índice
+                    nums.sort((a, b) => a.idx - b.idx);
+                    // Pega os dois primeiros que não sejam cellId
+                    for (let n of nums) {
+                        if (n.num !== cellId) {
+                            if (lat === null && n.num >= -90 && n.num <= 90) lat = n.num;
+                            else if (lon === null && n.num >= -180 && n.num <= 180) lon = n.num;
+                        }
+                    }
+                }
+            }
 
-            const prestadora = cols[0]?.trim()?.toUpperCase() || '';
+            // Se ainda não temos todos os dados, ignora
+            if (cellId === null || lat === null || lon === null) {
+                ignoradas++;
+                continue;
+            }
+
+            // Extrai range (opcional) – tenta a quarta coluna
+            let range = 1500;
+            if (cols.length > 3) {
+                const r = parseInt(cols[3]);
+                if (!isNaN(r) && r > 0) range = r;
+            }
+
+            // MCC e MNC padrão (724/5) – podem ser extraídos de outras colunas se existirem
+            let mcc = 724;
             let mnc = 5;
-            if (prestadora.includes('VIVO') || prestadora.includes('TELEFONICA')) mnc = 6;
-            else if (prestadora.includes('TIM')) mnc = 2;
-            else if (prestadora.includes('CLARO')) mnc = 5;
-            else if (prestadora.includes('OI')) mnc = 31;
+            let lac = 1234;
+            // Tenta encontrar mcc, mnc, lac entre as colunas
+            for (let c of cols) {
+                const num = parseInt(c);
+                if (!isNaN(num)) {
+                    if (num >= 100 && num <= 999 && mcc === 724) mcc = num;
+                    else if (num >= 1 && num <= 99 && mnc === 5) mnc = num;
+                    else if (num >= 1 && num <= 65535 && lac === 1234) lac = num;
+                }
+            }
 
-            const area = Math.floor(cellId / 1000);
+            // Insere no banco
+            stmt.run(
+                'GSM',
+                mcc,
+                mnc,
+                lac,
+                cellId,
+                0,
+                lon,
+                lat,
+                range,
+                100,
+                1,
+                Math.floor(Date.now() / 1000),
+                Math.floor(Date.now() / 1000),
+                -71
+            );
+            importadas++;
+        }
 
-            stmt.run([radio, 724, mnc, area, cellId, 0, lon, lat, range, 100, 1, 1609459200, 1609459200, -71]);
-            count++;
-        });
-
-        rl.on('close', () => resolve({ count, ignoradas }));
+        stmt.finalize();
+        resolve({ importadas, ignoradas });
     });
 }
 
+/**
+ * Função principal
+ */
 async function main() {
-    log('=== IMPORTADOR DE DADOS (ASTERISCOS ELIMINADOS) ===');
-    const arquivos = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('coleta_campo') && f.endsWith('.csv'));
-    if (arquivos.length === 0) { log('Nenhum arquivo encontrado.'); process.exit(0); }
-    log(`Encontrados ${arquivos.length} arquivos.`);
+    log('=== IMPORTADOR DE DADOS (CORRIGIDO – SEM FILTRO DE *) ===');
+    const files = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('coleta_campo'));
+    log(`Encontrados ${files.length} arquivos.`);
 
-    const db = new sqlite3.Database(DB_PATH);
+    const db = new sqlite3.Database(DB_TOWERS);
     db.run('PRAGMA journal_mode=WAL');
-    db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
-        radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
-        cell INTEGER PRIMARY KEY, unit INTEGER,
-        lon REAL, lat REAL, range INTEGER,
-        samples INTEGER, changeable INTEGER,
-        created INTEGER, updated INTEGER, averageSignal INTEGER
-    )`);
+    db.run('PRAGMA secure_delete=ON');
 
-    const antes = await new Promise((resolve) => db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0)));
-    log(`Torres antes: ${antes.toLocaleString()}`);
+    // Contagem antes
+    const antes = await new Promise((resolve) => {
+        db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
+    });
+    log(`Torres antes: ${antes}`);
 
-    let totalImportadas = 0, totalIgnoradas = 0;
-    db.run('BEGIN TRANSACTION');
-    const stmt = db.prepare('INSERT OR REPLACE INTO cell_towers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+    let totalImportadas = 0;
+    let totalIgnoradas = 0;
 
-    for (const arquivo of arquivos) {
-        const arquivoPath = path.join(DATA_DIR, arquivo);
-        log(`Processando: ${arquivo}...`);
-        const { count, ignoradas } = await importarArquivo(arquivoPath, db, stmt);
-        totalImportadas += count;
-        totalIgnoradas += ignoradas;
-        log(`  -> ${count.toLocaleString()} importadas, ${ignoradas.toLocaleString()} ignoradas (com *).`);
+    for (const file of files) {
+        const filePath = path.join(DATA_DIR, file);
+        log(`Processando: ${file}...`);
+        const result = await processarArquivo(db, filePath);
+        log(`  -> ${result.importadas} importadas, ${result.ignoradas} ignoradas.`);
+        totalImportadas += result.importadas;
+        totalIgnoradas += result.ignoradas;
     }
 
-    db.run('COMMIT'); stmt.finalize();
-    db.run('CREATE INDEX IF NOT EXISTS idx_cell ON cell_towers(cell)');
-    db.run('CREATE INDEX IF NOT EXISTS idx_lat_lon ON cell_towers(lat, lon)');
+    // Depois
+    const depois = await new Promise((resolve) => {
+        db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
+    });
+    log(`=== IMPORTAÇÃO CONCLUÍDA ===`);
+    log(`Antes: ${antes}`);
+    log(`Depois: ${depois}`);
+    log(`Total importadas: ${totalImportadas}`);
+    log(`Total ignoradas: ${totalIgnoradas}`);
 
-    const depois = await new Promise((resolve) => db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0)));
     db.close();
-
-    log('=== IMPORTAÇÃO CONCLUÍDA ===');
-    log(`Antes: ${antes.toLocaleString()}`);
-    log(`Depois: ${depois.toLocaleString()}`);
-    log(`Total importadas: ${totalImportadas.toLocaleString()}`);
-    process.exit(0);
 }
 
-main();
+main().catch(err => {
+    console.error('[COLETA-CAMPO] ERRO:', err.message);
+    process.exit(1);
+});
