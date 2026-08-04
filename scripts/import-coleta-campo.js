@@ -1,7 +1,10 @@
 // ============================================================
 // ARQUIVO: scripts/import-coleta-campo.js
-// VERSÃO: 3.1 (Transações corrigidas, busca apenas alvo)
+// VERSÃO: 3.2 (Processa todos os arquivos, stream + lote)
 // DATA: 04/08/2026
+// MOTIVO: Remove dependência de arquivo específico.
+//         Processa todos os coleta_campo*.csv.
+//         Sem filtro de asterisco.
 // ============================================================
 
 const fs = require('fs');
@@ -11,9 +14,6 @@ const readline = require('readline');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_TOWERS = path.join(DATA_DIR, 'cell_towers.db');
-
-// Nome exato do arquivo alvo – altere se necessário
-const TARGET_FILE = 'coleta_campo - Copia-039.csv';
 
 function log(msg) {
     console.log(`[COLETA-CAMPO] ${msg}`);
@@ -55,7 +55,6 @@ function processarArquivoStream(db, filePath, batchSize = 5000) {
                 importadas += linhasBuffer.length;
                 linhasBuffer = [];
             } catch (err) {
-                // Rollback em caso de erro
                 if (inTransaction) {
                     db.run('ROLLBACK');
                     inTransaction = false;
@@ -174,7 +173,7 @@ function processarArquivoStream(db, filePath, batchSize = 5000) {
 
         rl.on('close', () => {
             try {
-                flushBuffer(); // último lote
+                flushBuffer();
                 stmt.finalize();
                 resolve({ importadas, ignoradas });
             } catch (err) {
@@ -191,18 +190,14 @@ function processarArquivoStream(db, filePath, batchSize = 5000) {
 
 async function main() {
     log('=== IMPORTADOR DE DADOS (STREAM + LOTE) ===');
-    log(`Arquivo alvo: ${TARGET_FILE}`);
+    log('Processando TODOS os arquivos coleta_campo*.csv');
 
-    // Lista todos os arquivos
-    let allFiles = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('coleta_campo'));
-    log(`Encontrados ${allFiles.length} arquivos.`);
+    const files = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('coleta_campo'));
+    log(`Encontrados ${files.length} arquivos.`);
 
-    // Verifica se o alvo existe
-    if (!allFiles.includes(TARGET_FILE)) {
-        log(`❌ Arquivo alvo "${TARGET_FILE}" NÃO ENCONTRADO!`);
-        log(`Arquivos disponíveis: ${allFiles.join(', ')}`);
-        log(`Abortando. Verifique o nome do arquivo no repositório.`);
-        process.exit(1);
+    if (files.length === 0) {
+        log('Nenhum arquivo encontrado. Abortando.');
+        process.exit(0);
     }
 
     const db = new sqlite3.Database(DB_TOWERS);
@@ -222,16 +217,20 @@ async function main() {
     });
     log(`Torres antes: ${antes}`);
 
-    // Processa APENAS o arquivo alvo
-    const filePath = path.join(DATA_DIR, TARGET_FILE);
-    log(`Processando: ${TARGET_FILE}...`);
-    try {
-        const result = await processarArquivoStream(db, filePath);
-        log(`  -> ${result.importadas} importadas, ${result.ignoradas} ignoradas.`);
-    } catch (err) {
-        log(`  ERRO: ${err.message}`);
-        db.close();
-        process.exit(1);
+    let totalImportadas = 0;
+    let totalIgnoradas = 0;
+
+    for (const file of files) {
+        const filePath = path.join(DATA_DIR, file);
+        log(`Processando: ${file}...`);
+        try {
+            const result = await processarArquivoStream(db, filePath);
+            log(`  -> ${result.importadas} importadas, ${result.ignoradas} ignoradas.`);
+            totalImportadas += result.importadas;
+            totalIgnoradas += result.ignoradas;
+        } catch (err) {
+            log(`  ERRO: ${err.message}`);
+        }
     }
 
     const depois = await new Promise((resolve) => {
@@ -240,7 +239,8 @@ async function main() {
     log(`=== IMPORTAÇÃO CONCLUÍDA ===`);
     log(`Antes: ${antes}`);
     log(`Depois: ${depois}`);
-    log(`Total importadas: ${depois - antes}`);
+    log(`Total importadas: ${totalImportadas}`);
+    log(`Total ignoradas: ${totalIgnoradas}`);
 
     db.close();
 }
