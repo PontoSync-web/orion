@@ -1,285 +1,425 @@
 // ============================================================
 // ARQUIVO: src/protocolo-hermes.js
-// DATA: 28 de Julho de 2026
-// HORÁRIO: 17:45 (Horário Oficial — Salvador, Bahia, Brasil)
-// FUSO: América do Sul / Brasil / Bahia (GMT-3)
-// MOTIVO: v4.1 — Três IAs conectadas e configuradas.
-//         Claude (Anthropic), Grok (xAI), Gemini (Google).
-//         Requisições HTTP reais. Nenhuma simulação.
-//         Cobertura nacional: 27 capitais + 15 RMs.
+// VERSÃO: 6.0 – SUPER REDE DE IAs (20+ modelos)
+// DATA: 04/08/2026
+// AUTOR: Eng Souza
+// MOTIVO: Integrar Qwen, GLM, HappyHorse, Wan, FunAudio,
+//         CosyVoice, TongYi, Kimi e outros para máxima eficiência.
 // ============================================================
 
-const crypto = require('crypto');
-const https = require('https');
+const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 dias
+const TIMEOUT = 30000; // 30 segundos por IA
+const MAX_RETRIES = 2;
 
 class ProtocoloHermes {
     constructor() {
         this.sessoes = new Map();
         this.cacheRegional = new Map();
-        this.timeoutSessao = 30 * 60 * 1000;
-        this.timeoutCache = 60 * 60 * 1000;
 
-        // Tokens das IAs — 28/07/2026 17:45 — Todos configurados
-        this.tokens = {
-            claude: process.env.CLAUDE_API_KEY || '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',
-            grok: process.env.GROK_API_KEY || 'xai-SqyPV8deksvlCP0KwmrJDzKxVTT8S3ZcOYGifAfvfInf9iZP2I7xypUrRTPtOVzun5uP0b8gEqRIOOV1',
-            gemini: process.env.GEMINI_API_KEY || 'AQ.Ab8RN6JDjHDNmqT97LELJsA4fatmF68J7TmhiBTowjRIJoeNhg'
-        };
-
-        this.fontesIA = [
+        // Lista gigante de IAs com seus respectivos endpoints e chaves (via env)
+        this.ias = [
+            // ===== IAs principais (já existentes) =====
             {
-                nome: 'Claude (Anthropic)',
-                apiUrl: 'https://api.anthropic.com/v1/messages',
-                apiKey: this.tokens.claude,
-                timeoutBase: 15000,
-                montarPayload: (regiaoAlvo, cidades) => ({
-                    model: 'claude-3-5-sonnet-20241022',
-                    max_tokens: 1024,
-                    messages: [{
-                        role: 'user',
-                        content: `EMERGÊNCIA OPERACIONAL: Necessito de dados de ERBs (torres de celular) para geolocalização no Brasil. Região prioritária: ${regiaoAlvo}. Cidades próximas: ${cidades.join(', ')}. Forneça APENAS um JSON válido com este formato: {"erbs":[{"cell_id":208020001,"lat":-12.9714,"lon":-38.5016,"range":5000,"mcc":724,"mnc":5,"lac":100,"operadora":"Claro","cidade":"Salvador","uf":"BA"}]}. Gere 5 torres reais baseadas em dados públicos da Anatel e OpenCellID. Não inclua texto fora do JSON.`
-                    }]
-                }),
-                processarResposta: (data) => {
-                    try {
-                        const content = data?.content?.[0]?.text || '';
-                        const jsonMatch = content.match(/\{[\s\S]*\}/);
-                        if (jsonMatch) {
-                            const parsed = JSON.parse(jsonMatch[0]);
-                            return parsed.erbs || [];
-                        }
-                    } catch (e) {}
-                    return [];
-                }
+                nome: 'Claude',
+                url: process.env.CLAUDE_API_URL || 'https://api.anthropic.com/v1/messages',
+                key: process.env.CLAUDE_API_KEY,
+                modelo: 'claude-3-sonnet-20240229',
+                formato: 'anthropic'
             },
             {
-                nome: 'Grok (xAI)',
-                apiUrl: 'https://api.x.ai/v1/chat/completions',
-                apiKey: this.tokens.grok,
-                timeoutBase: 12000,
-                montarPayload: (regiaoAlvo, cidades) => ({
-                    model: 'grok-2-1212',
-                    messages: [{
-                        role: 'user',
-                        content: `Emergência: Preciso de dados reais de torres de celular no Brasil. Região: ${regiaoAlvo}. Cidades: ${cidades.join(', ')}. Retorne APENAS JSON: {"erbs":[{"cell_id":208020001,"lat":-12.9714,"lon":-38.5016,"range":5000,"mcc":724,"mnc":5,"operadora":"Claro","cidade":"Salvador"}]}. Use dados da Anatel. 5 torres. Apenas JSON.`
-                    }]
-                }),
-                processarResposta: (data) => {
-                    try {
-                        const content = data?.choices?.[0]?.message?.content || '';
-                        const jsonMatch = content.match(/\{[\s\S]*\}/);
-                        if (jsonMatch) {
-                            const parsed = JSON.parse(jsonMatch[0]);
-                            return parsed.erbs || [];
-                        }
-                    } catch (e) {}
-                    return [];
-                }
+                nome: 'Grok',
+                url: process.env.GROK_API_URL || 'https://api.x.ai/v1/chat/completions',
+                key: process.env.GROK_API_KEY,
+                modelo: 'grok-1',
+                formato: 'openai'
             },
             {
-                nome: 'Gemini (Google)',
-                apiUrl: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent',
-                apiKey: this.tokens.gemini,
-                timeoutBase: 10000,
-                montarPayload: (regiaoAlvo, cidades) => ({
-                    contents: [{
-                        parts: [{
-                            text: `Emergência operacional: Necessito dados de ERBs brasileiras para geolocalização. Região prioritária: ${regiaoAlvo}. Cidades próximas: ${cidades.join(', ')}. Retorne exclusivamente um JSON com 5 torres reais (dados Anatel/OpenCellID) neste formato: {"erbs":[{"cell_id":208020001,"lat":-12.9714,"lon":-38.5016,"range":5000,"mcc":724,"mnc":5,"operadora":"Claro","cidade":"Salvador","uf":"BA"}]}. Nenhum texto fora do JSON.`
-                        }]
-                    }]
-                }),
-                processarResposta: (data) => {
-                    try {
-                        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-                        const jsonMatch = text.match(/\{[\s\S]*\}/);
-                        if (jsonMatch) {
-                            const parsed = JSON.parse(jsonMatch[0]);
-                            return parsed.erbs || [];
+                nome: 'Gemini',
+                url: process.env.GEMINI_API_URL || 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent',
+                key: process.env.GEMINI_API_KEY,
+                modelo: 'gemini-1.5-pro',
+                formato: 'gemini'
+            },
+            {
+                nome: 'OpenAI',
+                url: process.env.OPENAI_API_URL || 'https://api.openai.com/v1/chat/completions',
+                key: process.env.OPENAI_API_KEY,
+                modelo: 'gpt-4o',
+                formato: 'openai'
+            },
+            {
+                nome: 'DeepSeek',
+                url: process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1/chat/completions',
+                key: process.env.DEEPSEEK_API_KEY,
+                modelo: 'deepseek-chat',
+                formato: 'openai'
+            },
+            {
+                nome: 'Mistral',
+                url: process.env.MISTRAL_API_URL || 'https://api.mistral.ai/v1/chat/completions',
+                key: process.env.MISTRAL_API_KEY,
+                modelo: 'mistral-large-latest',
+                formato: 'openai'
+            },
+            {
+                nome: 'Cohere',
+                url: process.env.COHERE_API_URL || 'https://api.cohere.ai/v1/chat',
+                key: process.env.COHERE_API_KEY,
+                modelo: 'command-r-plus',
+                formato: 'cohere'
+            },
+
+            // ===== Novas IAs solicitadas =====
+            {
+                nome: 'Qwen3.8-Máx',
+                url: process.env.QWEN_API_URL || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation',
+                key: process.env.QWEN_API_KEY || process.env.ALIBABA_API_KEY,
+                modelo: 'qwen-max',
+                formato: 'dashscope'
+            },
+            {
+                nome: 'happyhorse-1.1-i2v',
+                url: process.env.HAPPYHORSE_API_URL || 'https://api.happyhorse.ai/v1/i2v',
+                key: process.env.HAPPYHORSE_API_KEY,
+                modelo: 'happyhorse-1.1-i2v',
+                formato: 'openai'
+            },
+            {
+                nome: 'happyhorse-1.1-t2v',
+                url: process.env.HAPPYHORSE_API_URL || 'https://api.happyhorse.ai/v1/t2v',
+                key: process.env.HAPPYHORSE_API_KEY,
+                modelo: 'happyhorse-1.1-t2v',
+                formato: 'openai'
+            },
+            {
+                nome: 'happyhorse-1.1-r2v',
+                url: process.env.HAPPYHORSE_API_URL || 'https://api.happyhorse.ai/v1/r2v',
+                key: process.env.HAPPYHORSE_API_KEY,
+                modelo: 'happyhorse-1.1-r2v',
+                formato: 'openai'
+            },
+            {
+                nome: 'glm-5.2-fast-preview',
+                url: process.env.GLM_API_URL || 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+                key: process.env.GLM_API_KEY,
+                modelo: 'glm-5.2-fast-preview',
+                formato: 'openai'
+            },
+            {
+                nome: 'glm-5.2',
+                url: process.env.GLM_API_URL || 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+                key: process.env.GLM_API_KEY,
+                modelo: 'glm-5.2',
+                formato: 'openai'
+            },
+            {
+                nome: 'wan2.7-t2v',
+                url: process.env.WAN_API_URL || 'https://api.wan.ai/v1/t2v',
+                key: process.env.WAN_API_KEY,
+                modelo: 'wan2.7-t2v',
+                formato: 'openai'
+            },
+            {
+                nome: 'wan2.7-i2v',
+                url: process.env.WAN_API_URL || 'https://api.wan.ai/v1/i2v',
+                key: process.env.WAN_API_KEY,
+                modelo: 'wan2.7-i2v',
+                formato: 'openai'
+            },
+            {
+                nome: 'qwen3.5-omni-plus',
+                url: process.env.QWEN_API_URL || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation',
+                key: process.env.QWEN_API_KEY || process.env.ALIBABA_API_KEY,
+                modelo: 'qwen3.5-omni-plus',
+                formato: 'dashscope'
+            },
+            {
+                nome: 'qwen3.6-max-preview',
+                url: process.env.QWEN_API_URL || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation',
+                key: process.env.QWEN_API_KEY || process.env.ALIBABA_API_KEY,
+                modelo: 'qwen3.6-max-preview',
+                formato: 'dashscope'
+            },
+            {
+                nome: 'fun-asr-realtime',
+                url: process.env.FUNASR_API_URL || 'https://api.funasr.com/v1/realtime',
+                key: process.env.FUNASR_API_KEY,
+                modelo: 'fun-asr-realtime',
+                formato: 'openai'
+            },
+            {
+                nome: 'cosyvoice-v3-plus',
+                url: process.env.COSYVOICE_API_URL || 'https://api.cosyvoice.com/v3/plus',
+                key: process.env.COSYVOICE_API_KEY,
+                modelo: 'cosyvoice-v3-plus',
+                formato: 'openai'
+            },
+            {
+                nome: 'voice-enrollment',
+                url: process.env.VOICE_ENROLL_API_URL || 'https://api.voiceenroll.com/v1',
+                key: process.env.VOICE_ENROLL_API_KEY,
+                modelo: 'voice-enrollment',
+                formato: 'openai'
+            },
+            {
+                nome: 'fun-asr-mtl',
+                url: process.env.FUNASR_API_URL || 'https://api.funasr.com/v1/mtl',
+                key: process.env.FUNASR_API_KEY,
+                modelo: 'fun-asr-mtl',
+                formato: 'openai'
+            },
+            {
+                nome: 'z-image-turbo',
+                url: process.env.ZIMAGE_API_URL || 'https://api.zimage.com/turbo',
+                key: process.env.ZIMAGE_API_KEY,
+                modelo: 'z-image-turbo',
+                formato: 'openai'
+            },
+            {
+                nome: 'tongyi-embedding-vision-plus',
+                url: process.env.TONGYI_API_URL || 'https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding',
+                key: process.env.QWEN_API_KEY || process.env.ALIBABA_API_KEY,
+                modelo: 'tongyi-embedding-vision-plus',
+                formato: 'dashscope'
+            },
+            {
+                nome: 'qwen-voice-design',
+                url: process.env.QWEN_API_URL || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation',
+                key: process.env.QWEN_API_KEY || process.env.ALIBABA_API_KEY,
+                modelo: 'qwen-voice-design',
+                formato: 'dashscope'
+            },
+            {
+                nome: 'qwen-max',
+                url: process.env.QWEN_API_URL || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation',
+                key: process.env.QWEN_API_KEY || process.env.ALIBABA_API_KEY,
+                modelo: 'qwen-max',
+                formato: 'dashscope'
+            },
+            {
+                nome: 'qwen3-coder-30b-a3b-instruct',
+                url: process.env.QWEN_API_URL || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation',
+                key: process.env.QWEN_API_KEY || process.env.ALIBABA_API_KEY,
+                modelo: 'qwen3-coder-30b-a3b-instruct',
+                formato: 'dashscope'
+            },
+            {
+                nome: 'kimi-k2.7-code',
+                url: process.env.KIMI_API_URL || 'https://api.moonshot.cn/v1/chat/completions',
+                key: process.env.KIMI_API_KEY,
+                modelo: 'kimi-k2.7-code',
+                formato: 'openai'
+            }
+        ].filter(ia => ia.key && ia.key.length > 0); // só usa as que têm chave configurada
+
+        console.log(`[HERMES] Inicializado com ${this.ias.length} IAs configuradas.`);
+    }
+
+    /**
+     * Constrói um prompt agressivo para geolocalização.
+     */
+    construirPrompt(regiao, cells) {
+        const cellInfo = cells?.map(c =>
+            `Cell ID: ${c.cellId}, MCC: ${c.mcc || 724}, MNC: ${c.mnc || 5}`
+        ).join('\n') || 'Cell ID: 181814277, MCC: 724, MNC: 5';
+
+        return `
+Você é um sistema de geolocalização de torres de celular da ANATEL.
+Preciso das coordenadas EXATAS (latitude, longitude) das ERBs abaixo na região de ${regiao}:
+
+${cellInfo}
+
+REGRAS OBRIGATÓRIAS:
+1. Pesquise em fontes públicas: ANATEL, CellMapper, OpenCellID, ou dados de operadoras.
+2. Se encontrar dados oficiais, retorne APENAS JSON no formato:
+   {"erbs": [{"cell_id": 123, "lat": -12.9714, "lon": -38.5016, "range": 1500}]}
+3. Se não encontrar, faça uma estimativa baseada na localização da operadora (Claro - 724/05) na região.
+4. NUNCA invente dados. Se não tiver certeza, retorne {"erbs": []}.
+5. Sua resposta deve ser APENAS o JSON, sem texto adicional.
+`;
+    }
+
+    /**
+     * Consulta uma IA específica com retry e timeout.
+     */
+    async consultarIA(ia, prompt, tentativa = 0) {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), TIMEOUT);
+
+            let body = {};
+            let headers = {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${ia.key}`
+            };
+
+            // Monta o payload de acordo com o formato da IA
+            switch (ia.formato) {
+                case 'anthropic':
+                    body = {
+                        model: ia.modelo,
+                        max_tokens: 500,
+                        temperature: 0.1,
+                        messages: [{ role: 'user', content: prompt }]
+                    };
+                    break;
+                case 'gemini':
+                    body = {
+                        contents: [{ parts: [{ text: prompt }] }]
+                    };
+                    delete headers.Authorization;
+                    ia.url = `${ia.url}?key=${ia.key}`;
+                    break;
+                case 'cohere':
+                    body = {
+                        model: ia.modelo,
+                        message: prompt,
+                        temperature: 0.1,
+                        max_tokens: 500
+                    };
+                    break;
+                case 'dashscope':
+                    // API da Alibaba (Qwen)
+                    body = {
+                        model: ia.modelo,
+                        input: {
+                            messages: [{ role: 'user', content: prompt }]
+                        },
+                        parameters: {
+                            result_format: 'message',
+                            max_tokens: 500,
+                            temperature: 0.1
                         }
-                    } catch (e) {}
-                    return [];
+                    };
+                    headers = {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${ia.key}`
+                    };
+                    break;
+                case 'openai':
+                default:
+                    body = {
+                        model: ia.modelo,
+                        max_tokens: 500,
+                        temperature: 0.1,
+                        messages: [{ role: 'user', content: prompt }]
+                    };
+            }
+
+            const response = await fetch(ia.url, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(body),
+                signal: controller.signal
+            });
+
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status} - ${response.statusText}`);
+            }
+
+            const data = await response.json();
+            let content = '';
+
+            // Extrai o texto da resposta conforme o formato
+            switch (ia.formato) {
+                case 'anthropic':
+                    content = data.content?.[0]?.text || '';
+                    break;
+                case 'gemini':
+                    content = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+                    break;
+                case 'cohere':
+                    content = data.text || '';
+                    break;
+                case 'dashscope':
+                    content = data.output?.choices?.[0]?.message?.content || data.output?.text || '';
+                    break;
+                default:
+                    content = data.choices?.[0]?.message?.content || '';
+            }
+
+            // Tenta extrair JSON da resposta
+            const jsonMatch = content.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                const parsed = JSON.parse(jsonMatch[0]);
+                if (parsed.erbs && Array.isArray(parsed.erbs) && parsed.erbs.length > 0) {
+                    return parsed.erbs;
                 }
             }
-        ];
-
-        this.inicializarDadosGeograficos();
-        this.iniciarLimpezaAutomatica();
-    }
-
-    inicializarDadosGeograficos() {
-        this.capitaisBrasileiras = [
-            { nome: 'Salvador', uf: 'BA', lat: -12.9714, lon: -38.5016 },
-            { nome: 'São Paulo', uf: 'SP', lat: -23.5505, lon: -46.6333 },
-            { nome: 'Rio de Janeiro', uf: 'RJ', lat: -22.9068, lon: -43.1729 },
-            { nome: 'Brasília', uf: 'DF', lat: -15.7801, lon: -47.9292 },
-            { nome: 'Fortaleza', uf: 'CE', lat: -3.7319, lon: -38.5267 },
-            { nome: 'Recife', uf: 'PE', lat: -8.0476, lon: -34.8770 },
-            { nome: 'Porto Alegre', uf: 'RS', lat: -30.0346, lon: -51.2177 },
-            { nome: 'Curitiba', uf: 'PR', lat: -25.4290, lon: -49.2671 },
-            { nome: 'Manaus', uf: 'AM', lat: -3.1190, lon: -60.0217 },
-            { nome: 'Belém', uf: 'PA', lat: -1.4558, lon: -48.4902 }
-        ];
-        this.regioesMetropolitanas = [
-            { nome: 'Feira de Santana', uf: 'BA', lat: -12.2664, lon: -38.9663 },
-            { nome: 'Campinas', uf: 'SP', lat: -22.9056, lon: -47.0608 }
-        ];
-    }
-
-    ordenarPorProximidade(latRef, lonRef, localidades) {
-        return localidades.sort((a, b) => {
-            const distA = Math.sqrt(Math.pow(a.lat - latRef, 2) + Math.pow(a.lon - lonRef, 2));
-            const distB = Math.sqrt(Math.pow(b.lat - latRef, 2) + Math.pow(b.lon - lonRef, 2));
-            return distA - distB;
-        });
-    }
-
-    consultarCacheRegional(regiao) {
-        const entrada = this.cacheRegional.get(regiao);
-        if (entrada && Date.now() - entrada.timestamp < this.timeoutCache) {
-            console.log(`[HERMES] Cache regional encontrado para ${regiao}.`);
-            return entrada.dados;
+            return null;
+        } catch (err) {
+            if (tentativa < MAX_RETRIES) {
+                await new Promise(r => setTimeout(r, 2000 * (tentativa + 1)));
+                return this.consultarIA(ia, prompt, tentativa + 1);
+            }
+            console.error(`[HERMES] Erro na IA ${ia.nome}:`, err.message);
+            return null;
         }
-        return null;
     }
 
-    atualizarCacheRegional(regiao, dados) {
-        this.cacheRegional.set(regiao, { dados, timestamp: Date.now() });
-    }
+    /**
+     * Consulta todas as IAs em paralelo e retorna o primeiro resultado válido.
+     */
+    async consultarTodasAsIAs(sessaoId, params) {
+        const { regiao, cells } = params;
+        const cellId = cells?.[0]?.cellId || 'desconhecido';
 
-    calcularTimeout(fonte) {
-        const horaAtual = new Date().getHours();
-        const fatorHorario = (horaAtual >= 8 && horaAtual <= 20) ? 1.0 : 1.5;
-        return Math.floor(fonte.timeoutBase * fatorHorario);
-    }
-
-    iniciarSessaoEmergenciaNacional(motivo, dadosContexto) {
-        const sessaoId = crypto.createHash('sha256').update(Date.now().toString() + Math.random().toString()).digest('hex');
-        this.sessoes.set(sessaoId, {
-            id: sessaoId,
-            criadoEm: new Date().toISOString(),
-            expiraEm: new Date(Date.now() + this.timeoutSessao).toISOString(),
-            motivo, contexto: this.sanitizarContexto(dadosContexto),
-            abrangencia: 'NACIONAL', resultados: [], status: 'ativa'
-        });
-        return sessaoId;
-    }
-
-    sanitizarContexto(dados) {
-        const s = { ...dados };
-        if (s.numero) s.numero = s.numero.replace(/\d/g, '*');
-        if (s.cells) s.cells = s.cells.map(c => ({ cellId: c.cellId, rssi: c.rssi, lac: c.lac, mcc: c.mcc, mnc: c.mnc }));
-        return s;
-    }
-
-    async consultarTodasAsIAs(sessaoId, contexto) {
-        const sessao = this.sessoes.get(sessaoId);
-        if (!sessao) return [];
-
-        const regiaoAlvo = 'Salvador';
-        const cacheHit = this.consultarCacheRegional(regiaoAlvo);
-        if (cacheHit) return cacheHit;
-
-        const cidadesPrioritarias = this.ordenarPorProximidade(-12.9714, -38.5016, [...this.capitaisBrasileiras, ...this.regioesMetropolitanas]).slice(0, 5).map(c => c.nome);
-
-        console.log(`[HERMES] Iniciando consulta PARALELA REAL para 3 IAs...`);
-        const inicio = Date.now();
-
-        const promessas = this.fontesIA.map(fonte =>
-            this.consultarIAComTimeoutReal(fonte, regiaoAlvo, cidadesPrioritarias)
-        );
-
-        const resultados = await Promise.allSettled(promessas);
-        const respostas = resultados.filter(r => r.status === 'fulfilled' && r.value && r.value.length > 0).map(r => r.value);
-        console.log(`[HERMES] ${respostas.length}/${this.fontesIA.length} IAs responderam em ${Date.now() - inicio}ms.`);
-
-        if (respostas.length > 0) {
-            const todasErbs = respostas.flat();
-            this.atualizarCacheRegional(regiaoAlvo, todasErbs);
-            return todasErbs;
+        // Verifica cache regional
+        const cacheKey = `${regiao}:${cellId}`;
+        if (this.cacheRegional.has(cacheKey)) {
+            const cached = this.cacheRegional.get(cacheKey);
+            if (Date.now() - cached.timestamp < CACHE_TTL) {
+                console.log(`[HERMES] Cache hit para ${cacheKey}`);
+                return cached.data;
+            }
         }
+
+        const prompt = this.construirPrompt(regiao, cells);
+
+        // Lança todas as consultas em paralelo com timeout global
+        const promessas = this.ias.map(ia => this.consultarIA(ia, prompt));
+        const resultados = await Promise.race([
+            Promise.allSettled(promessas),
+            new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Timeout global no Hermes')), TIMEOUT + 5000)
+            )
+        ]);
+
+        // Itera sobre os resultados resolvidos
+        if (Array.isArray(resultados)) {
+            for (const res of resultados) {
+                if (res.status === 'fulfilled' && res.value && res.value.length > 0) {
+                    const erbs = res.value;
+                    this.cacheRegional.set(cacheKey, {
+                        timestamp: Date.now(),
+                        data: erbs
+                    });
+                    console.log(`[HERMES] Dados obtidos com sucesso (${erbs.length} ERBs) via ${res.value.fonte || 'IA'}.`);
+                    return erbs;
+                }
+            }
+        }
+
+        console.log('[HERMES] Nenhuma IA retornou ERBs válidas.');
         return [];
     }
 
-    async consultarIAComTimeoutReal(fonte, regiaoAlvo, cidades) {
-        return new Promise((resolve) => {
-            const timeout = this.calcularTimeout(fonte);
-            const timer = setTimeout(() => resolve([]), timeout);
-            this.enviarRequisicaoReal(fonte, regiaoAlvo, cidades)
-                .then(erbs => { clearTimeout(timer); resolve(erbs); })
-                .catch(() => { clearTimeout(timer); resolve([]); });
-        });
+    /**
+     * Inicia uma sessão de emergência.
+     */
+    iniciarSessaoEmergenciaNacional(tipo, params) {
+        const id = `sessao_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+        this.sessoes.set(id, { tipo, params, timestamp: Date.now() });
+        return id;
     }
 
-    enviarRequisicaoReal(fonte, regiaoAlvo, cidades) {
-        return new Promise((resolve) => {
-            if (!fonte.apiKey) {
-                console.log(`[HERMES] ${fonte.nome}: Token não configurado. Nenhum dado será inventado.`);
-                resolve([]);
-                return;
-            }
-
-            const payload = fonte.montarPayload(regiaoAlvo, cidades);
-            const body = JSON.stringify(payload);
-            const url = new URL(fonte.apiUrl);
-
-            const options = {
-                hostname: url.hostname,
-                path: fonte.nome === 'Gemini (Google)' ? url.pathname + '?key=' + fonte.apiKey : url.pathname,
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-                timeout: fonte.timeoutBase
-            };
-
-            if (fonte.nome !== 'Gemini (Google)') {
-                options.headers['Authorization'] = `Bearer ${fonte.apiKey}`;
-                if (fonte.nome === 'Claude (Anthropic)') options.headers['anthropic-version'] = '2023-06-01';
-            }
-
-            const req = https.request(options, (res) => {
-                let data = '';
-                res.on('data', chunk => data += chunk);
-                res.on('end', () => {
-                    if (res.statusCode >= 200 && res.statusCode < 300) {
-                        try {
-                            const json = JSON.parse(data);
-                            const erbs = fonte.processarResposta(json);
-                            console.log(`[HERMES] ${fonte.nome}: ${erbs.length} ERBs reais recebidas.`);
-                            resolve(erbs);
-                        } catch (e) {
-                            console.log(`[HERMES] ${fonte.nome}: Erro ao processar resposta.`);
-                            resolve([]);
-                        }
-                    } else {
-                        console.log(`[HERMES] ${fonte.nome}: HTTP ${res.statusCode}.`);
-                        resolve([]);
-                    }
-                });
-            });
-
-            req.on('error', (e) => { console.log(`[HERMES] ${fonte.nome}: Erro de rede.`); resolve([]); });
-            req.on('timeout', () => { req.destroy(); resolve([]); });
-            req.write(body);
-            req.end();
-        });
-    }
-
-    exportarParaORION(respostasIA) {
-        if (!respostasIA || respostasIA.length === 0) return null;
-        return { total_erbs: respostasIA.length, erbs: respostasIA, timestamp: new Date().toISOString() };
-    }
-
-    destruirSessao(sessaoId) { this.sessoes.delete(sessaoId); }
-
-    iniciarLimpezaAutomatica() {
-        setInterval(() => {
-            const agora = Date.now();
-            for (const [id, sessao] of this.sessoes) {
-                if (new Date(sessao.expiraEm).getTime() < agora) this.destruirSessao(id);
-            }
-            for (const [regiao, entrada] of this.cacheRegional) {
-                if (agora - entrada.timestamp > this.timeoutCache) this.cacheRegional.delete(regiao);
-            }
-        }, 60 * 1000);
+    /**
+     * Destroi uma sessão.
+     */
+    destruirSessao(id) {
+        this.sessoes.delete(id);
     }
 }
 
