@@ -1,11 +1,7 @@
 // ============================================================
 // ARQUIVO: scripts/import-coleta-campo.js
-// VERSÃO: 3.0 (Stream + Lotes)
+// VERSÃO: 3.1 (Transações corrigidas, busca apenas alvo)
 // DATA: 04/08/2026
-// MOTIVO: Processa arquivo por arquivo via stream, sem 
-//         carregar tudo em memória. Usa transações em lote.
-//         Processa APENAS o arquivo alvo (coleta_campo - Copia-039.csv)
-//         se existir, ou todos se nenhum alvo especificado.
 // ============================================================
 
 const fs = require('fs');
@@ -16,23 +12,14 @@ const readline = require('readline');
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_TOWERS = path.join(DATA_DIR, 'cell_towers.db');
 
-// Arquivo alvo – pode ser definido por variável de ambiente
-// ou nome fixo para priorizar o arquivo do investigador.
-const TARGET_FILE = process.env.IMPORT_TARGET || 'coleta_campo - Copia-039.csv';
+// Nome exato do arquivo alvo – altere se necessário
+const TARGET_FILE = 'coleta_campo - Copia-039.csv';
 
 function log(msg) {
     console.log(`[COLETA-CAMPO] ${msg}`);
 }
 
-/**
- * Processa um único arquivo CSV usando stream e insere em lotes.
- * @param {sqlite3.Database} db - Conexão com o banco.
- * @param {string} filePath - Caminho do CSV.
- * @param {string} fileName - Nome do arquivo (para log).
- * @param {number} batchSize - Quantas linhas por transação.
- * @returns {Promise<{importadas: number, ignoradas: number}>}
- */
-function processarArquivoStream(db, filePath, fileName, batchSize = 5000) {
+function processarArquivoStream(db, filePath, batchSize = 5000) {
     return new Promise((resolve, reject) => {
         const rl = readline.createInterface({
             input: fs.createReadStream(filePath),
@@ -45,22 +32,36 @@ function processarArquivoStream(db, filePath, fileName, batchSize = 5000) {
         let linhasBuffer = [];
         let separator = ',';
 
-        // Preparar statement
         const stmt = db.prepare(`
             INSERT OR REPLACE INTO cell_towers 
             (radio, mcc, net, area, cell, unit, lon, lat, range, samples, changeable, created, updated, averageSignal)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
+        let inTransaction = false;
+
         const flushBuffer = () => {
             if (linhasBuffer.length === 0) return;
-            db.run('BEGIN TRANSACTION');
-            for (const params of linhasBuffer) {
-                stmt.run(params);
+            try {
+                if (!inTransaction) {
+                    db.run('BEGIN TRANSACTION');
+                    inTransaction = true;
+                }
+                for (const params of linhasBuffer) {
+                    stmt.run(params);
+                }
+                db.run('COMMIT');
+                inTransaction = false;
+                importadas += linhasBuffer.length;
+                linhasBuffer = [];
+            } catch (err) {
+                // Rollback em caso de erro
+                if (inTransaction) {
+                    db.run('ROLLBACK');
+                    inTransaction = false;
+                }
+                throw err;
             }
-            db.run('COMMIT');
-            importadas += linhasBuffer.length;
-            linhasBuffer = [];
         };
 
         rl.on('line', (line) => {
@@ -70,10 +71,8 @@ function processarArquivoStream(db, filePath, fileName, batchSize = 5000) {
                 return;
             }
 
-            // Detecta separador na primeira linha que não estiver vazia
             if (isHeader) {
                 separator = trimmed.includes(';') ? ';' : ',';
-                // Pula cabeçalho se contiver palavras-chave
                 const lower = trimmed.toLowerCase();
                 if (lower.includes('cell') || lower.includes('lat') || lower.includes('lon')) {
                     isHeader = false;
@@ -88,10 +87,9 @@ function processarArquivoStream(db, filePath, fileName, batchSize = 5000) {
                 return;
             }
 
-            // Extrair cell, lat, lon (mesma lógica de detecção robusta)
             let cellId = null, lat = null, lon = null;
 
-            // Primeiro tenta as três primeiras colunas
+            // Tenta as três primeiras colunas
             const testCell = parseInt(cols[0]);
             const testLat = parseFloat(cols[1]);
             const testLon = parseFloat(cols[2]);
@@ -114,7 +112,6 @@ function processarArquivoStream(db, filePath, fileName, batchSize = 5000) {
                         }
                     }
                 }
-                // Se ainda faltar, pega os dois primeiros números restantes
                 if (lat === null || lon === null) {
                     let nums = [];
                     for (let c of candidates) {
@@ -136,14 +133,12 @@ function processarArquivoStream(db, filePath, fileName, batchSize = 5000) {
                 return;
             }
 
-            // Range
             let range = 1500;
             if (cols.length > 3) {
                 const r = parseInt(cols[3]);
                 if (!isNaN(r) && r > 0) range = r;
             }
 
-            // MCC/MNC/LAC (opcional)
             let mcc = 724, mnc = 5, lac = 1234;
             for (let c of cols) {
                 const num = parseInt(c);
@@ -154,7 +149,6 @@ function processarArquivoStream(db, filePath, fileName, batchSize = 5000) {
                 }
             }
 
-            // Monta os parâmetros
             const params = [
                 'GSM',
                 mcc,
@@ -179,12 +173,17 @@ function processarArquivoStream(db, filePath, fileName, batchSize = 5000) {
         });
 
         rl.on('close', () => {
-            flushBuffer(); // último lote
-            stmt.finalize();
-            resolve({ importadas, ignoradas });
+            try {
+                flushBuffer(); // último lote
+                stmt.finalize();
+                resolve({ importadas, ignoradas });
+            } catch (err) {
+                reject(err);
+            }
         });
 
         rl.on('error', (err) => {
+            if (inTransaction) db.run('ROLLBACK');
             reject(err);
         });
     });
@@ -194,25 +193,21 @@ async function main() {
     log('=== IMPORTADOR DE DADOS (STREAM + LOTE) ===');
     log(`Arquivo alvo: ${TARGET_FILE}`);
 
-    // Lista todos os arquivos que começam com 'coleta_campo'
+    // Lista todos os arquivos
     let allFiles = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('coleta_campo'));
     log(`Encontrados ${allFiles.length} arquivos.`);
 
-    // Se o arquivo alvo existir, processa apenas ele
-    let filesToProcess = [];
-    if (allFiles.includes(TARGET_FILE)) {
-        filesToProcess = [TARGET_FILE];
-        log(`Processando apenas o arquivo alvo: ${TARGET_FILE}`);
-    } else {
-        log(`Arquivo alvo não encontrado. Processando todos os ${allFiles.length} arquivos.`);
-        filesToProcess = allFiles;
+    // Verifica se o alvo existe
+    if (!allFiles.includes(TARGET_FILE)) {
+        log(`❌ Arquivo alvo "${TARGET_FILE}" NÃO ENCONTRADO!`);
+        log(`Arquivos disponíveis: ${allFiles.join(', ')}`);
+        log(`Abortando. Verifique o nome do arquivo no repositório.`);
+        process.exit(1);
     }
 
-    // Abre o banco de dados
     const db = new sqlite3.Database(DB_TOWERS);
     db.run('PRAGMA journal_mode=WAL');
     db.run('PRAGMA secure_delete=ON');
-    // Cria a tabela se não existir
     db.run(`
         CREATE TABLE IF NOT EXISTS cell_towers (
             radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
@@ -222,37 +217,30 @@ async function main() {
         )
     `);
 
-    // Contagem antes
     const antes = await new Promise((resolve) => {
         db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
     });
     log(`Torres antes: ${antes}`);
 
-    let totalImportadas = 0;
-    let totalIgnoradas = 0;
-
-    for (const file of filesToProcess) {
-        const filePath = path.join(DATA_DIR, file);
-        log(`Processando: ${file}...`);
-        try {
-            const result = await processarArquivoStream(db, filePath, file);
-            log(`  -> ${result.importadas} importadas, ${result.ignoradas} ignoradas.`);
-            totalImportadas += result.importadas;
-            totalIgnoradas += result.ignoradas;
-        } catch (err) {
-            log(`  ERRO ao processar ${file}: ${err.message}`);
-        }
+    // Processa APENAS o arquivo alvo
+    const filePath = path.join(DATA_DIR, TARGET_FILE);
+    log(`Processando: ${TARGET_FILE}...`);
+    try {
+        const result = await processarArquivoStream(db, filePath);
+        log(`  -> ${result.importadas} importadas, ${result.ignoradas} ignoradas.`);
+    } catch (err) {
+        log(`  ERRO: ${err.message}`);
+        db.close();
+        process.exit(1);
     }
 
-    // Depois
     const depois = await new Promise((resolve) => {
         db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
     });
     log(`=== IMPORTAÇÃO CONCLUÍDA ===`);
     log(`Antes: ${antes}`);
     log(`Depois: ${depois}`);
-    log(`Total importadas: ${totalImportadas}`);
-    log(`Total ignoradas: ${totalIgnoradas}`);
+    log(`Total importadas: ${depois - antes}`);
 
     db.close();
 }
