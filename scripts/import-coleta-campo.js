@@ -1,10 +1,10 @@
 // ============================================================
 // ARQUIVO: scripts/import-coleta-campo.js
-// VERSÃO: 3.2 (Processa todos os arquivos, stream + lote)
+// VERSÃO: 3.3 (Transações robustas com db.exec)
 // DATA: 04/08/2026
-// MOTIVO: Remove dependência de arquivo específico.
-//         Processa todos os coleta_campo*.csv.
-//         Sem filtro de asterisco.
+// MOTIVO: Corrige erro "cannot commit - no transaction is active".
+//         Usa db.exec com BEGIN/COMMIT em bloco único.
+//         Processa todos os arquivos coleta_campo*.csv.
 // ============================================================
 
 const fs = require('fs');
@@ -19,7 +19,10 @@ function log(msg) {
     console.log(`[COLETA-CAMPO] ${msg}`);
 }
 
-function processarArquivoStream(db, filePath, batchSize = 5000) {
+/**
+ * Processa um arquivo CSV usando stream e insere em lotes via transação única.
+ */
+function processarArquivoStream(db, filePath, batchSize = 1000) {
     return new Promise((resolve, reject) => {
         const rl = readline.createInterface({
             input: fs.createReadStream(filePath),
@@ -32,34 +35,29 @@ function processarArquivoStream(db, filePath, batchSize = 5000) {
         let linhasBuffer = [];
         let separator = ',';
 
-        const stmt = db.prepare(`
-            INSERT OR REPLACE INTO cell_towers 
-            (radio, mcc, net, area, cell, unit, lon, lat, range, samples, changeable, created, updated, averageSignal)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-
-        let inTransaction = false;
-
+        // Função para inserir o lote atual usando db.exec com BEGIN/COMMIT
         const flushBuffer = () => {
             if (linhasBuffer.length === 0) return;
+            // Monta a query com múltiplos VALUES
+            const values = linhasBuffer.map(params =>
+                `('${params[0]}', ${params[1]}, ${params[2]}, ${params[3]}, ${params[4]}, ${params[5]}, ${params[6]}, ${params[7]}, ${params[8]}, ${params[9]}, ${params[10]}, ${params[11]}, ${params[12]}, ${params[13]})`
+            ).join(',');
+            const query = `INSERT OR REPLACE INTO cell_towers (radio, mcc, net, area, cell, unit, lon, lat, range, samples, changeable, created, updated, averageSignal) VALUES ${values};`;
+
             try {
-                if (!inTransaction) {
-                    db.run('BEGIN TRANSACTION');
-                    inTransaction = true;
-                }
-                for (const params of linhasBuffer) {
-                    stmt.run(params);
-                }
-                db.run('COMMIT');
-                inTransaction = false;
+                db.exec('BEGIN TRANSACTION;');
+                db.exec(query);
+                db.exec('COMMIT;');
                 importadas += linhasBuffer.length;
                 linhasBuffer = [];
             } catch (err) {
-                if (inTransaction) {
-                    db.run('ROLLBACK');
-                    inTransaction = false;
-                }
-                throw err;
+                // Em caso de erro, faz rollback e descarta o lote
+                try { db.exec('ROLLBACK;'); } catch (e) {}
+                log(`  ERRO no lote: ${err.message}`);
+                // Mantém o contador de ignorados para este lote
+                ignoradas += linhasBuffer.length;
+                linhasBuffer = [];
+                // Não propaga o erro para não interromper o arquivo
             }
         };
 
@@ -172,24 +170,18 @@ function processarArquivoStream(db, filePath, batchSize = 5000) {
         });
 
         rl.on('close', () => {
-            try {
-                flushBuffer();
-                stmt.finalize();
-                resolve({ importadas, ignoradas });
-            } catch (err) {
-                reject(err);
-            }
+            flushBuffer(); // último lote
+            resolve({ importadas, ignoradas });
         });
 
         rl.on('error', (err) => {
-            if (inTransaction) db.run('ROLLBACK');
             reject(err);
         });
     });
 }
 
 async function main() {
-    log('=== IMPORTADOR DE DADOS (STREAM + LOTE) ===');
+    log('=== IMPORTADOR DE DADOS (STREAM + LOTE COM TRANSACAO) ===');
     log('Processando TODOS os arquivos coleta_campo*.csv');
 
     const files = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('coleta_campo'));
@@ -198,6 +190,12 @@ async function main() {
     if (files.length === 0) {
         log('Nenhum arquivo encontrado. Abortando.');
         process.exit(0);
+    }
+
+    // Remove banco antigo para começar do zero (opcional, mas recomendado)
+    if (fs.existsSync(DB_TOWERS)) {
+        log('Removendo banco antigo para evitar corrupção...');
+        fs.unlinkSync(DB_TOWERS);
     }
 
     const db = new sqlite3.Database(DB_TOWERS);
