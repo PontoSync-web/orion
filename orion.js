@@ -1,11 +1,12 @@
 // ============================================================
 // ARQUIVO: orion.js
-// DATA: 03 de Agosto de 2026
-// HORÁRIO: 16:00 (Horário Oficial — Salvador, Bahia, Brasil)
+// DATA: 04 de Agosto de 2026
+// HORÁRIO: 11:45 (Horário Oficial — Salvador, Bahia, Brasil)
 // FUSO: América do Sul / Brasil / Bahia (GMT-3)
 // AUTOR: Eng Souza
-// MOTIVO: v5.9.9 — Compatibilidade com novos dados de torres.
-//         Cadeia: Coleta de Campo → OpenCellID → Emergência.
+// MOTIVO: v5.9.10 — Processa automaticamente novos arquivos
+//         de coleta (coleta_campo*.csv). Cadeia completa:
+//         Coleta de Campo → OpenCellID → Banco de Emergência.
 // ============================================================
 
 require('dotenv').config();
@@ -78,7 +79,7 @@ dbCache.exec(`CREATE TABLE IF NOT EXISTS cell_cache (cell_id INTEGER PRIMARY KEY
 CREATE TABLE IF NOT EXISTS ip_cache (ip TEXT PRIMARY KEY, lat REAL, lon REAL, range INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
 
 app.get('/health', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '5.9.9', autor: 'Eng Souza', status: 'online',
+    servidor: 'AI-DEPOM', versao: '5.9.10', autor: 'Eng Souza', status: 'online',
     seguranca: 'BLINDADO',
     protocolo_hermes: 'ATIVO (3 IAs conectadas)',
     fontes_importacao: ['Coleta de Campo', 'OpenCellID Área', 'Banco de Emergência'],
@@ -88,7 +89,7 @@ app.get('/health', (req, res) => res.json({
 }));
 
 app.get('/', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '5.9.9', autor: 'Eng Souza',
+    servidor: 'AI-DEPOM', versao: '5.9.10', autor: 'Eng Souza',
     gps_navegador: 'ATIVO',
     fontes_importacao: ['Coleta de Campo (primária)', 'OpenCellID Área', 'Banco de Emergência'],
     endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status', '/api/hermes/forcar', '/api/import/cells']
@@ -304,7 +305,7 @@ async function iniciarServidor() {
     dbTowers.close();
 
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 5.9.9 rodando na porta ' + port);
+        log('info', 'AI-DEPOM 5.9.10 rodando na porta ' + port);
         log('info', 'Cadeia: Coleta de Campo → OpenCellID Otimizado → Emergência');
     });
 }
