@@ -1,9 +1,10 @@
 // ============================================================
 // ARQUIVO: orion.js
-// VERSÃO: 6.1 (com persistência de contexto)
+// VERSÃO: 6.1 (Corrigida – sintaxe da Promise)
 // DATA: 05/08/2026
-// AUTOR: Eng Souza / AI-DEPOM
-// MOTIVO: Correções definitivas + sistema de contexto persistente
+// AUTOR: Eng Souza
+// MOTIVO: Correção de sintaxe na linha 484 (Promise)
+//         e manutenção de todas as funcionalidades existentes.
 // ============================================================
 
 require('dotenv').config();
@@ -28,16 +29,11 @@ const PATHS = {
     scripts: path.join(PROJECT_ROOT, 'scripts'),
     contextos: path.join(PROJECT_ROOT, 'contextos')
 };
-
-// Criar todos os diretórios necessários
-Object.values(PATHS).forEach(dir => {
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-});
+Object.values(PATHS).forEach(dir => { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); });
 
 const DB_MAIN = path.join(PATHS.data, 'orion.db');
 const DB_TOWERS = path.join(PATHS.data, 'cell_towers.db');
 const DB_CACHE = path.join(PATHS.data, 'cache.db');
-const CONTEXT_FILE = path.join(PATHS.contextos, 'atual.json');
 
 // Verificação de permissão de escrita no diretório data/
 try {
@@ -92,201 +88,6 @@ const dbCache = new sqlite3.Database(DB_CACHE);
 dbCache.run('PRAGMA journal_mode=WAL');
 dbCache.exec(`CREATE TABLE IF NOT EXISTS cell_cache (cell_id INTEGER PRIMARY KEY, lat REAL, lon REAL, range INTEGER, fonte TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS ip_cache (ip TEXT PRIMARY KEY, lat REAL, lon REAL, range INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
-
-// ============================================================
-// SISTEMA DE PERSISTÊNCIA DE CONTEXTO (AI-DEPOM)
-// ============================================================
-
-function carregarContexto() {
-    try {
-        if (fs.existsSync(CONTEXT_FILE)) {
-            const data = fs.readFileSync(CONTEXT_FILE, 'utf8');
-            return JSON.parse(data);
-        }
-    } catch (e) {
-        log('warn', 'Erro ao carregar contexto: ' + e.message);
-    }
-    return null;
-}
-
-function salvarContexto(contexto) {
-    try {
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const arquivoHistorico = path.join(PATHS.contextos, `sessao_${timestamp}.json`);
-        fs.writeFileSync(arquivoHistorico, JSON.stringify(contexto, null, 2));
-        fs.writeFileSync(CONTEXT_FILE, JSON.stringify(contexto, null, 2));
-        log('info', 'Contexto salvo em: ' + arquivoHistorico);
-        return true;
-    } catch (e) {
-        log('error', 'Erro ao salvar contexto: ' + e.message);
-        return false;
-    }
-}
-
-function criarContextoInicial(investigador) {
-    return {
-        sessao_id: new Date().toISOString().replace(/[:.]/g, '-'),
-        timestamp_inicio: new Date().toISOString(),
-        timestamp_atualizacao: new Date().toISOString(),
-        investigador: investigador || 'desconhecido',
-        alvo: {
-            numero: null,
-            codinome: null,
-            cell_ids_investigados: [],
-            ultima_localizacao: null,
-            status: 'iniciado'
-        },
-        banco_de_torres: {
-            total: 0,
-            fonte: 'Teleco/Anatel',
-            ultima_importacao: null
-        },
-        historico_acoes: [],
-        proximo_passo: 'Aguardando instruções.',
-        notas: []
-    };
-}
-
-// ============================================================
-// ROTAS DE CONTEXTO
-// ============================================================
-
-app.post('/api/contexto/salvar', (req, res) => {
-    const { contexto } = req.body;
-    if (!contexto) {
-        return res.status(400).json({ erro: 'Contexto não fornecido.' });
-    }
-    if (salvarContexto(contexto)) {
-        res.json({ status: 'sucesso', mensagem: 'Contexto salvo.' });
-    } else {
-        res.status(500).json({ status: 'falha', mensagem: 'Erro ao salvar contexto.' });
-    }
-});
-
-app.get('/api/contexto/restaurar', (req, res) => {
-    const contexto = carregarContexto();
-    if (contexto) {
-        res.json({ status: 'sucesso', contexto });
-    } else {
-        res.status(404).json({ status: 'falha', mensagem: 'Nenhum contexto salvo.' });
-    }
-});
-
-app.get('/api/contexto/historico', (req, res) => {
-    try {
-        const files = fs.readdirSync(PATHS.contextos)
-            .filter(f => f.startsWith('sessao_') && f.endsWith('.json'))
-            .sort()
-            .reverse();
-        const historico = files.map(f => {
-            const filePath = path.join(PATHS.contextos, f);
-            const stats = fs.statSync(filePath);
-            return {
-                arquivo: f,
-                criado_em: stats.birthtime.toISOString(),
-                modificado_em: stats.mtime.toISOString()
-            };
-        });
-        res.json({ status: 'sucesso', historico });
-    } catch (e) {
-        res.status(500).json({ status: 'falha', erro: e.message });
-    }
-});
-
-app.get('/api/contexto/carregar/:arquivo', (req, res) => {
-    const { arquivo } = req.params;
-    if (!arquivo || !arquivo.endsWith('.json')) {
-        return res.status(400).json({ erro: 'Arquivo inválido.' });
-    }
-    const filePath = path.join(PATHS.contextos, arquivo);
-    if (!fs.existsSync(filePath)) {
-        return res.status(404).json({ erro: 'Arquivo não encontrado.' });
-    }
-    try {
-        const data = fs.readFileSync(filePath, 'utf8');
-        const contexto = JSON.parse(data);
-        fs.writeFileSync(CONTEXT_FILE, JSON.stringify(contexto, null, 2));
-        res.json({ status: 'sucesso', contexto });
-    } catch (e) {
-        res.status(500).json({ status: 'falha', erro: e.message });
-    }
-});
-
-app.post('/api/contexto/novo', (req, res) => {
-    const { investigador } = req.body;
-    const novo = criarContextoInicial(investigador);
-    if (salvarContexto(novo)) {
-        res.json({ status: 'sucesso', contexto: novo });
-    } else {
-        res.status(500).json({ status: 'falha', mensagem: 'Erro ao criar novo contexto.' });
-    }
-});
-
-app.post('/api/contexto/atualizar', (req, res) => {
-    const { atualizacao } = req.body;
-    if (!atualizacao) {
-        return res.status(400).json({ erro: 'Atualização não fornecida.' });
-    }
-    const contexto = carregarContexto();
-    if (!contexto) {
-        return res.status(404).json({ erro: 'Nenhum contexto ativo para atualizar.' });
-    }
-    Object.assign(contexto, atualizacao);
-    contexto.timestamp_atualizacao = new Date().toISOString();
-    if (salvarContexto(contexto)) {
-        res.json({ status: 'sucesso', contexto });
-    } else {
-        res.status(500).json({ status: 'falha', mensagem: 'Erro ao atualizar contexto.' });
-    }
-});
-
-app.post('/api/contexto/nota', (req, res) => {
-    const { nota } = req.body;
-    if (!nota || typeof nota !== 'string') {
-        return res.status(400).json({ erro: 'Nota inválida.' });
-    }
-    const contexto = carregarContexto();
-    if (!contexto) {
-        return res.status(404).json({ erro: 'Nenhum contexto ativo.' });
-    }
-    contexto.notas = contexto.notas || [];
-    contexto.notas.push(`[${new Date().toISOString()}] ${nota}`);
-    contexto.timestamp_atualizacao = new Date().toISOString();
-    if (salvarContexto(contexto)) {
-        res.json({ status: 'sucesso', contexto });
-    } else {
-        res.status(500).json({ status: 'falha', mensagem: 'Erro ao adicionar nota.' });
-    }
-});
-
-app.post('/api/contexto/acao', (req, res) => {
-    const { acao, detalhes } = req.body;
-    if (!acao || typeof acao !== 'string') {
-        return res.status(400).json({ erro: 'Ação inválida.' });
-    }
-    const contexto = carregarContexto();
-    if (!contexto) {
-        return res.status(404).json({ erro: 'Nenhum contexto ativo.' });
-    }
-    contexto.historico_acoes = contexto.historico_acoes || [];
-    contexto.historico_acoes.push({
-        timestamp: new Date().toISOString(),
-        acao,
-        detalhes: detalhes || {}
-    });
-    contexto.timestamp_atualizacao = new Date().toISOString();
-    if (salvarContexto(contexto)) {
-        res.json({ status: 'sucesso', contexto });
-    } else {
-        res.status(500).json({ status: 'falha', mensagem: 'Erro ao registrar ação.' });
-    }
-});
-
-log('info', 'Rotas de contexto inicializadas com sucesso.');
-
-// ============================================================
-// ROTAS PÚBLICAS (JÁ EXISTENTES, NÃO ALTERADAS)
-// ============================================================
 
 app.get('/health', (req, res) => res.json({
     servidor: 'AI-DEPOM', versao: '6.1', autor: 'Eng Souza', status: 'online',
@@ -411,7 +212,7 @@ async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp,
     const estimativa = estimarPorRSSI(cells);
     if (estimativa) { gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, estimativa, 'rssi_estimativa', res); return; }
 
-    log('info', 'Todas as 7 fontes falharam. Acionando Protocolo Hermes...');
+    log('info', 'Todas as fontes falharam. Acionando Protocolo Hermes...');
     try {
         const sessaoId = hermes.iniciarSessaoEmergenciaNacional('localizacao_falha', { cells, regiao: 'Brasil' });
         const erbs = await hermes.consultarTodasAsIAs(sessaoId, { cells });
@@ -457,6 +258,170 @@ function gravarLocalizacao(targetId, cells, wifiData, clientIp, agentId, hermesS
 }
 
 // ============================================================
+// PERSISTÊNCIA DE CONTEXTO (AI-DEPOM)
+// ============================================================
+
+const CONTEXT_DIR = PATHS.contextos;
+const CONTEXT_FILE = path.join(CONTEXT_DIR, 'atual.json');
+
+function carregarContexto() {
+    try {
+        if (fs.existsSync(CONTEXT_FILE)) {
+            const data = fs.readFileSync(CONTEXT_FILE, 'utf8');
+            return JSON.parse(data);
+        }
+    } catch (e) {
+        log('warn', 'Erro ao carregar contexto: ' + e.message);
+    }
+    return null;
+}
+
+function salvarContexto(contexto) {
+    try {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const arquivoHistorico = path.join(CONTEXT_DIR, `sessao_${timestamp}.json`);
+        fs.writeFileSync(arquivoHistorico, JSON.stringify(contexto, null, 2));
+        fs.writeFileSync(CONTEXT_FILE, JSON.stringify(contexto, null, 2));
+        log('info', 'Contexto salvo em: ' + arquivoHistorico);
+        return true;
+    } catch (e) {
+        log('error', 'Erro ao salvar contexto: ' + e.message);
+        return false;
+    }
+}
+
+function criarContextoInicial(investigador) {
+    return {
+        sessao_id: new Date().toISOString().replace(/[:.]/g, '-'),
+        timestamp_inicio: new Date().toISOString(),
+        timestamp_atualizacao: new Date().toISOString(),
+        investigador: investigador || 'desconhecido',
+        alvo: {
+            numero: null,
+            codinome: null,
+            cell_ids_investigados: [],
+            ultima_localizacao: null,
+            status: 'iniciado'
+        },
+        banco_de_torres: {
+            total: 0,
+            fonte: 'Teleco/Anatel',
+            ultima_importacao: null
+        },
+        historico_acoes: [],
+        proximo_passo: 'Aguardando instruções.',
+        notas: []
+    };
+}
+
+app.post('/api/contexto/salvar', (req, res) => {
+    const { contexto } = req.body;
+    if (!contexto) return res.status(400).json({ erro: 'Contexto não fornecido.' });
+    if (salvarContexto(contexto)) {
+        res.json({ status: 'sucesso', mensagem: 'Contexto salvo.' });
+    } else {
+        res.status(500).json({ status: 'falha', mensagem: 'Erro ao salvar contexto.' });
+    }
+});
+
+app.get('/api/contexto/restaurar', (req, res) => {
+    const contexto = carregarContexto();
+    if (contexto) {
+        res.json({ status: 'sucesso', contexto });
+    } else {
+        res.status(404).json({ status: 'falha', mensagem: 'Nenhum contexto salvo.' });
+    }
+});
+
+app.get('/api/contexto/historico', (req, res) => {
+    try {
+        const files = fs.readdirSync(CONTEXT_DIR)
+            .filter(f => f.startsWith('sessao_') && f.endsWith('.json'))
+            .sort()
+            .reverse();
+        const historico = files.map(f => {
+            const filePath = path.join(CONTEXT_DIR, f);
+            const stats = fs.statSync(filePath);
+            return { arquivo: f, criado_em: stats.birthtime.toISOString(), modificado_em: stats.mtime.toISOString() };
+        });
+        res.json({ status: 'sucesso', historico });
+    } catch (e) {
+        res.status(500).json({ status: 'falha', erro: e.message });
+    }
+});
+
+app.get('/api/contexto/carregar/:arquivo', (req, res) => {
+    const { arquivo } = req.params;
+    if (!arquivo || !arquivo.endsWith('.json')) return res.status(400).json({ erro: 'Arquivo inválido.' });
+    const filePath = path.join(CONTEXT_DIR, arquivo);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ erro: 'Arquivo não encontrado.' });
+    try {
+        const data = fs.readFileSync(filePath, 'utf8');
+        const contexto = JSON.parse(data);
+        fs.writeFileSync(CONTEXT_FILE, JSON.stringify(contexto, null, 2));
+        res.json({ status: 'sucesso', contexto });
+    } catch (e) {
+        res.status(500).json({ status: 'falha', erro: e.message });
+    }
+});
+
+app.post('/api/contexto/novo', (req, res) => {
+    const { investigador } = req.body;
+    const novo = criarContextoInicial(investigador);
+    if (salvarContexto(novo)) {
+        res.json({ status: 'sucesso', contexto: novo });
+    } else {
+        res.status(500).json({ status: 'falha', mensagem: 'Erro ao criar novo contexto.' });
+    }
+});
+
+app.post('/api/contexto/atualizar', (req, res) => {
+    const { atualizacao } = req.body;
+    if (!atualizacao) return res.status(400).json({ erro: 'Atualização não fornecida.' });
+    const contexto = carregarContexto();
+    if (!contexto) return res.status(404).json({ erro: 'Nenhum contexto ativo para atualizar.' });
+    Object.assign(contexto, atualizacao);
+    contexto.timestamp_atualizacao = new Date().toISOString();
+    if (salvarContexto(contexto)) {
+        res.json({ status: 'sucesso', contexto });
+    } else {
+        res.status(500).json({ status: 'falha', mensagem: 'Erro ao atualizar contexto.' });
+    }
+});
+
+app.post('/api/contexto/nota', (req, res) => {
+    const { nota } = req.body;
+    if (!nota || typeof nota !== 'string') return res.status(400).json({ erro: 'Nota inválida.' });
+    const contexto = carregarContexto();
+    if (!contexto) return res.status(404).json({ erro: 'Nenhum contexto ativo.' });
+    contexto.notas = contexto.notas || [];
+    contexto.notas.push(`[${new Date().toISOString()}] ${nota}`);
+    contexto.timestamp_atualizacao = new Date().toISOString();
+    if (salvarContexto(contexto)) {
+        res.json({ status: 'sucesso', contexto });
+    } else {
+        res.status(500).json({ status: 'falha', mensagem: 'Erro ao adicionar nota.' });
+    }
+});
+
+app.post('/api/contexto/acao', (req, res) => {
+    const { acao, detalhes } = req.body;
+    if (!acao || typeof acao !== 'string') return res.status(400).json({ erro: 'Ação inválida.' });
+    const contexto = carregarContexto();
+    if (!contexto) return res.status(404).json({ erro: 'Nenhum contexto ativo.' });
+    contexto.historico_acoes = contexto.historico_acoes || [];
+    contexto.historico_acoes.push({ timestamp: new Date().toISOString(), acao, detalhes: detalhes || {} });
+    contexto.timestamp_atualizacao = new Date().toISOString();
+    if (salvarContexto(contexto)) {
+        res.json({ status: 'sucesso', contexto });
+    } else {
+        res.status(500).json({ status: 'falha', mensagem: 'Erro ao registrar ação.' });
+    }
+});
+
+log('info', 'Rotas de contexto inicializadas com sucesso.');
+
+// ============================================================
 // INICIALIZAÇÃO COM CADEIA DE IMPORTAÇÃO HARMONIZADA
 // ============================================================
 async function iniciarServidor() {
@@ -481,7 +446,12 @@ async function iniciarServidor() {
 }
 
 async function continuarInicializacao(dbTowers) {
-    const count = await new Promise((resolve) => { dbTowers.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0); });
+    // CORREÇÃO: sintaxe da Promise com parênteses corretos
+    const count = await new Promise((resolve) => {
+        dbTowers.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => {
+            resolve(row ? row.c : 0);
+        });
+    });
     log('info', 'Torres atuais: ' + (count || 0).toLocaleString());
 
     if (count < 1000000) {
@@ -515,7 +485,9 @@ async function continuarInicializacao(dbTowers) {
         }
 
         const novoCount = await new Promise((resolve) => {
-            dbTowers.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
+            dbTowers.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => {
+                resolve(row ? row.c : 0);
+            });
         });
         if (novoCount < 50) {
             log('warn', 'Nenhuma fonte disponível. Inserindo banco de emergência...');
