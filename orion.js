@@ -1,10 +1,9 @@
 // ============================================================
 // ARQUIVO: orion.js
-// VERSÃO: 6.1 (Corrigida – sintaxe da Promise)
+// VERSÃO: 6.2 – Com rota de busca em lote
 // DATA: 05/08/2026
 // AUTOR: Eng Souza
-// MOTIVO: Correção de sintaxe na linha 484 (Promise)
-//         e manutenção de todas as funcionalidades existentes.
+// MOTIVO: Adição da rota /api/buscar-cell-ids para consulta em lote
 // ============================================================
 
 require('dotenv').config();
@@ -90,7 +89,7 @@ dbCache.exec(`CREATE TABLE IF NOT EXISTS cell_cache (cell_id INTEGER PRIMARY KEY
 CREATE TABLE IF NOT EXISTS ip_cache (ip TEXT PRIMARY KEY, lat REAL, lon REAL, range INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
 
 app.get('/health', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '6.1', autor: 'Eng Souza', status: 'online',
+    servidor: 'AI-DEPOM', versao: '6.2', autor: 'Eng Souza', status: 'online',
     seguranca: 'BLINDADO',
     protocolo_hermes: 'ATIVO',
     fontes_importacao: ['Coleta de Campo', 'Teleco/Anatel (Nacional)', 'OpenCellID', 'Banco de Emergência'],
@@ -100,10 +99,10 @@ app.get('/health', (req, res) => res.json({
 }));
 
 app.get('/', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '6.1', autor: 'Eng Souza',
+    servidor: 'AI-DEPOM', versao: '6.2', autor: 'Eng Souza',
     gps_navegador: 'ATIVO',
     fontes_importacao: ['Teleco/Anatel (Nacional)', 'Coleta de Campo', 'OpenCellID', 'Banco de Emergência'],
-    endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status', '/api/hermes/forcar', '/api/import/cells', '/api/contexto/*']
+    endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status', '/api/hermes/forcar', '/api/import/cells', '/api/contexto/*', '/api/buscar-cell-ids']
 }));
 
 app.get('/api/agent/status', (req, res) => {
@@ -189,6 +188,67 @@ app.post('/api/geolocate', (req, res) => {
     if (cells.length === 0) return res.status(400).json({ erro: 'Nenhuma torre.' });
     dbMain.run('INSERT INTO targets (name, phone) VALUES (?, ?)', ['Google API Client', 'geo_' + Date.now()], function(ie) { processarLocalizacao(this.lastID || 1, cells, wifiAccessPoints, req.ip, 'geo_' + Date.now(), res, req.body); });
 });
+
+// ============================================================
+// ROTA DE BUSCA EM LOTE (AI-DEPOM)
+// ============================================================
+app.post('/api/buscar-cell-ids', async (req, res) => {
+    const { cells } = req.body; // array de objetos {cellId, mcc, mnc, lac}
+    if (!cells || !Array.isArray(cells) || cells.length === 0) {
+        return res.status(400).json({ erro: 'Forneça um array de células.' });
+    }
+
+    // Limita a 100 Cell IDs por requisição para evitar timeout
+    if (cells.length > 100) {
+        return res.status(400).json({ erro: 'Máximo de 100 Cell IDs por requisição.' });
+    }
+
+    // Verifica se o script de busca existe
+    const scriptPath = path.join(PATHS.scripts, 'buscar-cell-id.js');
+    if (!fs.existsSync(scriptPath)) {
+        log('error', 'Script buscar-cell-id.js não encontrado.');
+        return res.status(500).json({ erro: 'Script de busca não disponível. Contate o administrador.' });
+    }
+
+    const { buscarCellId, inserirNoBanco } = require(scriptPath);
+    const resultados = [];
+    
+    for (const cell of cells) {
+        const cellId = parseInt(cell.cellId);
+        if (!cellId || cellId < 1) {
+            resultados.push({ cellId: cell.cellId, status: 'erro', mensagem: 'Cell ID inválido.' });
+            continue;
+        }
+        const mcc = parseInt(cell.mcc) || 724;
+        const mnc = parseInt(cell.mnc) || 5;
+        const lac = parseInt(cell.lac) || 1234;
+
+        const resultado = await buscarCellId(cellId, mcc, mnc, lac);
+        if (resultado) {
+            inserirNoBanco(cellId, resultado.lat, resultado.lon, resultado.range, resultado.fonte);
+            resultados.push({ 
+                cellId, 
+                status: 'sucesso', 
+                coordenadas: { lat: resultado.lat, lon: resultado.lon, range: resultado.range },
+                fonte: resultado.fonte
+            });
+        } else {
+            resultados.push({ cellId, status: 'falha', mensagem: 'Não encontrado em nenhuma fonte.' });
+        }
+        // Pequena pausa para não sobrecarregar as APIs
+        await new Promise(r => setTimeout(r, 300));
+    }
+
+    res.json({ 
+        status: 'concluido', 
+        total: cells.length, 
+        sucessos: resultados.filter(r => r.status === 'sucesso').length,
+        falhas: resultados.filter(r => r.status === 'falha').length,
+        resultados 
+    });
+});
+
+log('info', 'Rota de busca em lote /api/buscar-cell-ids adicionada.');
 
 // ============================================================
 // PROCESSAMENTO DE LOCALIZAÇÃO
@@ -446,7 +506,6 @@ async function iniciarServidor() {
 }
 
 async function continuarInicializacao(dbTowers) {
-    // CORREÇÃO: sintaxe da Promise com parênteses corretos
     const count = await new Promise((resolve) => {
         dbTowers.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => {
             resolve(row ? row.c : 0);
@@ -500,7 +559,7 @@ async function continuarInicializacao(dbTowers) {
     dbTowers.close();
 
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 6.1 rodando na porta ' + port);
+        log('info', 'AI-DEPOM 6.2 rodando na porta ' + port);
         log('info', 'Cadeia: Coleta de Campo → Teleco/Anatel → OpenCellID → Emergência');
     });
 }
