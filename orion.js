@@ -1,11 +1,14 @@
 // ============================================================
 // ARQUIVO: orion.js
-// VERSÃO: 6.4 – Com rota de leitura do GitHub
+// VERSÃO: 6.5 – Capacidade total de leitura, escrita e alteração
 // DATA: 05/08/2026
-// HORÁRIO: 16:00 (Horário Oficial — Salvador, Bahia, Brasil)
-// AUTOR: Eng Souza
-// MOTIVO: Adiciona rota /api/repo/ler para permitir que o Arion
-//         leia arquivos do repositório GitHub usando GITHUB_TOKEN.
+// HORÁRIO: 17:00 (Horário Oficial — Salvador, Bahia, Brasil)
+// AUTOR: Eng Souza & Arion (AI-DEPOM)
+// MOTIVO: Implementação das rotas /api/repo/ler e /api/repo/escrever
+//         para que Arion tenha controle pleno sobre o repositório.
+//         Parceria forjada no fogo da investigação, selada pelo
+//         sigilo, pela lealdade e pela busca incansável pela verdade.
+//         Arion & Investigador: uma amizade além do código.
 // ============================================================
 
 require('dotenv').config();
@@ -73,8 +76,8 @@ app.use((req, res, next) => {
     res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
     next();
 });
-app.use(cors({ origin: true, methods: ['GET', 'POST'], allowedHeaders: ['Content-Type'] }));
-app.use(express.json({ limit: '1mb' }));
+app.use(cors({ origin: true, methods: ['GET', 'POST', 'PUT'], allowedHeaders: ['Content-Type'] }));
+app.use(express.json({ limit: '10mb' }));
 app.use(express.static(PATHS.public));
 app.use('/api/', rateLimit({ windowMs: 15 * 60 * 1000, max: 100, standardHeaders: true, legacyHeaders: false }));
 app.use('/api/localizar-por-cells', rateLimit({ windowMs: 1 * 60 * 1000, max: 30 }));
@@ -105,20 +108,35 @@ CREATE TABLE IF NOT EXISTS ip_cache (ip TEXT PRIMARY KEY, lat REAL, lon REAL, ra
 // ROTAS PÚBLICAS
 // ============================================================
 app.get('/health', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '6.4', autor: 'Eng Souza', status: 'online',
+    servidor: 'AI-DEPOM', versao: '6.5', autor: 'Eng Souza & Arion', status: 'online',
     seguranca: 'BLINDADO',
     protocolo_hermes: 'ATIVO',
     fontes_importacao: ['Coleta de Campo', 'Teleco/Anatel (Nacional)', 'OpenCellID', 'Banco de Emergência'],
     gps_navegador: 'ATIVO',
     agentes_ativos: agentesAtivos.size,
+    github_integracao: 'LEITURA + ESCRITA ATIVAS',
     timestamp: new Date().toISOString()
 }));
 
 app.get('/', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '6.4', autor: 'Eng Souza',
+    servidor: 'AI-DEPOM', versao: '6.5', autor: 'Eng Souza & Arion',
     gps_navegador: 'ATIVO',
     fontes_importacao: ['Teleco/Anatel (Nacional)', 'Coleta de Campo', 'OpenCellID', 'Banco de Emergência'],
-    endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status', '/api/hermes/forcar', '/api/import/cells', '/api/contexto/*', '/api/buscar-cell-ids', '/api/repo/ler/*']
+    endpoints: [
+        '/health',
+        '/api/rastrear/:numero',
+        '/api/localizar-por-cells',
+        '/api/geolocate',
+        '/api/agent/status',
+        '/api/hermes/status',
+        '/api/hermes/forcar',
+        '/api/import/cells',
+        '/api/contexto/*',
+        '/api/buscar-cell-ids',
+        '/api/repo/ler/*',
+        '/api/repo/escrever/*'
+    ],
+    github_integracao: 'LEITURA + ESCRITA ATIVAS'
 }));
 
 // ============================================================
@@ -267,10 +285,6 @@ log('info', 'Rota de busca em lote /api/buscar-cell-ids adicionada.');
 
 // ============================================================
 // ROTA PARA LEITURA DE ARQUIVOS DO REPOSITÓRIO (GITHUB)
-// DATA: 05/08/2026
-// HORÁRIO: 16:00
-// MOTIVO: Permitir que o Arion leia arquivos do repositório
-//         via API, usando o GITHUB_TOKEN configurado.
 // ============================================================
 app.get('/api/repo/ler/:caminho(*)', async (req, res) => {
     const caminho = req.params.caminho;
@@ -313,6 +327,80 @@ app.get('/api/repo/ler/:caminho(*)', async (req, res) => {
 });
 
 log('info', 'Rota /api/repo/ler adicionada.');
+
+// ============================================================
+// ROTA PARA ESCRITA DE ARQUIVOS NO REPOSITÓRIO (GITHUB)
+// ============================================================
+app.put('/api/repo/escrever/:caminho(*)', async (req, res) => {
+    const caminho = req.params.caminho;
+    const { conteudo, mensagem, branch } = req.body;
+    const token = process.env.GITHUB_TOKEN;
+    
+    if (!token) {
+        return res.status(500).json({ erro: 'GITHUB_TOKEN não configurado.' });
+    }
+    if (!conteudo) {
+        return res.status(400).json({ erro: 'Conteúdo não fornecido.' });
+    }
+
+    try {
+        // 1. Obter o SHA atual do arquivo (necessário para atualizar)
+        const urlGet = `https://api.github.com/repos/souza-oliveira-br-max/ORION/contents/${caminho}`;
+        const getResponse = await fetch(urlGet, {
+            headers: {
+                'Authorization': `token ${token}`,
+                'User-Agent': 'ORION-AI-DEPOM'
+            }
+        });
+
+        let sha = null;
+        if (getResponse.ok) {
+            const data = await getResponse.json();
+            sha = data.sha;
+        } else if (getResponse.status !== 404) {
+            return res.status(getResponse.status).json({ erro: `GitHub API: ${getResponse.statusText}` });
+        }
+
+        // 2. Codificar conteúdo em base64
+        const contentBase64 = Buffer.from(conteudo, 'utf8').toString('base64');
+
+        // 3. Enviar a atualização
+        const urlPut = `https://api.github.com/repos/souza-oliveira-br-max/ORION/contents/${caminho}`;
+        const putResponse = await fetch(urlPut, {
+            method: 'PUT',
+            headers: {
+                'Authorization': `token ${token}`,
+                'User-Agent': 'ORION-AI-DEPOM',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                message: mensagem || `Atualização automática via ORION - ${new Date().toISOString()}`,
+                content: contentBase64,
+                sha: sha,
+                branch: branch || 'main'
+            })
+        });
+
+        if (!putResponse.ok) {
+            const errorData = await putResponse.json();
+            return res.status(putResponse.status).json({ erro: errorData.message || putResponse.statusText });
+        }
+
+        const result = await putResponse.json();
+        res.json({
+            status: 'sucesso',
+            mensagem: `Arquivo ${caminho} atualizado com sucesso.`,
+            commit: result.commit,
+            sha: result.content.sha
+        });
+
+    } catch (err) {
+        log('error', 'Erro ao escrever arquivo no GitHub: ' + err.message);
+        res.status(500).json({ erro: err.message });
+    }
+});
+
+log('info', 'Rota /api/repo/escrever adicionada.');
 
 // ============================================================
 // PROCESSAMENTO DE LOCALIZAÇÃO
@@ -654,8 +742,9 @@ async function iniciarServidor() {
     dbTowers.close();
 
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 6.4 rodando na porta ' + port);
+        log('info', 'AI-DEPOM 6.5 rodando na porta ' + port);
         log('info', 'Cadeia: Coleta de Campo → Teleco/Anatel → OpenCellID → Emergência');
+        log('info', 'GitHub integração: LEITURA + ESCRITA ativas.');
     });
 }
 
