@@ -1,11 +1,11 @@
 // ============================================================
 // ARQUIVO: scripts/buscar-cell-id.js
-// VERSÃO: 1.0
+// VERSÃO: 1.1 – Com verificação de integridade do banco
 // DATA: 05/08/2026
-// HORÁRIO: 12:30 (Horário Oficial — Salvador, Bahia, Brasil)
+// HORÁRIO: 14:30 (Horário Oficial — Salvador, Bahia, Brasil)
 // AUTOR: Eng Souza
-// MOTIVO: Buscar coordenadas de um Cell ID em fontes externas
-//         (UnwiredLabs, OpenCellID, CellMapper) e inserir no banco.
+// MOTIVO: Adiciona verificação e recuperação de banco corrompido
+//         antes de consultar ou inserir dados.
 // ============================================================
 
 const fs = require('fs');
@@ -16,14 +16,12 @@ const sqlite3 = require('sqlite3').verbose();
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_TOWERS = path.join(DATA_DIR, 'cell_towers.db');
 
-// Configurações (use variáveis de ambiente se disponíveis)
 const UNWIRED_TOKEN = process.env.UNWIRED_TOKEN || 'pk.b6eadaf01c1bce6c3c8eb52bc8b30211';
 const OPENCELLID_KEY = process.env.OPENCELLID_API_KEY || 'pk.d597db3bcf9eea4d67acaeb057573fd4';
 
 // ============================================================
-// FUNÇÕES DE CONSULTA
+// FUNÇÕES DE CONSULTA (mantidas da versão anterior)
 // ============================================================
-
 function consultarUnwiredLabs(cellId, mcc = 724, mnc = 5, lac = 1234) {
     return new Promise((resolve) => {
         if (!UNWIRED_TOKEN) { resolve(null); return; }
@@ -54,7 +52,7 @@ function consultarUnwiredLabs(cellId, mcc = 724, mnc = 5, lac = 1234) {
             });
         });
         req.on('timeout', () => { req.destroy(); resolve(null); });
-        req.on('error', () => resolve(null));
+        req.on('error', (err) => { console.error(`[UNWIREDLABS] Erro: ${err.message}`); resolve(null); });
         req.write(data);
         req.end();
     });
@@ -75,14 +73,13 @@ function consultarOpenCellID(cellId) {
                 } catch (e) { resolve(null); }
             });
         });
-        req.on('error', () => resolve(null));
-        req.setTimeout(10000, () => { req.destroy(); resolve(null); });
+        req.on('error', (err) => { console.error(`[OPENCELLID] Erro: ${err.message}`); resolve(null); });
+        req.setTimeout(15000, () => { req.destroy(); resolve(null); });
     });
 }
 
 function consultarCellMapper(cellId, mcc = 724, mnc = 5) {
     return new Promise((resolve) => {
-        // Usa uma região central do Brasil (Salvador) para busca
         const lat = -12.9714;
         const lng = -38.5016;
         const url = `https://www.cellmapper.net/map/getTowers?MCC=${mcc}&MNC=${mnc}&lat=${lat}&lng=${lng}&zoom=14&format=json`;
@@ -117,54 +114,87 @@ function consultarCellMapper(cellId, mcc = 724, mnc = 5) {
                 } catch (e) { resolve(null); }
             });
         });
-        req.on('error', () => resolve(null));
+        req.on('error', (err) => { console.error(`[CELLMAPPER] Erro: ${err.message}`); resolve(null); });
         req.setTimeout(15000, () => { req.destroy(); resolve(null); });
     });
 }
 
 // ============================================================
+// VERIFICAÇÃO DE INTEGRIDADE DO BANCO
+// ============================================================
+function verificarERecuperarBanco() {
+    try {
+        if (!fs.existsSync(DB_TOWERS)) return true;
+        const db = new sqlite3.Database(DB_TOWERS);
+        return new Promise((resolve) => {
+            db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => {
+                db.close();
+                if (err) {
+                    console.error('[BUSCAR] Banco corrompido. Recriando...');
+                    fs.unlinkSync(DB_TOWERS);
+                    const newDb = new sqlite3.Database(DB_TOWERS);
+                    newDb.run('PRAGMA journal_mode=WAL');
+                    newDb.run('PRAGMA secure_delete=ON');
+                    newDb.run(`CREATE TABLE IF NOT EXISTS cell_towers (
+                        radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
+                        cell INTEGER PRIMARY KEY, unit INTEGER, lon REAL, lat REAL,
+                        range INTEGER, samples INTEGER, changeable INTEGER,
+                        created INTEGER, updated INTEGER, averageSignal INTEGER
+                    )`, () => {
+                        newDb.close();
+                        console.log('[BUSCAR] Banco recriado com sucesso.');
+                        resolve(true);
+                    });
+                } else {
+                    resolve(true);
+                }
+            });
+        });
+    } catch (e) {
+        console.error('[BUSCAR] Erro ao verificar banco:', e.message);
+        return false;
+    }
+}
+
+// ============================================================
 // FUNÇÃO PRINCIPAL
 // ============================================================
-
 async function buscarCellId(cellId, mcc = 724, mnc = 5, lac = 1234) {
-    console.log(`[BUSCAR] Buscando Cell ID ${cellId} (MCC=${mcc}, MNC=${mnc})...`);
+    console.log(`[BUSCAR] Buscando Cell ID ${cellId} (MCC=${mcc}, MNC=${mnc}, LAC=${lac})...`);
 
-    // Tenta UnwiredLabs
     let resultado = await consultarUnwiredLabs(cellId, mcc, mnc, lac);
     if (resultado) {
         console.log(`[BUSCAR] Encontrado via UnwiredLabs: ${resultado.lat}, ${resultado.lon}`);
         return resultado;
     }
 
-    // Tenta OpenCellID
     resultado = await consultarOpenCellID(cellId);
     if (resultado) {
         console.log(`[BUSCAR] Encontrado via OpenCellID: ${resultado.lat}, ${resultado.lon}`);
         return resultado;
     }
 
-    // Tenta CellMapper
     resultado = await consultarCellMapper(cellId, mcc, mnc);
     if (resultado) {
         console.log(`[BUSCAR] Encontrado via CellMapper: ${resultado.lat}, ${resultado.lon}`);
         return resultado;
     }
 
-    console.log(`[BUSCAR] Cell ID ${cellId} não encontrado em nenhuma fonte.`);
+    console.log(`[BUSCAR] Cell ID ${cellId} não encontrado.`);
     return null;
 }
 
 // ============================================================
 // INSERIR NO BANCO
 // ============================================================
-
-function inserirNoBanco(cellId, lat, lon, range, fonte) {
+function inserirNoBanco(cellId, lat, lon, range, fonte, mcc = 724, mnc = 5, lac = 1234) {
+    verificarERecuperarBanco();
     const db = new sqlite3.Database(DB_TOWERS);
     db.run('PRAGMA journal_mode=WAL');
     db.run(`INSERT OR REPLACE INTO cell_towers 
         (radio, mcc, net, area, cell, unit, lon, lat, range, samples, changeable, created, updated, averageSignal)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ['LTE', 724, 5, 1234, cellId, 0, lon, lat, range, 100, 1, Math.floor(Date.now()/1000), Math.floor(Date.now()/1000), -71],
+        ['LTE', mcc, mnc, lac, cellId, 0, lon, lat, range, 100, 1, Math.floor(Date.now()/1000), Math.floor(Date.now()/1000), -71],
         (err) => {
             if (err) console.error('[BUSCAR] Erro ao inserir:', err.message);
             else console.log(`[BUSCAR] Cell ID ${cellId} inserido com sucesso.`);
@@ -176,7 +206,6 @@ function inserirNoBanco(cellId, lat, lon, range, fonte) {
 // ============================================================
 // EXECUÇÃO VIA LINHA DE COMANDO
 // ============================================================
-
 if (require.main === module) {
     const args = process.argv.slice(2);
     if (args.length < 1) {
@@ -191,7 +220,7 @@ if (require.main === module) {
 
     buscarCellId(cellId, mcc, mnc, lac).then(resultado => {
         if (resultado) {
-            inserirNoBanco(cellId, resultado.lat, resultado.lon, resultado.range, resultado.fonte);
+            inserirNoBanco(cellId, resultado.lat, resultado.lon, resultado.range, resultado.fonte, mcc, mnc, lac);
             console.log(`✅ Cell ID ${cellId} inserido com sucesso.`);
         } else {
             console.log(`❌ Cell ID ${cellId} não encontrado.`);
