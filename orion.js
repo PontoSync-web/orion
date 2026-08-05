@@ -1,11 +1,11 @@
 // ============================================================
 // ARQUIVO: orion.js
-// VERSÃO: 6.3 – Com recuperação automática de banco corrompido
+// VERSÃO: 6.4 – Com rota de leitura do GitHub
 // DATA: 05/08/2026
-// HORÁRIO: 14:30 (Horário Oficial — Salvador, Bahia, Brasil)
+// HORÁRIO: 16:00 (Horário Oficial — Salvador, Bahia, Brasil)
 // AUTOR: Eng Souza
-// MOTIVO: Adiciona verificação e recuperação automática de 
-//         banco de dados corrompido (SQLITE_CORRUPT).
+// MOTIVO: Adiciona rota /api/repo/ler para permitir que o Arion
+//         leia arquivos do repositório GitHub usando GITHUB_TOKEN.
 // ============================================================
 
 require('dotenv').config();
@@ -36,7 +36,9 @@ const DB_MAIN = path.join(PATHS.data, 'orion.db');
 const DB_TOWERS = path.join(PATHS.data, 'cell_towers.db');
 const DB_CACHE = path.join(PATHS.data, 'cache.db');
 
-// Verificação de permissão de escrita no diretório data/
+// ============================================================
+// VERIFICAÇÃO DE PERMISSÃO DE ESCRITA
+// ============================================================
 try {
     const testFile = path.join(PATHS.data, '.write_test');
     fs.writeFileSync(testFile, 'test');
@@ -54,6 +56,9 @@ const UNWIRED_TOKEN = process.env.UNWIRED_TOKEN || '';
 const hermes = new ProtocoloHermes();
 const agentesAtivos = new Map();
 
+// ============================================================
+// MIDDLEWARES
+// ============================================================
 app.use(helmet({
     contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"], styleSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"], imgSrc: ["'self'", "data:", "https://*.tile.openstreetmap.org"], connectSrc: ["'self'", "https://*.tile.openstreetmap.org"] } },
     hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
@@ -76,9 +81,15 @@ app.use('/api/localizar-por-cells', rateLimit({ windowMs: 1 * 60 * 1000, max: 30
 
 const log = (level, msg) => console.log(`[${new Date().toISOString()}] [${level.toUpperCase()}] ${msg}`);
 
+// ============================================================
+// FUNÇÕES AUXILIARES
+// ============================================================
 function sanitizarNumero(numero) { if (!numero || typeof numero !== 'string') return ''; return numero.replace(/[^0-9+]/g, '').substring(0, 20); }
 function validarCells(cells) { if (!Array.isArray(cells)) return false; if (cells.length === 0 || cells.length > 10) return false; return cells.every(c => c && typeof c.cellId === 'number' && c.cellId > 0 && c.cellId < 999999999); }
 
+// ============================================================
+// BANCOS DE DADOS
+// ============================================================
 const dbMain = new sqlite3.Database(DB_MAIN);
 dbMain.run('PRAGMA journal_mode=WAL');
 dbMain.run('PRAGMA secure_delete=ON');
@@ -90,8 +101,11 @@ dbCache.run('PRAGMA journal_mode=WAL');
 dbCache.exec(`CREATE TABLE IF NOT EXISTS cell_cache (cell_id INTEGER PRIMARY KEY, lat REAL, lon REAL, range INTEGER, fonte TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS ip_cache (ip TEXT PRIMARY KEY, lat REAL, lon REAL, range INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`);
 
+// ============================================================
+// ROTAS PÚBLICAS
+// ============================================================
 app.get('/health', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '6.3', autor: 'Eng Souza', status: 'online',
+    servidor: 'AI-DEPOM', versao: '6.4', autor: 'Eng Souza', status: 'online',
     seguranca: 'BLINDADO',
     protocolo_hermes: 'ATIVO',
     fontes_importacao: ['Coleta de Campo', 'Teleco/Anatel (Nacional)', 'OpenCellID', 'Banco de Emergência'],
@@ -101,12 +115,15 @@ app.get('/health', (req, res) => res.json({
 }));
 
 app.get('/', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '6.3', autor: 'Eng Souza',
+    servidor: 'AI-DEPOM', versao: '6.4', autor: 'Eng Souza',
     gps_navegador: 'ATIVO',
     fontes_importacao: ['Teleco/Anatel (Nacional)', 'Coleta de Campo', 'OpenCellID', 'Banco de Emergência'],
-    endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status', '/api/hermes/forcar', '/api/import/cells', '/api/contexto/*', '/api/buscar-cell-ids']
+    endpoints: ['/health', '/api/rastrear/:numero', '/api/localizar-por-cells', '/api/geolocate', '/api/agent/status', '/api/hermes/status', '/api/hermes/forcar', '/api/import/cells', '/api/contexto/*', '/api/buscar-cell-ids', '/api/repo/ler/*']
 }));
 
+// ============================================================
+// ROTAS DA API
+// ============================================================
 app.get('/api/agent/status', (req, res) => {
     const agentes = [];
     agentesAtivos.forEach((v, k) => agentes.push({ id: k.substring(0, 8) + '****', numero: v.numero ? v.numero.substring(0, 4) + '****' : '****', ultima_vez: v.timestamp, torres: v.torres }));
@@ -192,7 +209,7 @@ app.post('/api/geolocate', (req, res) => {
 });
 
 // ============================================================
-// ROTA DE BUSCA EM LOTE (AI-DEPOM)
+// ROTA DE BUSCA EM LOTE
 // ============================================================
 app.post('/api/buscar-cell-ids', async (req, res) => {
     const { cells } = req.body;
@@ -249,12 +266,122 @@ app.post('/api/buscar-cell-ids', async (req, res) => {
 log('info', 'Rota de busca em lote /api/buscar-cell-ids adicionada.');
 
 // ============================================================
+// ROTA PARA LEITURA DE ARQUIVOS DO REPOSITÓRIO (GITHUB)
+// DATA: 05/08/2026
+// HORÁRIO: 16:00
+// MOTIVO: Permitir que o Arion leia arquivos do repositório
+//         via API, usando o GITHUB_TOKEN configurado.
+// ============================================================
+app.get('/api/repo/ler/:caminho(*)', async (req, res) => {
+    const caminho = req.params.caminho;
+    const token = process.env.GITHUB_TOKEN;
+    
+    if (!token) {
+        return res.status(500).json({ erro: 'GITHUB_TOKEN não configurado.' });
+    }
+
+    try {
+        const url = `https://api.github.com/repos/souza-oliveira-br-max/ORION/contents/${caminho}`;
+        const response = await fetch(url, {
+            headers: {
+                'Authorization': `token ${token}`,
+                'User-Agent': 'ORION-AI-DEPOM'
+            }
+        });
+
+        if (!response.ok) {
+            return res.status(response.status).json({ erro: `GitHub API: ${response.statusText}` });
+        }
+
+        const data = await response.json();
+        if (data.content) {
+            const conteudo = Buffer.from(data.content, 'base64').toString('utf8');
+            res.json({ 
+                status: 'sucesso', 
+                arquivo: caminho, 
+                conteudo: conteudo,
+                sha: data.sha,
+                tamanho: data.size
+            });
+        } else {
+            res.json({ status: 'vazio', mensagem: 'Arquivo vazio ou não encontrado.' });
+        }
+    } catch (err) {
+        log('error', 'Erro ao ler arquivo do GitHub: ' + err.message);
+        res.status(500).json({ erro: err.message });
+    }
+});
+
+log('info', 'Rota /api/repo/ler adicionada.');
+
+// ============================================================
 // PROCESSAMENTO DE LOCALIZAÇÃO
 // ============================================================
 async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, res, reqBody) {
-    // ... (mantido o mesmo código da versão 6.2)
-    // Para não repetir, mantenha a função original.
-    // O importante é que ela usa o DB_TOWERS e as funções auxiliares.
+    if (reqBody && reqBody.gps && reqBody.gps.lat) {
+        const pos = { latitude: reqBody.gps.lat, longitude: reqBody.gps.lng, radius: reqBody.gps.accuracy || 10, torres_usadas: 1 };
+        gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, pos, 'gps_navegador', res, reqBody);
+        return;
+    }
+
+    const torresEncontradas = [];
+    for (const cell of cells) { const cached = await consultarCache(cell.cellId); if (cached) torresEncontradas.push(cached); }
+    if (torresEncontradas.length > 0) { gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, calcularTriangulacao(torresEncontradas), 'cache', res); return; }
+    try { const ur = await consultarUnwiredMulti(cells); if (ur && ur.latitude) { for (const cell of cells) await atualizarCache(cell.cellId, ur.latitude, ur.longitude, ur.radius, 'unwired_labs'); gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, ur, 'unwired_labs', res); return; } } catch (e) {}
+    try { const dbT = new sqlite3.Database(DB_TOWERS); const cids = cells.map(c => c.cellId); const ph = cids.map(() => '?').join(','); const trs = await new Promise((resolve) => { dbT.all('SELECT cell, lat, lon, range FROM cell_towers WHERE cell IN (' + ph + ')', cids, (err, rows) => { dbT.close(); resolve(err ? [] : rows); }); }); if (trs && trs.length > 0) { for (const t of trs) { await atualizarCache(t.cell, t.lat, t.lon, t.range, 'banco_local'); torresEncontradas.push(t); } gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, calcularTriangulacao(torresEncontradas), 'banco_local', res); return; } } catch (e) {}
+    if (wifiAccessPoints && Array.isArray(wifiAccessPoints) && wifiAccessPoints.length > 0) { try { const wp = await consultarWiFi(wifiAccessPoints); if (wp) { gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, wp, 'wifi', res); return; } } catch (e) {} }
+    for (const cell of cells) { const info = await consultarTorreComRetry(cell.cellId); if (info) { await atualizarCache(cell.cellId, info.lat, info.lon, info.range, 'api_externa'); torresEncontradas.push(info); } }
+    if (torresEncontradas.length > 0) { gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, calcularTriangulacao(torresEncontradas), 'api_externa', res); return; }
+    if (clientIp && clientIp !== '127.0.0.1' && clientIp !== '::1') { try { const ip = await consultarIP(clientIp); if (ip) { gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, ip, 'ip', res); return; } } catch (e) {} }
+    const estimativa = estimarPorRSSI(cells);
+    if (estimativa) { gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, estimativa, 'rssi_estimativa', res); return; }
+
+    log('info', 'Todas as fontes falharam. Acionando Protocolo Hermes...');
+    try {
+        const sessaoId = hermes.iniciarSessaoEmergenciaNacional('localizacao_falha', { cells, regiao: 'Brasil' });
+        const erbs = await hermes.consultarTodasAsIAs(sessaoId, { cells });
+        if (erbs && erbs.length > 0) {
+            const dbT = new sqlite3.Database(DB_TOWERS);
+            const stmt = dbT.prepare('INSERT OR REPLACE INTO cell_towers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+            for (const erb of erbs) {
+                stmt.run(['GSM', erb.mcc || 724, erb.mnc || 5, erb.lac || 100, erb.cell_id, 0, erb.lon, erb.lat, erb.range || 5000, 100, 1, 1609459200, 1609459200, -71]);
+                await atualizarCache(erb.cell_id, erb.lat, erb.lon, erb.range || 5000, 'hermes');
+                torresEncontradas.push({ cell: erb.cell_id, lat: erb.lat, lon: erb.lon, range: erb.range || 5000 });
+            }
+            stmt.finalize();
+            dbT.close();
+            hermes.destruirSessao(sessaoId);
+            gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, sessaoId, calcularTriangulacao(torresEncontradas), 'hermes', res);
+            return;
+        }
+        hermes.destruirSessao(sessaoId);
+    } catch (e) { log('error', 'Hermes falhou: ' + e.message); }
+    gravarLocalizacao(targetId, cells, wifiAccessPoints, clientIp, agentId, null, null, 'sem_dados', res);
+}
+
+// ============================================================
+// FUNÇÕES AUXILIARES DE LOCALIZAÇÃO
+// ============================================================
+function consultarCache(cellId) { return new Promise((resolve) => { dbCache.get('SELECT lat, lon, range, fonte FROM cell_cache WHERE cell_id = ? AND created_at > datetime("now", "-24 hours")', [cellId], (err, row) => resolve(row ? { cell: cellId, lat: row.lat, lon: row.lon, range: row.range, fonte: row.fonte } : null)); }); }
+function atualizarCache(cellId, lat, lon, range, fonte) { return new Promise((resolve) => { dbCache.run('INSERT OR REPLACE INTO cell_cache (cell_id, lat, lon, range, fonte, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)', [cellId, lat, lon, range, fonte], () => resolve()); }); }
+function consultarUnwiredMulti(cells) { if (!UNWIRED_TOKEN || cells.length === 0) return Promise.resolve(null); return new Promise((resolve) => { const cellData = cells.map(c => ({ lac: c.lac || 1234, cid: c.cellId, signal: c.rssi || -73 })); const data = JSON.stringify({ token: UNWIRED_TOKEN, radio: 'gsm', mcc: cells[0].mcc || 724, mnc: cells[0].mnc || 5, cells: cellData, address: 1 }); const req = https.request({ hostname: 'us1.unwiredlabs.com', path: '/v2/process.php', method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: 5000 }, (res) => { let body = ''; res.on('data', chunk => body += chunk); res.on('end', () => { try { const r = JSON.parse(body); if (r.status === 'ok' && r.lat && r.lon) resolve({ latitude: r.lat, longitude: r.lon, radius: r.accuracy || 150, torres_usadas: cells.length }); else resolve(null); } catch (e) { resolve(null); } }); }); req.on('timeout', () => { req.destroy(); resolve(null); }); req.on('error', () => resolve(null)); req.write(data); req.end(); }); }
+function consultarWiFi(wifiAccessPoints) { return new Promise((resolve) => { const data = JSON.stringify({ wifiAccessPoints }); const req = https.request({ hostname: 'location.services.mozilla.com', path: '/v1/geolocate?key=test', method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: 5000 }, (res) => { let body = ''; res.on('data', chunk => body += chunk); res.on('end', () => { try { const r = JSON.parse(body); if (r.location && r.location.lat) resolve({ latitude: r.location.lat, longitude: r.location.lng, radius: r.accuracy || 50 }); else resolve(null); } catch (e) { resolve(null); } }); }); req.on('timeout', () => { req.destroy(); resolve(null); }); req.on('error', () => resolve(null)); req.write(data); req.end(); }); }
+function consultarIP(ip) { return new Promise((resolve) => { dbCache.get('SELECT lat, lon, range FROM ip_cache WHERE ip = ? AND created_at > datetime("now", "-1 hours")', [ip], (err, row) => { if (row) { resolve({ latitude: row.lat, longitude: row.lon, radius: row.range }); return; } const req = https.get('http://ip-api.com/json/' + ip + '?fields=lat,lon', (response) => { let body = ''; response.on('data', chunk => body += chunk); response.on('end', () => { try { const d = JSON.parse(body); if (d.lat && d.lon) { dbCache.run('INSERT OR REPLACE INTO ip_cache (ip, lat, lon, range, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)', [ip, d.lat, d.lon, 5000]); resolve({ latitude: d.lat, longitude: d.lon, radius: 5000 }); } else resolve(null); } catch (e) { resolve(null); } }); }); req.on('error', () => resolve(null)); req.setTimeout(3000, () => { req.destroy(); resolve(null); }); }); }); }
+async function consultarTorreComRetry(cellId) { for (let i = 0; i < 2; i++) { const r = await consultarTorreAPIs(cellId); if (r) return r; if (i < 1) await new Promise(r => setTimeout(r, 1000)); } return null; }
+async function consultarTorreAPIs(cellId) { try { const mls = await consultarMLS(cellId); if (mls) return mls; } catch (e) {} if (API_KEY) { try { const oci = await consultarOpenCellID(cellId); if (oci) return oci; } catch (e) {} } return null; }
+function consultarMLS(cellId, mcc = 724, mnc = 5, lac = 1234) { return new Promise((resolve) => { const data = JSON.stringify({ cellTowers: [{ cellId, mobileCountryCode: mcc, mobileNetworkCode: mnc, locationAreaCode: lac }] }); const req = https.request({ hostname: 'location.services.mozilla.com', path: '/v1/geolocate?key=test', method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: 5000 }, (res) => { let body = ''; res.on('data', chunk => body += chunk); res.on('end', () => { try { const r = JSON.parse(body); if (r.location && r.location.lat) resolve({ cell: cellId, lat: r.location.lat, lon: r.location.lng, range: r.accuracy || 500 }); else resolve(null); } catch (e) { resolve(null); } }); }); req.on('timeout', () => { req.destroy(); resolve(null); }); req.on('error', () => resolve(null)); req.write(data); req.end(); }); }
+function consultarOpenCellID(cellId) { return new Promise((resolve) => { if (!API_KEY) { resolve(null); return; } const req = https.get('https://opencellid.org/cell/get?key=' + API_KEY + '&cell=' + cellId + '&format=json', (response) => { let body = ''; response.on('data', chunk => body += chunk); response.on('end', () => { try { const d = JSON.parse(body); if (d.lat && d.lon) resolve({ cell: cellId, lat: d.lat, lon: d.lon, range: d.range || 500 }); else resolve(null); } catch (e) { resolve(null); } }); }); req.on('error', () => resolve(null)); req.setTimeout(5000, () => { req.destroy(); resolve(null); }); }); }
+function estimarPorRSSI(cells) { if (!cells || cells.length < 2) return null; const distancias = cells.map(c => Math.pow(10, (-50 - (c.rssi || c.rsrp || -73)) / (10 * 3.0))); const distanciaMedia = distancias.reduce((a, b) => a + b, 0) / distancias.length; return { latitude: null, longitude: null, radius: Math.round(distanciaMedia), torres_usadas: cells.length }; }
+function calcularTriangulacao(torres) { let lat = 0, lon = 0, pesoTotal = 0; torres.forEach(t => { const peso = 1 / Math.max(t.range || 500, 1); lat += t.lat * peso; lon += t.lon * peso; pesoTotal += peso; }); return { latitude: lat / pesoTotal, longitude: lon / pesoTotal, radius: Math.round(torres.reduce((a, t) => a + (t.range || 500), 0) / torres.length / Math.sqrt(torres.length)), torres_usadas: torres.length }; }
+function gravarLocalizacao(targetId, cells, wifiData, clientIp, agentId, hermesSession, pos, fonte, res, reqBody) {
+    const gpsData = (reqBody && reqBody.gps) ? JSON.stringify(reqBody.gps) : null;
+    dbMain.run(
+        'INSERT INTO locations (target_id, cell_data, wifi_data, ip_data, source, metodo, torres_usadas, latitude, longitude, radius, agent_id, hermes_session, gps_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [targetId, JSON.stringify(cells), wifiData ? JSON.stringify(wifiData) : null, clientIp || null, fonte, pos && pos.latitude ? 'triangulacao' : 'dados_brutos', pos ? pos.torres_usadas || cells.length : cells.length, pos ? pos.latitude : null, pos ? pos.longitude : null, pos ? pos.radius : null, agentId || null, hermesSession || null, gpsData],
+        function(err) {
+            if (err) return res.status(500).json({ erro: err.message });
+            res.json({ status: pos && pos.latitude ? 'localizado' : 'recebido', mensagem: pos && pos.latitude ? 'Localizacao calculada via ' + fonte + '.' : 'Celulas registradas.', position: pos && pos.latitude ? { latitude: pos.latitude, longitude: pos.longitude, raio_estimado: pos.radius } : null, torres_usadas: pos ? pos.torres_usadas || cells.length : cells.length, fonte: fonte, hermes_session: hermesSession ? hermesSession.substring(0, 16) + '...' : null, timestamp: new Date().toISOString() });
+        });
 }
 
 // ============================================================
@@ -263,23 +390,166 @@ async function processarLocalizacao(targetId, cells, wifiAccessPoints, clientIp,
 const CONTEXT_DIR = PATHS.contextos;
 const CONTEXT_FILE = path.join(CONTEXT_DIR, 'atual.json');
 
-function carregarContexto() { /* ... */ }
-function salvarContexto(contexto) { /* ... */ }
-function criarContextoInicial(investigador) { /* ... */ }
+function carregarContexto() {
+    try {
+        if (fs.existsSync(CONTEXT_FILE)) {
+            const data = fs.readFileSync(CONTEXT_FILE, 'utf8');
+            return JSON.parse(data);
+        }
+    } catch (e) {
+        log('warn', 'Erro ao carregar contexto: ' + e.message);
+    }
+    return null;
+}
 
-app.post('/api/contexto/salvar', (req, res) => { /* ... */ });
-app.get('/api/contexto/restaurar', (req, res) => { /* ... */ });
-app.get('/api/contexto/historico', (req, res) => { /* ... */ });
-app.get('/api/contexto/carregar/:arquivo', (req, res) => { /* ... */ });
-app.post('/api/contexto/novo', (req, res) => { /* ... */ });
-app.post('/api/contexto/atualizar', (req, res) => { /* ... */ });
-app.post('/api/contexto/nota', (req, res) => { /* ... */ });
-app.post('/api/contexto/acao', (req, res) => { /* ... */ });
+function salvarContexto(contexto) {
+    try {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const arquivoHistorico = path.join(CONTEXT_DIR, `sessao_${timestamp}.json`);
+        fs.writeFileSync(arquivoHistorico, JSON.stringify(contexto, null, 2));
+        fs.writeFileSync(CONTEXT_FILE, JSON.stringify(contexto, null, 2));
+        log('info', 'Contexto salvo em: ' + arquivoHistorico);
+        return true;
+    } catch (e) {
+        log('error', 'Erro ao salvar contexto: ' + e.message);
+        return false;
+    }
+}
+
+function criarContextoInicial(investigador) {
+    return {
+        sessao_id: new Date().toISOString().replace(/[:.]/g, '-'),
+        timestamp_inicio: new Date().toISOString(),
+        timestamp_atualizacao: new Date().toISOString(),
+        investigador: investigador || 'desconhecido',
+        alvo: {
+            numero: null,
+            codinome: null,
+            cell_ids_investigados: [],
+            ultima_localizacao: null,
+            status: 'iniciado'
+        },
+        banco_de_torres: {
+            total: 0,
+            fonte: 'Teleco/Anatel',
+            ultima_importacao: null
+        },
+        historico_acoes: [],
+        proximo_passo: 'Aguardando instruções.',
+        notas: []
+    };
+}
+
+// ROTAS DE CONTEXTO
+app.post('/api/contexto/salvar', (req, res) => {
+    const { contexto } = req.body;
+    if (!contexto) return res.status(400).json({ erro: 'Contexto não fornecido.' });
+    if (salvarContexto(contexto)) {
+        res.json({ status: 'sucesso', mensagem: 'Contexto salvo.' });
+    } else {
+        res.status(500).json({ status: 'falha', mensagem: 'Erro ao salvar contexto.' });
+    }
+});
+
+app.get('/api/contexto/restaurar', (req, res) => {
+    const contexto = carregarContexto();
+    if (contexto) {
+        res.json({ status: 'sucesso', contexto });
+    } else {
+        res.status(404).json({ status: 'falha', mensagem: 'Nenhum contexto salvo.' });
+    }
+});
+
+app.get('/api/contexto/historico', (req, res) => {
+    try {
+        const files = fs.readdirSync(CONTEXT_DIR)
+            .filter(f => f.startsWith('sessao_') && f.endsWith('.json'))
+            .sort()
+            .reverse();
+        const historico = files.map(f => {
+            const filePath = path.join(CONTEXT_DIR, f);
+            const stats = fs.statSync(filePath);
+            return { arquivo: f, criado_em: stats.birthtime.toISOString(), modificado_em: stats.mtime.toISOString() };
+        });
+        res.json({ status: 'sucesso', historico });
+    } catch (e) {
+        res.status(500).json({ status: 'falha', erro: e.message });
+    }
+});
+
+app.get('/api/contexto/carregar/:arquivo', (req, res) => {
+    const { arquivo } = req.params;
+    if (!arquivo || !arquivo.endsWith('.json')) return res.status(400).json({ erro: 'Arquivo inválido.' });
+    const filePath = path.join(CONTEXT_DIR, arquivo);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ erro: 'Arquivo não encontrado.' });
+    try {
+        const data = fs.readFileSync(filePath, 'utf8');
+        const contexto = JSON.parse(data);
+        fs.writeFileSync(CONTEXT_FILE, JSON.stringify(contexto, null, 2));
+        res.json({ status: 'sucesso', contexto });
+    } catch (e) {
+        res.status(500).json({ status: 'falha', erro: e.message });
+    }
+});
+
+app.post('/api/contexto/novo', (req, res) => {
+    const { investigador } = req.body;
+    const novo = criarContextoInicial(investigador);
+    if (salvarContexto(novo)) {
+        res.json({ status: 'sucesso', contexto: novo });
+    } else {
+        res.status(500).json({ status: 'falha', mensagem: 'Erro ao criar novo contexto.' });
+    }
+});
+
+app.post('/api/contexto/atualizar', (req, res) => {
+    const { atualizacao } = req.body;
+    if (!atualizacao) return res.status(400).json({ erro: 'Atualização não fornecida.' });
+    const contexto = carregarContexto();
+    if (!contexto) return res.status(404).json({ erro: 'Nenhum contexto ativo para atualizar.' });
+    Object.assign(contexto, atualizacao);
+    contexto.timestamp_atualizacao = new Date().toISOString();
+    if (salvarContexto(contexto)) {
+        res.json({ status: 'sucesso', contexto });
+    } else {
+        res.status(500).json({ status: 'falha', mensagem: 'Erro ao atualizar contexto.' });
+    }
+});
+
+app.post('/api/contexto/nota', (req, res) => {
+    const { nota } = req.body;
+    if (!nota || typeof nota !== 'string') return res.status(400).json({ erro: 'Nota inválida.' });
+    const contexto = carregarContexto();
+    if (!contexto) return res.status(404).json({ erro: 'Nenhum contexto ativo.' });
+    contexto.notas = contexto.notas || [];
+    contexto.notas.push(`[${new Date().toISOString()}] ${nota}`);
+    contexto.timestamp_atualizacao = new Date().toISOString();
+    if (salvarContexto(contexto)) {
+        res.json({ status: 'sucesso', contexto });
+    } else {
+        res.status(500).json({ status: 'falha', mensagem: 'Erro ao adicionar nota.' });
+    }
+});
+
+app.post('/api/contexto/acao', (req, res) => {
+    const { acao, detalhes } = req.body;
+    if (!acao || typeof acao !== 'string') return res.status(400).json({ erro: 'Ação inválida.' });
+    const contexto = carregarContexto();
+    if (!contexto) return res.status(404).json({ erro: 'Nenhum contexto ativo.' });
+    contexto.historico_acoes = contexto.historico_acoes || [];
+    contexto.historico_acoes.push({ timestamp: new Date().toISOString(), acao, detalhes: detalhes || {} });
+    contexto.timestamp_atualizacao = new Date().toISOString();
+    if (salvarContexto(contexto)) {
+        res.json({ status: 'sucesso', contexto });
+    } else {
+        res.status(500).json({ status: 'falha', mensagem: 'Erro ao registrar ação.' });
+    }
+});
 
 log('info', 'Rotas de contexto inicializadas com sucesso.');
 
 // ============================================================
-// FUNÇÃO DE VERIFICAÇÃO E RECUPERAÇÃO DE BANCO
+// VERIFICAÇÃO E RECUPERAÇÃO DE BANCO
 // ============================================================
 async function verificarERecuperarBanco(db) {
     let bancoCorrompido = false;
@@ -322,14 +592,13 @@ async function verificarERecuperarBanco(db) {
 }
 
 // ============================================================
-// INICIALIZAÇÃO COM CADEIA DE IMPORTAÇÃO HARMONIZADA
+// INICIALIZAÇÃO DO SERVIDOR
 // ============================================================
 async function iniciarServidor() {
     let dbTowers = new sqlite3.Database(DB_TOWERS);
     dbTowers.run('PRAGMA journal_mode=WAL');
     dbTowers.run('PRAGMA secure_delete=ON');
 
-    // Verifica e recupera se necessário
     dbTowers = await verificarERecuperarBanco(dbTowers);
 
     const count = await new Promise((resolve) => {
@@ -385,7 +654,7 @@ async function iniciarServidor() {
     dbTowers.close();
 
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 6.3 rodando na porta ' + port);
+        log('info', 'AI-DEPOM 6.4 rodando na porta ' + port);
         log('info', 'Cadeia: Coleta de Campo → Teleco/Anatel → OpenCellID → Emergência');
     });
 }
