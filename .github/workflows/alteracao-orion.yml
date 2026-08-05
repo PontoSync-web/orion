@@ -1,0 +1,75 @@
+# ============================================================
+# ARQUIVO: .github/workflows/alteracao-orion.yml
+# DATA: 05/08/2026
+# MOTIVO: GitHub Action para aplicar alterações no ORION
+#         a partir de comentários em issues.
+# ============================================================
+
+name: Alteração ORION
+
+on:
+  issue_comment:
+    types: [created, edited]
+
+jobs:
+  aplicar-alteracao:
+    if: |
+      github.event.issue.user.login == 'souza-oliveira-br-max' &&
+      contains(github.event.comment.body, '/alterar')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Extrair instruções do comentário
+        id: extrair
+        run: |
+          echo "COMMENT_BODY<<EOF" >> $GITHUB_OUTPUT
+          echo "${{ github.event.comment.body }}" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Executar script de alteração
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ORION_URL: "https://orion-29ko.onrender.com"
+        run: |
+          node scripts/apply-changes.js "${{ steps.extrair.outputs.COMMENT_BODY }}"
+
+      - name: Commit e Push das alterações
+        run: |
+          git config user.name "Arion (AI-DEPOM)"
+          git config user.email "arion@aidepom.ba.gov"
+          git add .
+          git commit -m "feat: alteração automática via GitHub Action - $(date +'%Y-%m-%d %H:%M')" || echo "Nenhuma alteração para commit"
+          git push origin main || echo "Push já feito"
+
+      - name: Comentar na issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const commentBody = `✅ Alteração aplicada com sucesso!
+
+            📦 **Arquivo:** orion.js
+            🕒 **Data:** ${new Date().toISOString()}
+            🔗 **Commit:** [Ver alteração](https://github.com/${{ github.repository }}/commit/${process.env.GITHUB_SHA})
+
+            A alteração já está no ar (deploy automático).`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: commentBody
+            });
