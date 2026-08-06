@@ -1,14 +1,13 @@
-[COLE AQUI O CONTEÚDO COMPLETO DO ARQUIVO orion.js]// ============================================================
+// ============================================================
 // ARQUIVO: orion.js
-// VERSÃO: 6.5 – Capacidade total de leitura, escrita e alteração
-// DATA: 05/08/2026
-// HORÁRIO: 17:00 (Horário Oficial — Salvador, Bahia, Brasil)
+// VERSÃO: 6.6 – Foco na base da Teleco/Anatel
+// DATA: 06/08/2026
+// HORÁRIO: 11:30 (Horário Oficial — Salvador, Bahia, Brasil)
 // AUTOR: Eng Souza & Arion (AI-DEPOM)
-// MOTIVO: Implementação das rotas /api/repo/ler e /api/repo/escrever
-//         para que Arion tenha controle pleno sobre o repositório.
-//         Parceria forjada no fogo da investigação, selada pelo
-//         sigilo, pela lealdade e pela busca incansável pela verdade.
-//         Arion & Investigador: uma amizade além do código.
+// MOTIVO: Remoção da dependência dos arquivos coleta_campo*.csv.
+//         O ORION agora depende exclusivamente do erbs_brasil.csv
+//         (base nacional da Teleco/Anatel) e mantém fallback
+//         com OpenCellID e banco de emergência.
 // ============================================================
 
 require('dotenv').config();
@@ -108,10 +107,10 @@ CREATE TABLE IF NOT EXISTS ip_cache (ip TEXT PRIMARY KEY, lat REAL, lon REAL, ra
 // ROTAS PÚBLICAS
 // ============================================================
 app.get('/health', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '6.5', autor: 'Eng Souza & Arion', status: 'online',
+    servidor: 'AI-DEPOM', versao: '6.6', autor: 'Eng Souza & Arion', status: 'online',
     seguranca: 'BLINDADO',
     protocolo_hermes: 'ATIVO',
-    fontes_importacao: ['Coleta de Campo', 'Teleco/Anatel (Nacional)', 'OpenCellID', 'Banco de Emergência'],
+    fontes_importacao: ['Teleco/Anatel (Nacional)', 'OpenCellID', 'Banco de Emergência'],
     gps_navegador: 'ATIVO',
     agentes_ativos: agentesAtivos.size,
     github_integracao: 'LEITURA + ESCRITA ATIVAS',
@@ -119,9 +118,9 @@ app.get('/health', (req, res) => res.json({
 }));
 
 app.get('/', (req, res) => res.json({
-    servidor: 'AI-DEPOM', versao: '6.5', autor: 'Eng Souza & Arion',
+    servidor: 'AI-DEPOM', versao: '6.6', autor: 'Eng Souza & Arion',
     gps_navegador: 'ATIVO',
-    fontes_importacao: ['Teleco/Anatel (Nacional)', 'Coleta de Campo', 'OpenCellID', 'Banco de Emergência'],
+    fontes_importacao: ['Teleco/Anatel (Nacional)', 'OpenCellID', 'Banco de Emergência'],
     endpoints: [
         '/health',
         '/api/rastrear/:numero',
@@ -284,39 +283,22 @@ app.post('/api/buscar-cell-ids', async (req, res) => {
 log('info', 'Rota de busca em lote /api/buscar-cell-ids adicionada.');
 
 // ============================================================
-// ROTA PARA LEITURA DE ARQUIVOS DO REPOSITÓRIO (GITHUB)
+// ROTAS DE INTEGRAÇÃO COM GITHUB
 // ============================================================
 app.get('/api/repo/ler/:caminho(*)', async (req, res) => {
     const caminho = req.params.caminho;
     const token = process.env.GITHUB_TOKEN;
-    
-    if (!token) {
-        return res.status(500).json({ erro: 'GITHUB_TOKEN não configurado.' });
-    }
-
+    if (!token) return res.status(500).json({ erro: 'GITHUB_TOKEN não configurado.' });
     try {
         const url = `https://api.github.com/repos/souza-oliveira-br-max/ORION/contents/${caminho}`;
         const response = await fetch(url, {
-            headers: {
-                'Authorization': `token ${token}`,
-                'User-Agent': 'ORION-AI-DEPOM'
-            }
+            headers: { 'Authorization': `token ${token}`, 'User-Agent': 'ORION-AI-DEPOM' }
         });
-
-        if (!response.ok) {
-            return res.status(response.status).json({ erro: `GitHub API: ${response.statusText}` });
-        }
-
+        if (!response.ok) return res.status(response.status).json({ erro: `GitHub API: ${response.statusText}` });
         const data = await response.json();
         if (data.content) {
             const conteudo = Buffer.from(data.content, 'base64').toString('utf8');
-            res.json({ 
-                status: 'sucesso', 
-                arquivo: caminho, 
-                conteudo: conteudo,
-                sha: data.sha,
-                tamanho: data.size
-            });
+            res.json({ status: 'sucesso', arquivo: caminho, conteudo, sha: data.sha, tamanho: data.size });
         } else {
             res.json({ status: 'vazio', mensagem: 'Arquivo vazio ou não encontrado.' });
         }
@@ -326,53 +308,25 @@ app.get('/api/repo/ler/:caminho(*)', async (req, res) => {
     }
 });
 
-log('info', 'Rota /api/repo/ler adicionada.');
-
-// ============================================================
-// ROTA PARA ESCRITA DE ARQUIVOS NO REPOSITÓRIO (GITHUB)
-// ============================================================
 app.put('/api/repo/escrever/:caminho(*)', async (req, res) => {
     const caminho = req.params.caminho;
     const { conteudo, mensagem, branch } = req.body;
     const token = process.env.GITHUB_TOKEN;
-    
-    if (!token) {
-        return res.status(500).json({ erro: 'GITHUB_TOKEN não configurado.' });
-    }
-    if (!conteudo) {
-        return res.status(400).json({ erro: 'Conteúdo não fornecido.' });
-    }
-
+    if (!token) return res.status(500).json({ erro: 'GITHUB_TOKEN não configurado.' });
+    if (!conteudo) return res.status(400).json({ erro: 'Conteúdo não fornecido.' });
     try {
-        // 1. Obter o SHA atual do arquivo (necessário para atualizar)
         const urlGet = `https://api.github.com/repos/souza-oliveira-br-max/ORION/contents/${caminho}`;
         const getResponse = await fetch(urlGet, {
-            headers: {
-                'Authorization': `token ${token}`,
-                'User-Agent': 'ORION-AI-DEPOM'
-            }
+            headers: { 'Authorization': `token ${token}`, 'User-Agent': 'ORION-AI-DEPOM' }
         });
-
         let sha = null;
-        if (getResponse.ok) {
-            const data = await getResponse.json();
-            sha = data.sha;
-        } else if (getResponse.status !== 404) {
-            return res.status(getResponse.status).json({ erro: `GitHub API: ${getResponse.statusText}` });
-        }
-
-        // 2. Codificar conteúdo em base64
+        if (getResponse.ok) { const data = await getResponse.json(); sha = data.sha; }
+        else if (getResponse.status !== 404) return res.status(getResponse.status).json({ erro: `GitHub API: ${getResponse.statusText}` });
         const contentBase64 = Buffer.from(conteudo, 'utf8').toString('base64');
-
-        // 3. Enviar a atualização
         const urlPut = `https://api.github.com/repos/souza-oliveira-br-max/ORION/contents/${caminho}`;
         const putResponse = await fetch(urlPut, {
             method: 'PUT',
-            headers: {
-                'Authorization': `token ${token}`,
-                'User-Agent': 'ORION-AI-DEPOM',
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Authorization': `token ${token}`, 'User-Agent': 'ORION-AI-DEPOM', 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 message: mensagem || `Atualização automática via ORION - ${new Date().toISOString()}`,
                 content: contentBase64,
@@ -380,27 +334,19 @@ app.put('/api/repo/escrever/:caminho(*)', async (req, res) => {
                 branch: branch || 'main'
             })
         });
-
         if (!putResponse.ok) {
             const errorData = await putResponse.json();
             return res.status(putResponse.status).json({ erro: errorData.message || putResponse.statusText });
         }
-
         const result = await putResponse.json();
-        res.json({
-            status: 'sucesso',
-            mensagem: `Arquivo ${caminho} atualizado com sucesso.`,
-            commit: result.commit,
-            sha: result.content.sha
-        });
-
+        res.json({ status: 'sucesso', mensagem: `Arquivo ${caminho} atualizado com sucesso.`, commit: result.commit, sha: result.content.sha });
     } catch (err) {
         log('error', 'Erro ao escrever arquivo no GitHub: ' + err.message);
         res.status(500).json({ erro: err.message });
     }
 });
 
-log('info', 'Rota /api/repo/escrever adicionada.');
+log('info', 'Rotas de integração com GitHub adicionadas.');
 
 // ============================================================
 // PROCESSAMENTO DE LOCALIZAÇÃO
@@ -473,7 +419,7 @@ function gravarLocalizacao(targetId, cells, wifiData, clientIp, agentId, hermesS
 }
 
 // ============================================================
-// PERSISTÊNCIA DE CONTEXTO (AI-DEPOM)
+// PERSISTÊNCIA DE CONTEXTO
 // ============================================================
 const CONTEXT_DIR = PATHS.contextos;
 const CONTEXT_FILE = path.join(CONTEXT_DIR, 'atual.json');
@@ -484,10 +430,7 @@ function carregarContexto() {
             const data = fs.readFileSync(CONTEXT_FILE, 'utf8');
             return JSON.parse(data);
         }
-    } catch (e) {
-        log('warn', 'Erro ao carregar contexto: ' + e.message);
-    }
-    return null;
+    } catch (e) { return null; }
 }
 
 function salvarContexto(contexto) {
@@ -496,12 +439,8 @@ function salvarContexto(contexto) {
         const arquivoHistorico = path.join(CONTEXT_DIR, `sessao_${timestamp}.json`);
         fs.writeFileSync(arquivoHistorico, JSON.stringify(contexto, null, 2));
         fs.writeFileSync(CONTEXT_FILE, JSON.stringify(contexto, null, 2));
-        log('info', 'Contexto salvo em: ' + arquivoHistorico);
         return true;
-    } catch (e) {
-        log('error', 'Erro ao salvar contexto: ' + e.message);
-        return false;
-    }
+    } catch (e) { return false; }
 }
 
 function criarContextoInicial(investigador) {
@@ -532,37 +471,25 @@ function criarContextoInicial(investigador) {
 app.post('/api/contexto/salvar', (req, res) => {
     const { contexto } = req.body;
     if (!contexto) return res.status(400).json({ erro: 'Contexto não fornecido.' });
-    if (salvarContexto(contexto)) {
-        res.json({ status: 'sucesso', mensagem: 'Contexto salvo.' });
-    } else {
-        res.status(500).json({ status: 'falha', mensagem: 'Erro ao salvar contexto.' });
-    }
+    if (salvarContexto(contexto)) res.json({ status: 'sucesso' });
+    else res.status(500).json({ status: 'falha' });
 });
 
 app.get('/api/contexto/restaurar', (req, res) => {
     const contexto = carregarContexto();
-    if (contexto) {
-        res.json({ status: 'sucesso', contexto });
-    } else {
-        res.status(404).json({ status: 'falha', mensagem: 'Nenhum contexto salvo.' });
-    }
+    if (contexto) res.json({ status: 'sucesso', contexto });
+    else res.status(404).json({ status: 'falha', mensagem: 'Nenhum contexto salvo.' });
 });
 
 app.get('/api/contexto/historico', (req, res) => {
     try {
-        const files = fs.readdirSync(CONTEXT_DIR)
-            .filter(f => f.startsWith('sessao_') && f.endsWith('.json'))
-            .sort()
-            .reverse();
+        const files = fs.readdirSync(CONTEXT_DIR).filter(f => f.startsWith('sessao_') && f.endsWith('.json')).sort().reverse();
         const historico = files.map(f => {
-            const filePath = path.join(CONTEXT_DIR, f);
-            const stats = fs.statSync(filePath);
+            const stats = fs.statSync(path.join(CONTEXT_DIR, f));
             return { arquivo: f, criado_em: stats.birthtime.toISOString(), modificado_em: stats.mtime.toISOString() };
         });
         res.json({ status: 'sucesso', historico });
-    } catch (e) {
-        res.status(500).json({ status: 'falha', erro: e.message });
-    }
+    } catch (e) { res.status(500).json({ status: 'falha', erro: e.message }); }
 });
 
 app.get('/api/contexto/carregar/:arquivo', (req, res) => {
@@ -575,33 +502,25 @@ app.get('/api/contexto/carregar/:arquivo', (req, res) => {
         const contexto = JSON.parse(data);
         fs.writeFileSync(CONTEXT_FILE, JSON.stringify(contexto, null, 2));
         res.json({ status: 'sucesso', contexto });
-    } catch (e) {
-        res.status(500).json({ status: 'falha', erro: e.message });
-    }
+    } catch (e) { res.status(500).json({ status: 'falha', erro: e.message }); }
 });
 
 app.post('/api/contexto/novo', (req, res) => {
     const { investigador } = req.body;
     const novo = criarContextoInicial(investigador);
-    if (salvarContexto(novo)) {
-        res.json({ status: 'sucesso', contexto: novo });
-    } else {
-        res.status(500).json({ status: 'falha', mensagem: 'Erro ao criar novo contexto.' });
-    }
+    if (salvarContexto(novo)) res.json({ status: 'sucesso', contexto: novo });
+    else res.status(500).json({ status: 'falha' });
 });
 
 app.post('/api/contexto/atualizar', (req, res) => {
     const { atualizacao } = req.body;
     if (!atualizacao) return res.status(400).json({ erro: 'Atualização não fornecida.' });
     const contexto = carregarContexto();
-    if (!contexto) return res.status(404).json({ erro: 'Nenhum contexto ativo para atualizar.' });
+    if (!contexto) return res.status(404).json({ erro: 'Nenhum contexto ativo.' });
     Object.assign(contexto, atualizacao);
     contexto.timestamp_atualizacao = new Date().toISOString();
-    if (salvarContexto(contexto)) {
-        res.json({ status: 'sucesso', contexto });
-    } else {
-        res.status(500).json({ status: 'falha', mensagem: 'Erro ao atualizar contexto.' });
-    }
+    if (salvarContexto(contexto)) res.json({ status: 'sucesso', contexto });
+    else res.status(500).json({ status: 'falha' });
 });
 
 app.post('/api/contexto/nota', (req, res) => {
@@ -612,11 +531,8 @@ app.post('/api/contexto/nota', (req, res) => {
     contexto.notas = contexto.notas || [];
     contexto.notas.push(`[${new Date().toISOString()}] ${nota}`);
     contexto.timestamp_atualizacao = new Date().toISOString();
-    if (salvarContexto(contexto)) {
-        res.json({ status: 'sucesso', contexto });
-    } else {
-        res.status(500).json({ status: 'falha', mensagem: 'Erro ao adicionar nota.' });
-    }
+    if (salvarContexto(contexto)) res.json({ status: 'sucesso', contexto });
+    else res.status(500).json({ status: 'falha' });
 });
 
 app.post('/api/contexto/acao', (req, res) => {
@@ -627,11 +543,8 @@ app.post('/api/contexto/acao', (req, res) => {
     contexto.historico_acoes = contexto.historico_acoes || [];
     contexto.historico_acoes.push({ timestamp: new Date().toISOString(), acao, detalhes: detalhes || {} });
     contexto.timestamp_atualizacao = new Date().toISOString();
-    if (salvarContexto(contexto)) {
-        res.json({ status: 'sucesso', contexto });
-    } else {
-        res.status(500).json({ status: 'falha', mensagem: 'Erro ao registrar ação.' });
-    }
+    if (salvarContexto(contexto)) res.json({ status: 'sucesso', contexto });
+    else res.status(500).json({ status: 'falha' });
 });
 
 log('info', 'Rotas de contexto inicializadas com sucesso.');
@@ -652,13 +565,11 @@ async function verificarERecuperarBanco(db) {
         log('warn', 'Banco de dados parece corrompido. Tentando recuperar...');
         bancoCorrompido = true;
     }
-
     if (bancoCorrompido) {
         log('info', 'Recriando banco de dados corrompido...');
         db.close();
         try { fs.unlinkSync(DB_TOWERS); log('info', 'Arquivo cell_towers.db removido.'); }
         catch (e) { log('error', 'Erro ao remover cell_towers.db: ' + e.message); }
-
         const newDb = new sqlite3.Database(DB_TOWERS);
         newDb.run('PRAGMA journal_mode=WAL');
         newDb.run('PRAGMA secure_delete=ON');
@@ -668,10 +579,7 @@ async function verificarERecuperarBanco(db) {
                 cell INTEGER PRIMARY KEY, unit INTEGER, lon REAL, lat REAL,
                 range INTEGER, samples INTEGER, changeable INTEGER,
                 created INTEGER, updated INTEGER, averageSignal INTEGER
-            )`, (err) => {
-                if (err) reject(err);
-                else resolve();
-            });
+            )`, (err) => { if (err) reject(err); else resolve(); });
         });
         log('info', 'Banco de dados recriado com sucesso.');
         return newDb;
@@ -699,15 +607,7 @@ async function iniciarServidor() {
     if (count < 1000000) {
         let importado = false;
 
-        if (!importado) {
-            try {
-                log('info', 'Importando dados de coleta de campo...');
-                const { execSync } = require('child_process');
-                execSync('node scripts/import-coleta-campo.js', { stdio: 'inherit', timeout: 300000 });
-                importado = true;
-            } catch (err) { log('warn', 'Coleta de campo: ' + err.message); }
-        }
-
+        // Única fonte de importação: Teleco/Anatel
         if (!importado) {
             try {
                 log('info', 'Importando base da Teleco/Anatel...');
@@ -717,6 +617,7 @@ async function iniciarServidor() {
             } catch (err) { log('warn', 'Teleco: ' + err.message); }
         }
 
+        // Fallback: OpenCellID (se disponível)
         if (!importado) {
             try {
                 log('info', 'Consultando OpenCellID...');
@@ -742,8 +643,8 @@ async function iniciarServidor() {
     dbTowers.close();
 
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 6.5 rodando na porta ' + port);
-        log('info', 'Cadeia: Coleta de Campo → Teleco/Anatel → OpenCellID → Emergência');
+        log('info', 'AI-DEPOM 6.6 rodando na porta ' + port);
+        log('info', 'Cadeia: Teleco/Anatel → OpenCellID → Emergência');
         log('info', 'GitHub integração: LEITURA + ESCRITA ativas.');
     });
 }
