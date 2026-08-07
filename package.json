@@ -1,33 +1,23 @@
 {
   "name": "orion",
-  "version": "2.0.0",
-  "description": "ORION - Sistema de Localização e Inteligência para Investigação Criminal",
+  "version": "6.7.0",
+  "description": "AI-DEPOM Orion - Geolocalização por torres de celular",
   "main": "orion.js",
   "scripts": {
-    "start": "node orion.js",
-    "dev": "nodemon orion.js",
-    "test": "node scripts/test-system.js",
-    "import-erbs": "node scripts/importar-erbs.js",
-    "import-erbs:force": "node scripts/importar-erbs.js --force",
-    "deploy": "node scripts/auto-deploy.js"
+    "start": "node orion.js"
   },
   "dependencies": {
-    "axios": "^1.4.0",
-    "cors": "^2.8.5",
     "csv-parser": "^3.0.0",
-    "dotenv": "^16.0.3",
     "express": "^4.18.2",
-    "helmet": "^7.0.0",
-    "pg": "^8.11.0",
-    "pg-hstore": "^2.3.4",
-    "pg-promise": "^11.5.0",
-    "redis": "^4.6.7",
-    "sequelize": "^6.32.1",
-    "socket.io": "^4.6.1",
-    "sqlite3": "^5.1.6",
-    "winston": "^3.9.0"
+    "sqlite3": "^5.1.6"
   },
-  "devDependencies": {
-    "nodemon": "^2.0.22"
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "Equipe ORION",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/souza-oliveira-br-max/ORION"
   }
 }
