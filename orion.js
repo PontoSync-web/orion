@@ -1,10 +1,10 @@
 /**
  * ARQUIVO: orion.js
- * VERSÃO: 6.8.0
- * ÚLTIMA ATUALIZAÇÃO: 2026-08-07 21:30:00 (UTC)
- * COMENTÁRIO: Integração com importador multi‑CSV. 
- *             Chain: coleta_campo → Anatel → OpenCellID → Emergência.
- *             Limiar de importação mantido em 1000 torres.
+ * VERSÃO: 6.8.1
+ * ÚLTIMA ATUALIZAÇÃO: 2026-08-07 22:30:00 (UTC)
+ * COMENTÁRIO: Prevenção de recriação desnecessária do banco.
+ *             Importador multi-CSV com limite de registros (500k).
+ *             Cadeia: Multi-CSV → Teleco → OpenCellID → Emergência.
  * AUTOR: Equipe ORION
  */
 
@@ -49,7 +49,7 @@ app.use(express.urlencoded({ extended: true }));
 // ROTAS EXISTENTES (mantidas)
 // ============================================================
 // (Aqui ficam /api/localizar, /api/buscar-cell-ids, /api/contexto/*, /api/github/*)
-// Para não repetir, mantenha as que já estão no seu código.
+// Mantenha as rotas que já estão no seu código.
 
 // ============================================================
 // FUNÇÕES DE IMPORTAÇÃO
@@ -72,17 +72,20 @@ async function inserirBancoEmergencia(db) {
 
 async function verificarERecuperarBanco(db) {
     let corrompido = false;
+    let count = 0;
     try {
-        await new Promise((resolve, reject) => {
+        count = await new Promise((resolve, reject) => {
             db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => {
                 if (err) { corrompido = true; reject(err); } else resolve(row ? row.c : 0);
             });
         });
     } catch (err) {
-        log('warn', 'Banco de dados parece corrompido. Recriando...');
+        log('warn', 'Erro ao ler banco: ' + err.message);
         corrompido = true;
     }
-    if (corrompido) {
+
+    if (corrompido && count === 0) {
+        log('warn', 'Banco corrompido e vazio. Recriando...');
         db.close();
         try { fs.unlinkSync(DB_TOWERS); } catch (e) {}
         const newDb = new sqlite3.Database(DB_TOWERS);
@@ -98,8 +101,12 @@ async function verificarERecuperarBanco(db) {
         });
         log('info', 'Banco recriado com sucesso.');
         return newDb;
+    } else if (corrompido && count > 0) {
+        log('warn', 'Banco corrompido mas com dados. Mantendo como está.');
+        return db;
+    } else {
+        return db;
     }
-    return db;
 }
 
 // ============================================================
@@ -120,11 +127,11 @@ async function iniciarServidor() {
     if (count < 1000) {
         let importado = false;
 
-        // 1. Importador universal (todos os CSVs)
+        // 1. Importador multi‑CSV (com limite de 500k registros para evitar OOM)
         try {
             log('info', 'Executando importação multi‑CSV...');
             const { importarTodosCSVs } = require('./scripts/import-coleta-campo.js');
-            const inseridos = await importarTodosCSVs(dbTowers);
+            const inseridos = await importarTodosCSVs(dbTowers, { maxRegistros: 500000 });
             if (inseridos > 0) {
                 importado = true;
                 log('info', `Importação multi‑CSV concluída: ${inseridos} torres.`);
@@ -135,7 +142,7 @@ async function iniciarServidor() {
             log('warn', 'Erro no importador multi‑CSV: ' + err.message);
         }
 
-        // 2. Fallback: Teleco (apenas se não importado)
+        // 2. Fallback: Teleco
         if (!importado) {
             try {
                 log('info', 'Tentando Teleco/Anatel...');
@@ -153,7 +160,7 @@ async function iniciarServidor() {
             } catch (err) { log('warn', 'OpenCellID falhou: ' + err.message); }
         }
 
-        // 4. Emergência (sempre inserido se nada funcionou)
+        // 4. Emergência
         if (!importado) {
             log('warn', 'Nenhuma fonte disponível. Inserindo banco de emergência...');
             await inserirBancoEmergencia(dbTowers);
@@ -162,10 +169,16 @@ async function iniciarServidor() {
         log('info', 'Banco já possui torres suficientes.');
     }
 
+    // Atualiza a contagem final
+    const finalCount = await new Promise((resolve) => {
+        dbTowers.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
+    });
+    log('info', 'Total final de torres: ' + finalCount.toLocaleString());
+
     dbTowers.close();
 
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 6.8 rodando na porta ' + port);
+        log('info', 'AI-DEPOM 6.8.1 rodando na porta ' + port);
         log('info', 'Cadeia: Multi‑CSV → Teleco → OpenCellID → Emergência');
         log('info', 'GitHub integração ativa.');
     });
