@@ -2,17 +2,16 @@
 data/cell_towers.db
 data/erbs_brasil.csv
 data/coleta_campo*.csv
+data/Estacoes_Licenciadas_SMP*.csv
+data/anatel_smp_nacional*.csv
+data/erb_consolidado_final.csv
 
 # Dependências
 node_modules/
 
 # Logs
 *.log
-npm-debug.log*
 
-# Arquivos de ambiente
-.env
-
-# Arquivos temporários
+# Temporários
 *.tmp
 *.swp
