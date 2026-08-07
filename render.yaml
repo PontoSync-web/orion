@@ -1,0 +1,37 @@
+# render.yaml
+# ORION - Configuração para deploy no Render
+
+services:
+  - type: web
+    name: orion-api
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node orion.js
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: orion-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: orion-redis
+          type: redis
+          property: connectionString
+
+  - type: postgresql
+    name: orion-db
+    plan: free
+    databaseName: orion
+    user: orion_user
+
+  - type: redis
+    name: orion-redis
+    plan: free
+    maxMemoryPolicy: noeviction
