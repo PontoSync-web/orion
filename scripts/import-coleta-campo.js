@@ -1,11 +1,11 @@
 /**
  * ARQUIVO: scripts/import-coleta-campo.js
- * VERSÃO: 1.1.0
- * ÚLTIMA ATUALIZAÇÃO: 2026-08-07 14:30:00 (UTC)
- * COMENTÁRIO: Exporta função 'processarArquivosColeta' para ser chamada pelo orion.js.
- *             Aceita conexão de banco existente (reutilizável).
- *             Mapeamento flexível de colunas (aceita variações de nomes).
- *             Processa todos os arquivos coleta_campo*.csv do diretório data/.
+ * VERSÃO: 2.0.0
+ * ÚLTIMA ATUALIZAÇÃO: 2026-08-07 21:30:00 (UTC)
+ * COMENTÁRIO: Importador universal que processa todos os CSVs relevantes no diretório data/.
+ *             Suporta Anatel (Estacoes_Licenciadas_SMP*, anatel_smp_nacional*),
+ *             OpenCellID (coleta_campo*), consolidado (erb_consolidado_final.csv),
+ *             e qualquer outro que contenha colunas de torres.
  * AUTOR: Equipe ORION
  */
 
@@ -17,20 +17,45 @@ const sqlite3 = require('sqlite3').verbose();
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_PATH = path.join(DATA_DIR, 'cell_towers.db');
 
+// Mapeamento de sinônimos para cada campo do banco
+const COLUMN_MAP = {
+    radio: ['radio', 'RADIO', 'tecnologias', 'Tecnologias'],
+    mcc: ['mcc', 'MCC', 'opencellid_mcc', 'codigo_operadora', 'Código da UF'],
+    net: ['net', 'NET', 'mnc', 'MNC', 'opencellid_net', 'operadora', 'Operadora'],
+    area: ['area', 'AREA', 'lac', 'LAC', 'opencellid_area', 'codigo_municipio_ibge', 'Código do Município'],
+    cell: ['cell', 'CELL', 'ci', 'CI', 'opencellid_cell', 'id_estacao', 'Número da Estação'],
+    unit: ['unit', 'UNIT'],
+    lon: ['lon', 'LON', 'longitude', 'LONGITUDE', 'Longitude'],
+    lat: ['lat', 'LAT', 'latitude', 'LATITUDE', 'Latitude'],
+    range: ['range', 'RANGE', 'opencellid_range'],
+    samples: ['samples', 'SAMPLES', 'opencellid_samples'],
+    changeable: ['changeable', 'CHANGEABLE'],
+    created: ['created', 'CREATED'],
+    updated: ['updated', 'UPDATED'],
+    averageSignal: ['averageSignal', 'AVERAGESIGNAL', 'opencellid_averagesignal']
+};
+
+function findColumn(headers, synonyms) {
+    for (const syn of synonyms) {
+        const found = headers.find(h => h.trim().toLowerCase() === syn.toLowerCase());
+        if (found) return found;
+    }
+    return null;
+}
+
 /**
- * Processa todos os arquivos CSV com padrão "coleta_campo*.csv"
- * e insere os dados no banco de torres.
- * @param {sqlite3.Database} db - Conexão com o banco (opcional, se não fornecido, abre internamente)
- * @returns {Promise<number>} - Número total de registros inseridos
+ * Importa todos os arquivos CSV que correspondem a padrões conhecidos.
+ * @param {sqlite3.Database} db - Conexão com o banco (opcional)
+ * @returns {Promise<number>} - Total de registros inseridos
  */
-async function processarArquivosColeta(db = null) {
+async function importarTodosCSVs(db = null) {
     const closeDb = !db;
     if (!db) {
         db = new sqlite3.Database(DB_PATH);
         db.run('PRAGMA journal_mode=WAL');
     }
 
-    // Garantir que a tabela existe
+    // Cria tabela se não existir
     await new Promise((resolve, reject) => {
         db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
             radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
@@ -40,54 +65,76 @@ async function processarArquivosColeta(db = null) {
         )`, (err) => { if (err) reject(err); else resolve(); });
     });
 
-    // Listar arquivos
+    // Padrões de arquivos a considerar
+    const patterns = [
+        /^coleta_campo.*\.csv$/i,
+        /^Estacoes_Licenciadas_SMP.*\.csv$/i,
+        /^anatel_smp_nacional.*\.csv$/i,
+        /^erb_consolidado_final\.csv$/i
+    ];
+
     const files = fs.readdirSync(DATA_DIR)
-        .filter(f => f.startsWith('coleta_campo') && f.endsWith('.csv'));
+        .filter(f => patterns.some(p => p.test(f)));
 
     if (files.length === 0) {
-        console.log('[IMPORT-CAMP] Nenhum arquivo de coleta de campo encontrado.');
+        console.log('[IMPORT-UNIVERSAL] Nenhum arquivo CSV compatível encontrado.');
         if (closeDb) db.close();
         return 0;
     }
 
-    console.log(`[IMPORT-CAMP] Encontrados ${files.length} arquivos:`, files);
+    console.log(`[IMPORT-UNIVERSAL] Encontrados ${files.length} arquivos:`, files);
 
     let totalInseridos = 0;
     const stmt = db.prepare(`INSERT OR REPLACE INTO cell_towers 
         (radio, mcc, net, area, cell, unit, lon, lat, range, samples, changeable, created, updated, averageSignal)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 
-    // Processar cada arquivo sequencialmente
     for (const file of files) {
         const filePath = path.join(DATA_DIR, file);
-        console.log(`[IMPORT-CAMP] Processando ${file}...`);
+        console.log(`[IMPORT-UNIVERSAL] Processando ${file}...`);
 
         let count = 0;
+        let headers = null;
+        let columnCache = {};
+
         await new Promise((resolve, reject) => {
-            const stream = fs.createReadStream(filePath)
+            const stream = fs.createReadStream(filePath, { encoding: 'utf8' })
                 .pipe(csv({
                     separator: ',',
                     mapHeaders: ({ header }) => header.trim()
                 }))
+                .on('headers', (headerList) => {
+                    headers = headerList;
+                    for (const [field, synonyms] of Object.entries(COLUMN_MAP)) {
+                        const col = findColumn(headers, synonyms);
+                        if (col) columnCache[field] = col;
+                    }
+                    console.log(`[IMPORT-UNIVERSAL] Mapeamento para ${file}:`, columnCache);
+                })
                 .on('data', (row) => {
-                    // Mapeamento flexível de colunas
-                    const campos = {
-                        radio: row.radio || row.RADIO || '',
-                        mcc: parseInt(row.mcc || row.MCC || 0),
-                        net: parseInt(row.net || row.NET || row.mnc || row.MNC || 0),
-                        area: parseInt(row.area || row.AREA || row.lac || row.LAC || 0),
-                        cell: parseInt(row.cell || row.CELL || row.ci || row.CI || 0),
-                        unit: parseInt(row.unit || row.UNIT || 0),
-                        lon: parseFloat(row.lon || row.LON || row.longitude || row.LONGITUDE || 0),
-                        lat: parseFloat(row.lat || row.LAT || row.latitude || row.LATITUDE || 0),
-                        range: parseInt(row.range || row.RANGE || 500),
-                        samples: parseInt(row.samples || row.SAMPLES || 1),
-                        changeable: parseInt(row.changeable || row.CHANGEABLE || 1),
-                        created: parseInt(row.created || row.CREATED || Math.floor(Date.now()/1000)),
-                        updated: parseInt(row.updated || row.UPDATED || Math.floor(Date.now()/1000)),
-                        averageSignal: parseInt(row.averageSignal || row.AVERAGESIGNAL || -70)
+                    const get = (field) => {
+                        const col = columnCache[field];
+                        return col ? row[col] : undefined;
                     };
 
+                    const campos = {
+                        radio: get('radio') || '',
+                        mcc: parseInt(get('mcc') || 0),
+                        net: parseInt(get('net') || 0),
+                        area: parseInt(get('area') || 0),
+                        cell: parseInt(get('cell') || 0),
+                        unit: parseInt(get('unit') || 0),
+                        lon: parseFloat(get('lon') || 0),
+                        lat: parseFloat(get('lat') || 0),
+                        range: parseInt(get('range') || 500),
+                        samples: parseInt(get('samples') || 1),
+                        changeable: parseInt(get('changeable') || 1),
+                        created: parseInt(get('created') || Math.floor(Date.now()/1000)),
+                        updated: parseInt(get('updated') || Math.floor(Date.now()/1000)),
+                        averageSignal: parseInt(get('averageSignal') || -70)
+                    };
+
+                    // Validação mínima
                     if (campos.cell && campos.lat && campos.lon) {
                         stmt.run(
                             campos.radio, campos.mcc, campos.net, campos.area,
@@ -100,35 +147,34 @@ async function processarArquivosColeta(db = null) {
                     }
                 })
                 .on('end', () => {
-                    console.log(`[IMPORT-CAMP] ${file} → ${count} registros.`);
+                    console.log(`[IMPORT-UNIVERSAL] ${file} → ${count} registros.`);
                     resolve();
                 })
                 .on('error', (err) => {
-                    console.error(`[IMPORT-CAMP] Erro no arquivo ${file}:`, err.message);
+                    console.error(`[IMPORT-UNIVERSAL] Erro em ${file}:`, err.message);
                     resolve(); // continua com o próximo
                 });
         });
     }
 
     stmt.finalize();
-    // Criar índice
     db.run('CREATE INDEX IF NOT EXISTS idx_cell ON cell_towers(cell)');
 
     if (closeDb) db.close();
     return totalInseridos;
 }
 
-// Execução direta (se chamado como script)
+// Execução direta
 if (require.main === module) {
-    processarArquivosColeta()
+    importarTodosCSVs()
         .then(total => {
-            console.log(`[IMPORT-CAMP] Importação concluída. Total: ${total} registros.`);
+            console.log(`[IMPORT-UNIVERSAL] Importação concluída. Total: ${total} registros.`);
             process.exit(0);
         })
         .catch(err => {
-            console.error('[IMPORT-CAMP] Erro fatal:', err);
+            console.error('[IMPORT-UNIVERSAL] Erro fatal:', err);
             process.exit(1);
         });
 }
 
-module.exports = { processarArquivosColeta };
+module.exports = { importarTodosCSVs };
