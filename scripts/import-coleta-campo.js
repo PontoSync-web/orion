@@ -1,11 +1,10 @@
 /**
  * ARQUIVO: scripts/import-coleta-campo.js
- * VERSÃO: 2.0.0
- * ÚLTIMA ATUALIZAÇÃO: 2026-08-07 21:30:00 (UTC)
- * COMENTÁRIO: Importador universal que processa todos os CSVs relevantes no diretório data/.
- *             Suporta Anatel (Estacoes_Licenciadas_SMP*, anatel_smp_nacional*),
- *             OpenCellID (coleta_campo*), consolidado (erb_consolidado_final.csv),
- *             e qualquer outro que contenha colunas de torres.
+ * VERSÃO: 2.1.1
+ * ÚLTIMA ATUALIZAÇÃO: 2026-08-07 22:30:00 (UTC)
+ * COMENTÁRIO: Padrão de reconhecimento ampliado para erb_consolidado_final*
+ *             (permite partes com sufixo). Mapeamento estendido para coleta_campo.
+ *             Limite de registros e ignora arquivos > 100 MB.
  * AUTOR: Equipe ORION
  */
 
@@ -17,13 +16,13 @@ const sqlite3 = require('sqlite3').verbose();
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_PATH = path.join(DATA_DIR, 'cell_towers.db');
 
-// Mapeamento de sinônimos para cada campo do banco
+// Mapeamento de sinônimos (ampliado)
 const COLUMN_MAP = {
-    radio: ['radio', 'RADIO', 'tecnologias', 'Tecnologias'],
-    mcc: ['mcc', 'MCC', 'opencellid_mcc', 'codigo_operadora', 'Código da UF'],
+    radio: ['radio', 'RADIO', 'tecnologias', 'Tecnologias', 'sistemas'],
+    mcc: ['mcc', 'MCC', 'opencellid_mcc', 'codigo_operadora', 'Código da UF', 'cod_uf'],
     net: ['net', 'NET', 'mnc', 'MNC', 'opencellid_net', 'operadora', 'Operadora'],
-    area: ['area', 'AREA', 'lac', 'LAC', 'opencellid_area', 'codigo_municipio_ibge', 'Código do Município'],
-    cell: ['cell', 'CELL', 'ci', 'CI', 'opencellid_cell', 'id_estacao', 'Número da Estação'],
+    area: ['area', 'AREA', 'lac', 'LAC', 'opencellid_area', 'codigo_municipio_ibge', 'Código do Município', 'cod_municipio'],
+    cell: ['cell', 'CELL', 'ci', 'CI', 'opencellid_cell', 'id_estacao', 'Número da Estação', 'CellID', 'cell_id', 'estacao'],
     unit: ['unit', 'UNIT'],
     lon: ['lon', 'LON', 'longitude', 'LONGITUDE', 'Longitude'],
     lat: ['lat', 'LAT', 'latitude', 'LATITUDE', 'Latitude'],
@@ -44,18 +43,18 @@ function findColumn(headers, synonyms) {
 }
 
 /**
- * Importa todos os arquivos CSV que correspondem a padrões conhecidos.
+ * Importa todos os CSVs compatíveis, com limite de registros e ignorando arquivos grandes.
  * @param {sqlite3.Database} db - Conexão com o banco (opcional)
- * @returns {Promise<number>} - Total de registros inseridos
+ * @param {Object} options - { maxRegistros: número máximo de registros a inserir }
+ * @returns {Promise<number>} - Total inserido
  */
-async function importarTodosCSVs(db = null) {
+async function importarTodosCSVs(db = null, options = { maxRegistros: 500000 }) {
     const closeDb = !db;
     if (!db) {
         db = new sqlite3.Database(DB_PATH);
         db.run('PRAGMA journal_mode=WAL');
     }
 
-    // Cria tabela se não existir
     await new Promise((resolve, reject) => {
         db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
             radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
@@ -65,16 +64,25 @@ async function importarTodosCSVs(db = null) {
         )`, (err) => { if (err) reject(err); else resolve(); });
     });
 
-    // Padrões de arquivos a considerar
+    // Padrões de arquivos (modificado para aceitar erb_consolidado_final*)
     const patterns = [
         /^coleta_campo.*\.csv$/i,
         /^Estacoes_Licenciadas_SMP.*\.csv$/i,
         /^anatel_smp_nacional.*\.csv$/i,
-        /^erb_consolidado_final\.csv$/i
+        /^erb_consolidado_final.*\.csv$/i   // <- aceita partes com sufixo
     ];
 
+    // Filtra e ignora arquivos > 100 MB
     const files = fs.readdirSync(DATA_DIR)
-        .filter(f => patterns.some(p => p.test(f)));
+        .filter(f => patterns.some(p => p.test(f)))
+        .filter(f => {
+            const size = fs.statSync(path.join(DATA_DIR, f)).size;
+            if (size > 100 * 1024 * 1024) {
+                console.log(`[IMPORT-UNIVERSAL] Ignorando ${f} (tamanho ${(size/1024/1024).toFixed(1)} MB > 100 MB)`);
+                return false;
+            }
+            return true;
+        });
 
     if (files.length === 0) {
         console.log('[IMPORT-UNIVERSAL] Nenhum arquivo CSV compatível encontrado.');
@@ -82,7 +90,7 @@ async function importarTodosCSVs(db = null) {
         return 0;
     }
 
-    console.log(`[IMPORT-UNIVERSAL] Encontrados ${files.length} arquivos:`, files);
+    console.log(`[IMPORT-UNIVERSAL] Processando ${files.length} arquivos:`, files);
 
     let totalInseridos = 0;
     const stmt = db.prepare(`INSERT OR REPLACE INTO cell_towers 
@@ -90,6 +98,11 @@ async function importarTodosCSVs(db = null) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 
     for (const file of files) {
+        if (totalInseridos >= options.maxRegistros) {
+            console.log(`[IMPORT-UNIVERSAL] Limite de ${options.maxRegistros} registros atingido. Parando.`);
+            break;
+        }
+
         const filePath = path.join(DATA_DIR, file);
         console.log(`[IMPORT-UNIVERSAL] Processando ${file}...`);
 
@@ -112,6 +125,7 @@ async function importarTodosCSVs(db = null) {
                     console.log(`[IMPORT-UNIVERSAL] Mapeamento para ${file}:`, columnCache);
                 })
                 .on('data', (row) => {
+                    if (totalInseridos >= options.maxRegistros) return;
                     const get = (field) => {
                         const col = columnCache[field];
                         return col ? row[col] : undefined;
@@ -134,7 +148,6 @@ async function importarTodosCSVs(db = null) {
                         averageSignal: parseInt(get('averageSignal') || -70)
                     };
 
-                    // Validação mínima
                     if (campos.cell && campos.lat && campos.lon) {
                         stmt.run(
                             campos.radio, campos.mcc, campos.net, campos.area,
@@ -152,7 +165,7 @@ async function importarTodosCSVs(db = null) {
                 })
                 .on('error', (err) => {
                     console.error(`[IMPORT-UNIVERSAL] Erro em ${file}:`, err.message);
-                    resolve(); // continua com o próximo
+                    resolve();
                 });
         });
     }
@@ -164,7 +177,6 @@ async function importarTodosCSVs(db = null) {
     return totalInseridos;
 }
 
-// Execução direta
 if (require.main === module) {
     importarTodosCSVs()
         .then(total => {
