@@ -1,6 +1,11 @@
 // scripts/importar-erbs.js
-// ORION - Importador de ERBs a partir de arquivo CSV
-// Arquivo fonte: ERBs de operadoras brasileiras
+// ORION - Importador de ERBs a partir de arquivos CSV
+// 
+// Este script detecta automaticamente os arquivos disponíveis na pasta data/
+// Prioridades: erb_consolidado_final.csv > coleta_campo - Copia-part*.csv
+//
+// Uso: node scripts/importar-erbs.js
+// Opções: --force (recria a tabela antes de importar)
 
 const fs = require('fs');
 const path = require('path');
@@ -9,18 +14,44 @@ const { sequelize, ERBModel } = require('../src/models');
 const { connectDatabase } = require('../src/config/database');
 const logger = require('../src/utils/logger');
 
-// Configurações
-const ARQUIVO_CSV = process.env.ERBS_CSV_PATH || './erbs_brasil.csv';
-const BATCH_SIZE = 100; // Registros por lote
+// ============================================================
+// CONFIGURAÇÕES
+// ============================================================
 
-// Filtro de coordenadas válidas (Brasil)
+const DATA_DIR = path.join(process.cwd(), 'data');
+const BATCH_SIZE = 100;
+
+// Ordem de prioridade dos arquivos (do mais completo para o menos completo)
+const ARQUIVOS_PRIORITARIOS = [
+    'erb_consolidado_final.csv',
+    'coleta_campo - Copia-part001.csv',
+    'coleta_campo - Copia-part-002.csv',
+    'coleta_campo - Copia-part-003.csv'
+];
+
+// Filtro de coordenadas válidas (Brasil continental)
 const LAT_MIN = -33.75;
 const LAT_MAX = 5.27;
 const LNG_MIN = -73.99;
 const LNG_MAX = -34.79;
 
+// Mapeamento de operadoras para MCC/MNC
+const OPERADORA_MAP = {
+    'VIVO':   { mcc: 724, mnc: 6 },
+    'TIM':    { mcc: 724, mnc: 2 },
+    'CLARO':  { mcc: 724, mnc: 3 },
+    'OI':     { mcc: 724, mnc: 4 },
+    'ALGAR':  { mcc: 724, mnc: 5 },
+    'SERCOMTEL': { mcc: 724, mnc: 15 },
+    'NEXTEL': { mcc: 724, mnc: 25 }
+};
+
+// ============================================================
+// UTILITÁRIOS
+// ============================================================
+
 /**
- * Verifica se as coordenadas são válidas para o Brasil
+ * Verifica se as coordenadas estão dentro do território brasileiro
  */
 function coordenadasValidas(lat, lon) {
     if (lat == null || lon == null) return false;
@@ -32,7 +63,7 @@ function coordenadasValidas(lat, lon) {
 }
 
 /**
- * Mapeia a tecnologia para o formato do ORION
+ * Converte tecnologia (ex: "2G - 3G - 4G") para formato padronizado
  */
 function mapearTecnologia(tecnologias) {
     if (!tecnologias) return null;
@@ -47,20 +78,47 @@ function mapearTecnologia(tecnologias) {
 }
 
 /**
- * Mapeia a operadora para MCC/MNC
+ * Obtém MCC/MNC a partir do nome da operadora
  */
 function mapearOperadora(operadora) {
-    const map = {
-        'VIVO': { mcc: 724, mnc: 6 },
-        'TIM': { mcc: 724, mnc: 2 },
-        'CLARO': { mcc: 724, mnc: 3 },
-        'OI': { mcc: 724, mnc: 4 },
-        'ALGAR': { mcc: 724, mnc: 5 },
-        'SERCOMTEL': { mcc: 724, mnc: 15 },
-        'NEXTEL': { mcc: 724, mnc: 25 }
-    };
-    return map[operadora.toUpperCase()] || { mcc: 724, mnc: 99 };
+    if (!operadora) return { mcc: 724, mnc: 99 };
+    const key = operadora.toUpperCase().trim();
+    return OPERADORA_MAP[key] || { mcc: 724, mnc: 99 };
 }
+
+/**
+ * Detecta qual arquivo de ERBs está disponível
+ */
+function encontrarArquivo() {
+    if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        logger.info(`📁 Pasta ${DATA_DIR} criada.`);
+        return null;
+    }
+
+    for (const nome of ARQUIVOS_PRIORITARIOS) {
+        const caminho = path.join(DATA_DIR, nome);
+        if (fs.existsSync(caminho)) {
+            logger.info(`📄 Arquivo encontrado: ${nome}`);
+            return caminho;
+        }
+    }
+
+    // Se nenhum arquivo for encontrado, listar os disponíveis
+    const arquivosDisponiveis = fs.readdirSync(DATA_DIR).filter(f => f.endsWith('.csv'));
+    if (arquivosDisponiveis.length > 0) {
+        logger.warn(`⚠️ Nenhum arquivo prioritário encontrado.`);
+        logger.info(`📄 Arquivos CSV disponíveis: ${arquivosDisponiveis.join(', ')}`);
+        logger.info(`💡 Use o primeiro da lista: ${arquivosDisponiveis[0]}`);
+        return path.join(DATA_DIR, arquivosDisponiveis[0]);
+    }
+
+    return null;
+}
+
+// ============================================================
+// PROCESSAMENTO DE DADOS
+// ============================================================
 
 /**
  * Processa um lote de registros e insere no banco
@@ -71,7 +129,7 @@ async function processarLote(lote) {
     let invalidos = 0;
 
     for (const row of lote) {
-        // Verificar coordenadas
+        // 1. Extrair coordenadas
         const lat = parseFloat(row.latitude);
         const lon = parseFloat(row.longitude);
         if (!coordenadasValidas(lat, lon)) {
@@ -79,31 +137,38 @@ async function processarLote(lote) {
             continue;
         }
 
-        // Verificar se já existe (pelo cellId)
-        const cellId = parseInt(row.opencellid_cell) || null;
-        const lac = parseInt(row.opencellid_area) || null;
-        const mcc = parseInt(row.opencellid_mcc) || 724;
-        const mnc = parseInt(row.opencellid_net) || null;
+        // 2. Identificador da ERB (priorizar OpenCellID, depois id_estacao)
+        let cellId = parseInt(row.opencellid_cell) || null;
+        let lac = parseInt(row.opencellid_area) || null;
+        let mcc = parseInt(row.opencellid_mcc) || 724;
+        let mnc = parseInt(row.opencellid_net) || null;
 
-        // Se não tem cellId, tentar usar outro identificador
+        // Se não tem OpenCellID, usar dados da operadora
         if (!cellId) {
-            invalidos++;
-            continue;
+            cellId = parseInt(row.id_estacao) || null;
+            if (!cellId) {
+                invalidos++;
+                continue;
+            }
+            // Tentar usar dados do CSV para LAC e MNC
+            lac = parseInt(row.lac) || lac;
+            const op = mapearOperadora(row.operadora);
+            if (!mnc) mnc = op.mnc;
         }
 
-        // Montar objeto ERB
+        // 3. Montar objeto ERB
         const erb = {
             cellId: cellId,
             mcc: mcc,
-            mnc: mnc || mapearOperadora(row.operadora).mnc,
-            lac: lac || null,
+            mnc: mnc,
+            lac: lac,
             lat: lat,
             lon: lon,
             range: parseInt(row.opencellid_range) || null,
             radio: row.opencellid_radio || null,
             cidade: row.municipio || null,
             uf: row.uf || null,
-            // Dados adicionais (para enriquecimento)
+            // Campos enriquecidos
             operadora: row.operadora || null,
             bairro: row.bairro || null,
             endereco: row.endereco || null,
@@ -116,55 +181,80 @@ async function processarLote(lote) {
             anatel_freq_inicial: parseFloat(row['anatel_frequência_inicial_(mhz)']) || null,
             anatel_freq_final: parseFloat(row['anatel_frequência_final_(mhz)']) || null,
             anatel_emissao: row['anatel_emissão'] || null,
-            source: 'ERBS_CSV_IMPORT'
+            source: 'CSV_IMPORT'
         };
 
         erbsParaSalvar.push(erb);
         validos++;
     }
 
-    // Salvar em lote
+    // 4. Salvar no banco (com deduplicação)
     let salvos = 0;
     for (const erb of erbsParaSalvar) {
         try {
-            await ERBModel.findOrCreate({
+            const [instancia, created] = await ERBModel.findOrCreate({
                 where: {
                     cellId: erb.cellId,
                     mcc: erb.mcc,
                     mnc: erb.mnc,
-                    lac: erb.lac
+                    lac: erb.lac || 0
                 },
                 defaults: erb
             });
-            salvos++;
+            if (created) salvos++;
         } catch (error) {
-            logger.warn(`Erro ao salvar ERB ${erb.cellId}: ${error.message}`);
+            // Se falhar por chave duplicada, tentar com dados mínimos
+            try {
+                const [instancia, created] = await ERBModel.findOrCreate({
+                    where: {
+                        cellId: erb.cellId,
+                        mcc: erb.mcc,
+                        mnc: erb.mnc
+                    },
+                    defaults: { ...erb, lac: erb.lac || 0 }
+                });
+                if (created) salvos++;
+            } catch (e) {
+                logger.warn(`⚠️ Erro ao salvar ERB ${erb.cellId}: ${e.message}`);
+            }
         }
     }
 
     return { validos, invalidos, salvos };
 }
 
-/**
- * Função principal de importação
- */
-async function importarERBs() {
-    logger.info('📡 Iniciando importação de ERBs...');
-    logger.info(`📁 Arquivo: ${ARQUIVO_CSV}`);
+// ============================================================
+// FUNÇÃO PRINCIPAL
+// ============================================================
 
-    // Verificar se o arquivo existe
-    if (!fs.existsSync(ARQUIVO_CSV)) {
-        logger.error(`❌ Arquivo não encontrado: ${ARQUIVO_CSV}`);
-        process.exit(1);
+async function importarERBs(opcoes = {}) {
+    const { force = false } = opcoes;
+
+    logger.info('📡 ===== IMPORTAÇÃO DE ERBs =====');
+    logger.info(`📁 Pasta de dados: ${DATA_DIR}`);
+
+    // 1. Encontrar arquivo
+    const arquivo = encontrarArquivo();
+    if (!arquivo) {
+        logger.error('❌ Nenhum arquivo CSV de ERBs encontrado.');
+        logger.info(`💡 Coloque os arquivos em: ${DATA_DIR}`);
+        logger.info(`   Arquivos esperados: ${ARQUIVOS_PRIORITARIOS.join(', ')}`);
+        return;
     }
 
-    // Conectar ao banco
+    logger.info(`📄 Arquivo fonte: ${path.basename(arquivo)}`);
+
+    // 2. Conectar ao banco
     await connectDatabase();
     await sequelize.sync();
-    logger.info('✅ Banco de dados conectado');
 
-    // Ler o CSV
-    const results = [];
+    // 3. Se force=true, limpar tabela
+    if (force) {
+        await ERBModel.destroy({ where: {} });
+        logger.info('🧹 Tabela ERBs limpa.');
+    }
+
+    // 4. Ler e processar CSV
     let totalProcessados = 0;
     let totalValidos = 0;
     let totalInvalidos = 0;
@@ -172,7 +262,7 @@ async function importarERBs() {
     let loteAtual = [];
 
     return new Promise((resolve, reject) => {
-        fs.createReadStream(ARQUIVO_CSV)
+        fs.createReadStream(arquivo, { encoding: 'utf8' })
             .pipe(csv({
                 separator: ',',
                 mapHeaders: ({ header }) => header.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_')
@@ -180,7 +270,6 @@ async function importarERBs() {
             .on('data', (row) => {
                 loteAtual.push(row);
                 if (loteAtual.length >= BATCH_SIZE) {
-                    // Processar lote
                     const { validos, invalidos, salvos } = processarLote(loteAtual);
                     totalValidos += validos;
                     totalInvalidos += invalidos;
@@ -190,23 +279,28 @@ async function importarERBs() {
                     loteAtual = [];
                 }
             })
-            .on('end', () => {
-                // Processar último lote
+            .on('end', async () => {
+                // Último lote
                 if (loteAtual.length > 0) {
-                    const { validos, invalidos, salvos } = processarLote(loteAtual);
+                    const { validos, invalidos, salvos } = await processarLote(loteAtual);
                     totalValidos += validos;
                     totalInvalidos += invalidos;
                     totalSalvos += salvos;
                     totalProcessados += loteAtual.length;
                 }
 
+                // Resumo
                 logger.info('📊 ===== RESUMO DA IMPORTAÇÃO =====');
                 logger.info(`📄 Total de registros processados: ${totalProcessados}`);
                 logger.info(`✅ Registros válidos: ${totalValidos}`);
                 logger.info(`❌ Registros inválidos (coordenadas fora do Brasil): ${totalInvalidos}`);
                 logger.info(`💾 Registros salvos no banco: ${totalSalvos}`);
 
-                resolve({ totalProcessados, totalValidos, totalInvalidos, totalSalvos });
+                // Estatísticas finais
+                const totalNoBanco = await ERBModel.count();
+                logger.info(`🏛️ Total de ERBs no banco: ${totalNoBanco}`);
+
+                resolve({ totalProcessados, totalValidos, totalInvalidos, totalSalvos, totalNoBanco });
             })
             .on('error', (error) => {
                 logger.error(`❌ Erro ao ler CSV: ${error.message}`);
@@ -215,9 +309,15 @@ async function importarERBs() {
     });
 }
 
-// Executar importação
+// ============================================================
+// EXECUÇÃO VIA CLI
+// ============================================================
+
 if (require.main === module) {
-    importarERBs()
+    const args = process.argv.slice(2);
+    const force = args.includes('--force');
+
+    importarERBs({ force })
         .then(() => {
             logger.info('✅ Importação concluída!');
             process.exit(0);
