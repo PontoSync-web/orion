@@ -1,11 +1,10 @@
 /**
  * ARQUIVO: orion.js
- * VERSÃO: 6.7.0
- * ÚLTIMA ATUALIZAÇÃO: 2026-08-07 14:30:00 (UTC)
- * COMENTÁRIO: Prioridade absoluta para coleta de campo (CSVs) como fonte primária.
- *             Cadeia de fallback: Coleta de Campo → Teleco/Anatel → OpenCellID → Emergência.
- *             Limiar de importação reduzido para 1000 torres.
- *             Versão atualizada para 6.7.
+ * VERSÃO: 6.8.0
+ * ÚLTIMA ATUALIZAÇÃO: 2026-08-07 21:30:00 (UTC)
+ * COMENTÁRIO: Integração com importador multi‑CSV. 
+ *             Chain: coleta_campo → Anatel → OpenCellID → Emergência.
+ *             Limiar de importação mantido em 1000 torres.
  * AUTOR: Equipe ORION
  */
 
@@ -24,11 +23,9 @@ const DATA_DIR = path.join(__dirname, 'data');
 const DB_TOWERS = path.join(DATA_DIR, 'cell_towers.db');
 const CONTEXT_DIR = path.join(DATA_DIR, 'contextos');
 
-// Garantir diretórios
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(CONTEXT_DIR)) fs.mkdirSync(CONTEXT_DIR, { recursive: true });
 
-// Logging
 function log(level, msg) {
     const ts = new Date().toISOString();
     console.log(`[${ts}] [${level.toUpperCase()}] ${msg}`);
@@ -37,15 +34,9 @@ function log(level, msg) {
 log('info', 'Diretório data/ gravável.');
 
 // ============================================================
-// HERMES – IAs configuradas (placeholder)
+// HERMES – placeholder
 // ============================================================
-const HERMES = {
-    IAs: [
-        { nome: 'Artemis', ativa: true },
-        { nome: 'Apollo', ativa: true },
-        { nome: 'Athena', ativa: true }
-    ]
-};
+const HERMES = { IAs: [{ nome: 'Artemis' }, { nome: 'Apollo' }, { nome: 'Athena' }] };
 log('info', 'HERMES inicializado com 3 IAs configuradas.');
 
 // ============================================================
@@ -55,19 +46,10 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // ============================================================
-// ROTAS DE GEOLOCALIZAÇÃO (existentes)
+// ROTAS EXISTENTES (mantidas)
 // ============================================================
-// (Aqui você mantém suas rotas atuais: /api/localizar, /api/buscar-cell-ids, etc.)
-
-// ============================================================
-// ROTAS DE CONTEXTO (existentes)
-// ============================================================
-// Mantenha suas rotas de contexto /api/contexto/*
-
-// ============================================================
-// ROTAS DE GITHUB (existentes)
-// ============================================================
-// Mantenha /api/github/*
+// (Aqui ficam /api/localizar, /api/buscar-cell-ids, /api/contexto/*, /api/github/*)
+// Para não repetir, mantenha as que já estão no seu código.
 
 // ============================================================
 // FUNÇÕES DE IMPORTAÇÃO
@@ -82,30 +64,27 @@ async function inserirBancoEmergencia(db) {
         ['GSM', 724, 5, 500, 208021001, 0, -38.5266, -3.7319, 4000, 90, 1, 1609459200, 1609459200, -69],
     ];
     const stmt = db.prepare('INSERT OR REPLACE INTO cell_towers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
-    for (const t of torres) { stmt.run(t); }
+    for (const t of torres) stmt.run(t);
     stmt.finalize();
     db.run('CREATE INDEX IF NOT EXISTS idx_cell ON cell_towers(cell)');
     log('info', 'Banco de emergência criado com ' + torres.length + ' torres.');
 }
 
 async function verificarERecuperarBanco(db) {
-    let bancoCorrompido = false;
+    let corrompido = false;
     try {
         await new Promise((resolve, reject) => {
             db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => {
-                if (err) { bancoCorrompido = true; reject(err); }
-                else resolve(row ? row.c : 0);
+                if (err) { corrompido = true; reject(err); } else resolve(row ? row.c : 0);
             });
         });
     } catch (err) {
-        log('warn', 'Banco de dados parece corrompido. Tentando recuperar...');
-        bancoCorrompido = true;
+        log('warn', 'Banco de dados parece corrompido. Recriando...');
+        corrompido = true;
     }
-    if (bancoCorrompido) {
-        log('info', 'Recriando banco de dados corrompido...');
+    if (corrompido) {
         db.close();
-        try { fs.unlinkSync(DB_TOWERS); log('info', 'Arquivo cell_towers.db removido.'); }
-        catch (e) { log('error', 'Erro ao remover cell_towers.db: ' + e.message); }
+        try { fs.unlinkSync(DB_TOWERS); } catch (e) {}
         const newDb = new sqlite3.Database(DB_TOWERS);
         newDb.run('PRAGMA journal_mode=WAL');
         newDb.run('PRAGMA secure_delete=ON');
@@ -117,14 +96,14 @@ async function verificarERecuperarBanco(db) {
                 created INTEGER, updated INTEGER, averageSignal INTEGER
             )`, (err) => { if (err) reject(err); else resolve(); });
         });
-        log('info', 'Banco de dados recriado com sucesso.');
+        log('info', 'Banco recriado com sucesso.');
         return newDb;
     }
     return db;
 }
 
 // ============================================================
-// INICIALIZAÇÃO DO SERVIDOR
+// INICIALIZAÇÃO
 // ============================================================
 async function iniciarServidor() {
     let dbTowers = new sqlite3.Database(DB_TOWERS);
@@ -134,63 +113,61 @@ async function iniciarServidor() {
     dbTowers = await verificarERecuperarBanco(dbTowers);
 
     const count = await new Promise((resolve) => {
-        dbTowers.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => {
-            resolve(row ? row.c : 0);
-        });
+        dbTowers.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
     });
     log('info', 'Torres atuais: ' + (count || 0).toLocaleString());
 
     if (count < 1000) {
         let importado = false;
 
-        // 1. PRIORIDADE: Coleta de Campo (arquivos CSV)
+        // 1. Importador universal (todos os CSVs)
         try {
-            log('info', 'Verificando arquivos de coleta de campo...');
-            const { processarArquivosColeta } = require('./scripts/import-coleta-campo.js');
-            const inseridos = await processarArquivosColeta(dbTowers);
+            log('info', 'Executando importação multi‑CSV...');
+            const { importarTodosCSVs } = require('./scripts/import-coleta-campo.js');
+            const inseridos = await importarTodosCSVs(dbTowers);
             if (inseridos > 0) {
                 importado = true;
-                log('info', `Coleta de campo importada: ${inseridos} torres.`);
+                log('info', `Importação multi‑CSV concluída: ${inseridos} torres.`);
             } else {
-                log('info', 'Nenhum dado de coleta de campo encontrado.');
+                log('info', 'Nenhum dado encontrado nos CSVs.');
             }
         } catch (err) {
-            log('warn', 'Erro na importação de coleta de campo: ' + err.message);
+            log('warn', 'Erro no importador multi‑CSV: ' + err.message);
         }
 
-        // 2. Teleco/Anatel (se não importado)
+        // 2. Fallback: Teleco (apenas se não importado)
         if (!importado) {
             try {
-                log('info', 'Importando base da Teleco/Anatel...');
+                log('info', 'Tentando Teleco/Anatel...');
                 execSync('node scripts/import-teleco.js', { stdio: 'inherit', timeout: 600000 });
                 importado = true;
-            } catch (err) { log('warn', 'Teleco: ' + err.message); }
+            } catch (err) { log('warn', 'Teleco falhou: ' + err.message); }
         }
 
-        // 3. OpenCellID (fallback)
+        // 3. Fallback: OpenCellID
         if (!importado) {
             try {
-                log('info', 'Consultando OpenCellID...');
+                log('info', 'Tentando OpenCellID...');
                 execSync('node scripts/import-opencellid-area.js', { stdio: 'inherit', timeout: 300000 });
                 importado = true;
-            } catch (err) { log('warn', 'OpenCellID: ' + err.message); }
+            } catch (err) { log('warn', 'OpenCellID falhou: ' + err.message); }
         }
 
-        // 4. Banco de emergência (último recurso)
+        // 4. Emergência (sempre inserido se nada funcionou)
         if (!importado) {
             log('warn', 'Nenhuma fonte disponível. Inserindo banco de emergência...');
             await inserirBancoEmergencia(dbTowers);
         }
     } else {
-        log('info', 'Banco de torres OK: ' + count.toLocaleString() + ' torres.');
+        log('info', 'Banco já possui torres suficientes.');
     }
 
     dbTowers.close();
 
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 6.7 rodando na porta ' + port);
-        log('info', 'Cadeia: Coleta de Campo → Teleco/Anatel → OpenCellID → Emergência');
-        log('info', 'GitHub integração: LEITURA + ESCRITA ativas.');
+        log('info', 'AI-DEPOM 6.8 rodando na porta ' + port);
+        log('info', 'Cadeia: Multi‑CSV → Teleco → OpenCellID → Emergência');
+        log('info', 'GitHub integração ativa.');
     });
 }
 
