@@ -1,249 +1,134 @@
-// ============================================================
-// ARQUIVO: scripts/import-coleta-campo.js
-// VERSÃO: 3.3 (Transações robustas com db.exec)
-// DATA: 04/08/2026
-// MOTIVO: Corrige erro "cannot commit - no transaction is active".
-//         Usa db.exec com BEGIN/COMMIT em bloco único.
-//         Processa todos os arquivos coleta_campo*.csv.
-// ============================================================
+/**
+ * ARQUIVO: scripts/import-coleta-campo.js
+ * VERSÃO: 1.1.0
+ * ÚLTIMA ATUALIZAÇÃO: 2026-08-07 14:30:00 (UTC)
+ * COMENTÁRIO: Exporta função 'processarArquivosColeta' para ser chamada pelo orion.js.
+ *             Aceita conexão de banco existente (reutilizável).
+ *             Mapeamento flexível de colunas (aceita variações de nomes).
+ *             Processa todos os arquivos coleta_campo*.csv do diretório data/.
+ * AUTOR: Equipe ORION
+ */
 
 const fs = require('fs');
 const path = require('path');
+const csv = require('csv-parser');
 const sqlite3 = require('sqlite3').verbose();
-const readline = require('readline');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
-const DB_TOWERS = path.join(DATA_DIR, 'cell_towers.db');
-
-function log(msg) {
-    console.log(`[COLETA-CAMPO] ${msg}`);
-}
+const DB_PATH = path.join(DATA_DIR, 'cell_towers.db');
 
 /**
- * Processa um arquivo CSV usando stream e insere em lotes via transação única.
+ * Processa todos os arquivos CSV com padrão "coleta_campo*.csv"
+ * e insere os dados no banco de torres.
+ * @param {sqlite3.Database} db - Conexão com o banco (opcional, se não fornecido, abre internamente)
+ * @returns {Promise<number>} - Número total de registros inseridos
  */
-function processarArquivoStream(db, filePath, batchSize = 1000) {
-    return new Promise((resolve, reject) => {
-        const rl = readline.createInterface({
-            input: fs.createReadStream(filePath),
-            crlfDelay: Infinity
-        });
-
-        let importadas = 0;
-        let ignoradas = 0;
-        let isHeader = true;
-        let linhasBuffer = [];
-        let separator = ',';
-
-        // Função para inserir o lote atual usando db.exec com BEGIN/COMMIT
-        const flushBuffer = () => {
-            if (linhasBuffer.length === 0) return;
-            // Monta a query com múltiplos VALUES
-            const values = linhasBuffer.map(params =>
-                `('${params[0]}', ${params[1]}, ${params[2]}, ${params[3]}, ${params[4]}, ${params[5]}, ${params[6]}, ${params[7]}, ${params[8]}, ${params[9]}, ${params[10]}, ${params[11]}, ${params[12]}, ${params[13]})`
-            ).join(',');
-            const query = `INSERT OR REPLACE INTO cell_towers (radio, mcc, net, area, cell, unit, lon, lat, range, samples, changeable, created, updated, averageSignal) VALUES ${values};`;
-
-            try {
-                db.exec('BEGIN TRANSACTION;');
-                db.exec(query);
-                db.exec('COMMIT;');
-                importadas += linhasBuffer.length;
-                linhasBuffer = [];
-            } catch (err) {
-                // Em caso de erro, faz rollback e descarta o lote
-                try { db.exec('ROLLBACK;'); } catch (e) {}
-                log(`  ERRO no lote: ${err.message}`);
-                // Mantém o contador de ignorados para este lote
-                ignoradas += linhasBuffer.length;
-                linhasBuffer = [];
-                // Não propaga o erro para não interromper o arquivo
-            }
-        };
-
-        rl.on('line', (line) => {
-            const trimmed = line.trim();
-            if (!trimmed) {
-                ignoradas++;
-                return;
-            }
-
-            if (isHeader) {
-                separator = trimmed.includes(';') ? ';' : ',';
-                const lower = trimmed.toLowerCase();
-                if (lower.includes('cell') || lower.includes('lat') || lower.includes('lon')) {
-                    isHeader = false;
-                    return;
-                }
-                isHeader = false;
-            }
-
-            const cols = trimmed.split(separator);
-            if (cols.length < 3) {
-                ignoradas++;
-                return;
-            }
-
-            let cellId = null, lat = null, lon = null;
-
-            // Tenta as três primeiras colunas
-            const testCell = parseInt(cols[0]);
-            const testLat = parseFloat(cols[1]);
-            const testLon = parseFloat(cols[2]);
-            if (!isNaN(testCell) && testCell > 0 && !isNaN(testLat) && !isNaN(testLon)) {
-                cellId = testCell;
-                lat = testLat;
-                lon = testLon;
-            } else {
-                // Varre todas as colunas
-                let candidates = cols.map((v, idx) => ({ val: v.trim(), idx }));
-                for (let c of candidates) {
-                    const num = parseFloat(c.val);
-                    if (!isNaN(num)) {
-                        if (Number.isInteger(num) && num > 0 && cellId === null && num < 1000000000) {
-                            cellId = num;
-                        } else if (num >= -90 && num <= 90 && lat === null) {
-                            lat = num;
-                        } else if (num >= -180 && num <= 180 && lon === null) {
-                            lon = num;
-                        }
-                    }
-                }
-                if (lat === null || lon === null) {
-                    let nums = [];
-                    for (let c of candidates) {
-                        const num = parseFloat(c.val);
-                        if (!isNaN(num)) nums.push({ num, idx: c.idx });
-                    }
-                    nums.sort((a, b) => a.idx - b.idx);
-                    for (let n of nums) {
-                        if (n.num !== cellId) {
-                            if (lat === null && n.num >= -90 && n.num <= 90) lat = n.num;
-                            else if (lon === null && n.num >= -180 && n.num <= 180) lon = n.num;
-                        }
-                    }
-                }
-            }
-
-            if (cellId === null || lat === null || lon === null) {
-                ignoradas++;
-                return;
-            }
-
-            let range = 1500;
-            if (cols.length > 3) {
-                const r = parseInt(cols[3]);
-                if (!isNaN(r) && r > 0) range = r;
-            }
-
-            let mcc = 724, mnc = 5, lac = 1234;
-            for (let c of cols) {
-                const num = parseInt(c);
-                if (!isNaN(num)) {
-                    if (num >= 100 && num <= 999 && mcc === 724) mcc = num;
-                    else if (num >= 1 && num <= 99 && mnc === 5) mnc = num;
-                    else if (num >= 1 && num <= 65535 && lac === 1234) lac = num;
-                }
-            }
-
-            const params = [
-                'GSM',
-                mcc,
-                mnc,
-                lac,
-                cellId,
-                0,
-                lon,
-                lat,
-                range,
-                100,
-                1,
-                Math.floor(Date.now() / 1000),
-                Math.floor(Date.now() / 1000),
-                -71
-            ];
-
-            linhasBuffer.push(params);
-            if (linhasBuffer.length >= batchSize) {
-                flushBuffer();
-            }
-        });
-
-        rl.on('close', () => {
-            flushBuffer(); // último lote
-            resolve({ importadas, ignoradas });
-        });
-
-        rl.on('error', (err) => {
-            reject(err);
-        });
-    });
-}
-
-async function main() {
-    log('=== IMPORTADOR DE DADOS (STREAM + LOTE COM TRANSACAO) ===');
-    log('Processando TODOS os arquivos coleta_campo*.csv');
-
-    const files = fs.readdirSync(DATA_DIR).filter(f => f.startsWith('coleta_campo'));
-    log(`Encontrados ${files.length} arquivos.`);
-
-    if (files.length === 0) {
-        log('Nenhum arquivo encontrado. Abortando.');
-        process.exit(0);
+async function processarArquivosColeta(db = null) {
+    const closeDb = !db;
+    if (!db) {
+        db = new sqlite3.Database(DB_PATH);
+        db.run('PRAGMA journal_mode=WAL');
     }
 
-    // Remove banco antigo para começar do zero (opcional, mas recomendado)
-    if (fs.existsSync(DB_TOWERS)) {
-        log('Removendo banco antigo para evitar corrupção...');
-        fs.unlinkSync(DB_TOWERS);
-    }
-
-    const db = new sqlite3.Database(DB_TOWERS);
-    db.run('PRAGMA journal_mode=WAL');
-    db.run('PRAGMA secure_delete=ON');
-    db.run(`
-        CREATE TABLE IF NOT EXISTS cell_towers (
+    // Garantir que a tabela existe
+    await new Promise((resolve, reject) => {
+        db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
             radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
             cell INTEGER PRIMARY KEY, unit INTEGER, lon REAL, lat REAL,
             range INTEGER, samples INTEGER, changeable INTEGER,
             created INTEGER, updated INTEGER, averageSignal INTEGER
-        )
-    `);
-
-    const antes = await new Promise((resolve) => {
-        db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
+        )`, (err) => { if (err) reject(err); else resolve(); });
     });
-    log(`Torres antes: ${antes}`);
 
-    let totalImportadas = 0;
-    let totalIgnoradas = 0;
+    // Listar arquivos
+    const files = fs.readdirSync(DATA_DIR)
+        .filter(f => f.startsWith('coleta_campo') && f.endsWith('.csv'));
 
-    for (const file of files) {
-        const filePath = path.join(DATA_DIR, file);
-        log(`Processando: ${file}...`);
-        try {
-            const result = await processarArquivoStream(db, filePath);
-            log(`  -> ${result.importadas} importadas, ${result.ignoradas} ignoradas.`);
-            totalImportadas += result.importadas;
-            totalIgnoradas += result.ignoradas;
-        } catch (err) {
-            log(`  ERRO: ${err.message}`);
-        }
+    if (files.length === 0) {
+        console.log('[IMPORT-CAMP] Nenhum arquivo de coleta de campo encontrado.');
+        if (closeDb) db.close();
+        return 0;
     }
 
-    const depois = await new Promise((resolve) => {
-        db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
-    });
-    log(`=== IMPORTAÇÃO CONCLUÍDA ===`);
-    log(`Antes: ${antes}`);
-    log(`Depois: ${depois}`);
-    log(`Total importadas: ${totalImportadas}`);
-    log(`Total ignoradas: ${totalIgnoradas}`);
+    console.log(`[IMPORT-CAMP] Encontrados ${files.length} arquivos:`, files);
 
-    db.close();
+    let totalInseridos = 0;
+    const stmt = db.prepare(`INSERT OR REPLACE INTO cell_towers 
+        (radio, mcc, net, area, cell, unit, lon, lat, range, samples, changeable, created, updated, averageSignal)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+
+    // Processar cada arquivo sequencialmente
+    for (const file of files) {
+        const filePath = path.join(DATA_DIR, file);
+        console.log(`[IMPORT-CAMP] Processando ${file}...`);
+
+        let count = 0;
+        await new Promise((resolve, reject) => {
+            const stream = fs.createReadStream(filePath)
+                .pipe(csv({
+                    separator: ',',
+                    mapHeaders: ({ header }) => header.trim()
+                }))
+                .on('data', (row) => {
+                    // Mapeamento flexível de colunas
+                    const campos = {
+                        radio: row.radio || row.RADIO || '',
+                        mcc: parseInt(row.mcc || row.MCC || 0),
+                        net: parseInt(row.net || row.NET || row.mnc || row.MNC || 0),
+                        area: parseInt(row.area || row.AREA || row.lac || row.LAC || 0),
+                        cell: parseInt(row.cell || row.CELL || row.ci || row.CI || 0),
+                        unit: parseInt(row.unit || row.UNIT || 0),
+                        lon: parseFloat(row.lon || row.LON || row.longitude || row.LONGITUDE || 0),
+                        lat: parseFloat(row.lat || row.LAT || row.latitude || row.LATITUDE || 0),
+                        range: parseInt(row.range || row.RANGE || 500),
+                        samples: parseInt(row.samples || row.SAMPLES || 1),
+                        changeable: parseInt(row.changeable || row.CHANGEABLE || 1),
+                        created: parseInt(row.created || row.CREATED || Math.floor(Date.now()/1000)),
+                        updated: parseInt(row.updated || row.UPDATED || Math.floor(Date.now()/1000)),
+                        averageSignal: parseInt(row.averageSignal || row.AVERAGESIGNAL || -70)
+                    };
+
+                    if (campos.cell && campos.lat && campos.lon) {
+                        stmt.run(
+                            campos.radio, campos.mcc, campos.net, campos.area,
+                            campos.cell, campos.unit, campos.lon, campos.lat,
+                            campos.range, campos.samples, campos.changeable,
+                            campos.created, campos.updated, campos.averageSignal
+                        );
+                        count++;
+                        totalInseridos++;
+                    }
+                })
+                .on('end', () => {
+                    console.log(`[IMPORT-CAMP] ${file} → ${count} registros.`);
+                    resolve();
+                })
+                .on('error', (err) => {
+                    console.error(`[IMPORT-CAMP] Erro no arquivo ${file}:`, err.message);
+                    resolve(); // continua com o próximo
+                });
+        });
+    }
+
+    stmt.finalize();
+    // Criar índice
+    db.run('CREATE INDEX IF NOT EXISTS idx_cell ON cell_towers(cell)');
+
+    if (closeDb) db.close();
+    return totalInseridos;
 }
 
-main().catch(err => {
-    console.error('[COLETA-CAMPO] ERRO FATAL:', err.message);
-    process.exit(1);
-});
+// Execução direta (se chamado como script)
+if (require.main === module) {
+    processarArquivosColeta()
+        .then(total => {
+            console.log(`[IMPORT-CAMP] Importação concluída. Total: ${total} registros.`);
+            process.exit(0);
+        })
+        .catch(err => {
+            console.error('[IMPORT-CAMP] Erro fatal:', err);
+            process.exit(1);
+        });
+}
+
+module.exports = { processarArquivosColeta };
