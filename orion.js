@@ -1,10 +1,13 @@
 /**
  * ARQUIVO: orion.js
- * VERSÃO: 6.8.1
- * ÚLTIMA ATUALIZAÇÃO: 2026-08-07 22:30:00 (UTC)
+ * VERSÃO: 6.8.2
+ * ÚLTIMA ATUALIZAÇÃO: 2026-08-09 (patch)
  * COMENTÁRIO: Prevenção de recriação desnecessária do banco.
  *             Importador multi-CSV com limite de registros (500k).
  *             Cadeia: Multi-CSV → Teleco → OpenCellID → Emergência.
+ *             [PATCH] Schema corrigido: PRIMARY KEY composta (mcc, net, area, cell)
+ *             em vez de "cell" isolado — evita colisões entre operadoras/fontes
+ *             diferentes que faziam INSERT OR REPLACE sobrescrever quase tudo.
  * AUTOR: Equipe ORION
  */
 
@@ -92,14 +95,18 @@ async function verificarERecuperarBanco(db) {
         newDb.run('PRAGMA journal_mode=WAL');
         newDb.run('PRAGMA secure_delete=ON');
         await new Promise((resolve, reject) => {
+            // [PATCH] PRIMARY KEY composta: mcc+net+area+cell é a identidade real
+            // de uma célula. "cell" isolado se repete entre operadoras/fontes
+            // diferentes e causava colisão no INSERT OR REPLACE.
             newDb.run(`CREATE TABLE IF NOT EXISTS cell_towers (
                 radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
-                cell INTEGER PRIMARY KEY, unit INTEGER, lon REAL, lat REAL,
+                cell INTEGER, unit INTEGER, lon REAL, lat REAL,
                 range INTEGER, samples INTEGER, changeable INTEGER,
-                created INTEGER, updated INTEGER, averageSignal INTEGER
+                created INTEGER, updated INTEGER, averageSignal INTEGER,
+                PRIMARY KEY (mcc, net, area, cell)
             )`, (err) => { if (err) reject(err); else resolve(); });
         });
-        log('info', 'Banco recriado com sucesso.');
+        log('info', 'Banco recriado com sucesso (schema com PK composta).');
         return newDb;
     } else if (corrompido && count > 0) {
         log('warn', 'Banco corrompido mas com dados. Mantendo como está.');
@@ -178,7 +185,7 @@ async function iniciarServidor() {
     dbTowers.close();
 
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 6.8.1 rodando na porta ' + port);
+        log('info', 'AI-DEPOM 6.8.2 rodando na porta ' + port);
         log('info', 'Cadeia: Multi‑CSV → Teleco → OpenCellID → Emergência');
         log('info', 'GitHub integração ativa.');
     });
