@@ -1,10 +1,15 @@
 /**
  * ARQUIVO: scripts/import-coleta-campo.js
- * VERSÃO: 2.1.1
- * ÚLTIMA ATUALIZAÇÃO: 2026-08-07 22:30:00 (UTC)
+ * VERSÃO: 2.1.2
+ * ÚLTIMA ATUALIZAÇÃO: 2026-08-09 (patch)
  * COMENTÁRIO: Padrão de reconhecimento ampliado para erb_consolidado_final*
  *             (permite partes com sufixo). Mapeamento estendido para coleta_campo.
  *             Limite de registros e ignora arquivos > 100 MB.
+ *             [PATCH 1] Schema com PRIMARY KEY composta (mcc, net, area, cell) —
+ *             evita colisão/sobrescrita entre operadoras e fontes diferentes.
+ *             [PATCH 2] Arquivos coleta_campo* não têm linha de cabeçalho — antes,
+ *             a 1ª linha de dados era lida como header, zerando o mapeamento.
+ *             Agora esses arquivos usam headers explícitos na ordem do schema.
  * AUTOR: Equipe ORION
  */
 
@@ -15,6 +20,12 @@ const sqlite3 = require('sqlite3').verbose();
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_PATH = path.join(DATA_DIR, 'cell_towers.db');
+
+// [PATCH 2] Ordem de colunas dos arquivos coleta_campo (sem cabeçalho no arquivo)
+const COLETA_CAMPO_HEADERS = [
+    'radio', 'mcc', 'net', 'area', 'cell', 'unit', 'lon', 'lat',
+    'range', 'samples', 'changeable', 'created', 'updated', 'averageSignal'
+];
 
 // Mapeamento de sinônimos (ampliado)
 const COLUMN_MAP = {
@@ -56,11 +67,13 @@ async function importarTodosCSVs(db = null, options = { maxRegistros: 500000 }) 
     }
 
     await new Promise((resolve, reject) => {
+        // [PATCH 1] PRIMARY KEY composta — ver comentário no topo do arquivo.
         db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
             radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
-            cell INTEGER PRIMARY KEY, unit INTEGER, lon REAL, lat REAL,
+            cell INTEGER, unit INTEGER, lon REAL, lat REAL,
             range INTEGER, samples INTEGER, changeable INTEGER,
-            created INTEGER, updated INTEGER, averageSignal INTEGER
+            created INTEGER, updated INTEGER, averageSignal INTEGER,
+            PRIMARY KEY (mcc, net, area, cell)
         )`, (err) => { if (err) reject(err); else resolve(); });
     });
 
@@ -106,16 +119,30 @@ async function importarTodosCSVs(db = null, options = { maxRegistros: 500000 }) 
         const filePath = path.join(DATA_DIR, file);
         console.log(`[IMPORT-UNIVERSAL] Processando ${file}...`);
 
+        // [PATCH 2] coleta_campo* não tem linha de cabeçalho no arquivo.
+        // Passar "headers" explícito diz ao csv-parser pra NÃO consumir a
+        // primeira linha como nome de coluna, e usar esses nomes fixos —
+        // que já batem direto com o COLUMN_MAP (radio, mcc, net, area, cell...).
+        const isColetaCampo = /^coleta_campo/i.test(file);
+
         let count = 0;
         let headers = null;
         let columnCache = {};
 
         await new Promise((resolve, reject) => {
-            const stream = fs.createReadStream(filePath, { encoding: 'utf8' })
-                .pipe(csv({
+            const csvOptions = isColetaCampo
+                ? {
+                    separator: ',',
+                    headers: COLETA_CAMPO_HEADERS,
+                    mapHeaders: ({ header }) => header.trim()
+                }
+                : {
                     separator: ',',
                     mapHeaders: ({ header }) => header.trim()
-                }))
+                };
+
+            const stream = fs.createReadStream(filePath, { encoding: 'utf8' })
+                .pipe(csv(csvOptions))
                 .on('headers', (headerList) => {
                     headers = headerList;
                     for (const [field, synonyms] of Object.entries(COLUMN_MAP)) {
