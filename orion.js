@@ -1,14 +1,15 @@
 /**
  * ARQUIVO: orion.js
- * VERSÃO: 6.8.4
- * ÚLTIMA ATUALIZAÇÃO: 2026-08-17 09:00:00 (UTC)
- * COMENTÁRIO: Adicionada rota para arquivos estáticos (pasta public/).
- *             Inclui interface /teste e /mapa-localizar.html.
+ * VERSÃO: 6.8.5
+ * ÚLTIMA ATUALIZAÇÃO: 2026-08-17 12:30:00 (UTC)
+ * COMENTÁRIO: Unificação da chave primária para (mcc, net, area, cell).
+ *             Rota explícita para mapa-localizar.html.
+ *             Lógica real de consulta ao banco de torres.
+ *             Melhorias no tratamento de erros.
  * AUTOR: Equipe ORION
  */
 
 const express = require('express');
-const https = require('https');
 const sqlite3 = require('sqlite3').verbose();
 const fs = require('fs');
 const path = require('path');
@@ -19,12 +20,9 @@ const port = process.env.PORT || 3000;
 
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_TOWERS = path.join(DATA_DIR, 'cell_towers.db');
-const CONTEXT_DIR = path.join(DATA_DIR, 'contextos');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
-// Criar diretórios se não existirem
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(CONTEXT_DIR)) fs.mkdirSync(CONTEXT_DIR, { recursive: true });
 if (!fs.existsSync(PUBLIC_DIR)) fs.mkdirSync(PUBLIC_DIR, { recursive: true });
 
 function log(level, msg) {
@@ -37,151 +35,118 @@ log('info', 'Diretórios verificados/criados.');
 const HERMES = { IAs: [{ nome: 'Artemis' }, { nome: 'Apollo' }, { nome: 'Athena' }] };
 log('info', 'HERMES inicializado com 3 IAs configuradas.');
 
-// ============================================================
-// MIDDLEWARE
-// ============================================================
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Servir arquivos estáticos da pasta public/
 app.use(express.static(PUBLIC_DIR));
 
-// ============================================================
-// ROTA DE TESTE (interface web via GET)
-// ============================================================
+// Rota explícita para o mapa-localizar.html (garantia)
+app.get('/mapa-localizar.html', (req, res) => {
+    const filePath = path.join(PUBLIC_DIR, 'mapa-localizar.html');
+    if (fs.existsSync(filePath)) {
+        res.sendFile(filePath);
+    } else {
+        res.status(404).send('Arquivo não encontrado. Verifique se public/mapa-localizar.html existe.');
+    }
+});
+
+// Rota de teste (GET)
 app.get('/teste', (req, res) => {
     res.send(`
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ORION - Localizador de Torres</title>
-    <style>
-        body { font-family: Arial, sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
-        h1 { color: #0a4b7a; }
-        label { display: block; margin-top: 12px; font-weight: bold; }
-        input { width: 100%; padding: 8px; box-sizing: border-box; }
-        button { margin-top: 20px; padding: 10px 20px; background: #0a4b7a; color: white; border: none; border-radius: 4px; cursor: pointer; }
-        button:hover { background: #063456; }
-        #resultado { background: #f4f4f4; padding: 12px; border-radius: 4px; white-space: pre-wrap; margin-top: 20px; }
-        .map-link { margin-top: 10px; }
-        .map-link a { color: #0a4b7a; text-decoration: none; }
-        .map-link a:hover { text-decoration: underline; }
-    </style>
-</head>
-<body>
-    <h1>📡 ORION - Localização por Torre</h1>
-    <p>Preencha os dados da célula e clique em <strong>Localizar</strong>.</p>
-
-    <label>Cell ID (obrigatório)</label>
-    <input id="cellId" value="208020001" placeholder="Ex: 208020001">
-
-    <label>MCC (código do país – Brasil = 724)</label>
-    <input id="mcc" value="724" placeholder="724">
-
-    <label>MNC (código da operadora – Claro=5, Vivo=10, TIM=2)</label>
-    <input id="mnc" value="5" placeholder="5">
-
-    <label>LAC (código da área)</label>
-    <input id="lac" value="100" placeholder="100">
-
-    <label>RSSI (intensidade do sinal, opcional)</label>
-    <input id="rssi" value="-71" placeholder="-71">
-
-    <button onclick="localizar()">🔍 Localizar</button>
-
-    <div id="resultado"></div>
-    <div class="map-link" id="mapLink"></div>
-
-    <script>
-        async function localizar() {
-            const cellId = document.getElementById('cellId').value.trim();
-            const mcc = document.getElementById('mcc').value.trim();
-            const mnc = document.getElementById('mnc').value.trim();
-            const lac = document.getElementById('lac').value.trim();
-            const rssi = document.getElementById('rssi').value.trim();
-
-            if (!cellId) {
-                alert('Cell ID é obrigatório!');
-                return;
-            }
-
-            const body = {
-                cells: [{
-                    cellId: parseInt(cellId),
-                    mcc: parseInt(mcc) || 0,
-                    mnc: parseInt(mnc) || 0,
-                    lac: parseInt(lac) || 0,
-                    rssi: parseInt(rssi) || -70
-                }]
-            };
-
-            const resultado = document.getElementById('resultado');
-            resultado.textContent = '⏳ Aguarde...';
-
-            try {
-                const res = await fetch('/api/localizar', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
-                });
-                const data = await res.json();
-                resultado.textContent = JSON.stringify(data, null, 2);
-
-                const mapLink = document.getElementById('mapLink');
-                if (data.position && data.position.latitude && data.position.longitude) {
-                    const lat = data.position.latitude;
-                    const lng = data.position.longitude;
-                    mapLink.innerHTML = \`<a href="https://www.google.com/maps?q=\${lat},\${lng}" target="_blank">📍 Ver no Google Maps</a>\`;
-                } else {
-                    mapLink.innerHTML = '';
-                }
-            } catch (err) {
-                resultado.textContent = '❌ Erro: ' + err.message;
-            }
-        }
-    </script>
-</body>
-</html>
+        <!DOCTYPE html>
+        <html>
+        <head><title>ORION - Teste</title></head>
+        <body>
+            <h1>📡 ORION - Teste Rápido</h1>
+            <p>Use a interface completa em <a href="/mapa-localizar.html">/mapa-localizar.html</a></p>
+            <p>Servidor funcionando!</p>
+        </body>
+        </html>
     `);
 });
 
-// ============================================================
-// ROTA RAIZ
-// ============================================================
+// Rota raiz
 app.get('/', (req, res) => {
     res.send(`
         <h1>🚀 ORION - AI-DEPOM</h1>
-        <p>Versão 6.8.4</p>
+        <p>Versão 6.8.5</p>
         <ul>
-            <li><a href="/teste">Interface de teste (/teste)</a></li>
-            <li><a href="/mapa-localizar.html">Interface clássica (/mapa-localizar.html)</a></li>
+            <li><a href="/mapa-localizar.html">🔍 Interface de localização</a></li>
+            <li><a href="/teste">🧪 Página de teste</a></li>
         </ul>
-        <p>Documentação da API em breve.</p>
+        <p>Status: <strong>Operacional</strong></p>
     `);
 });
 
 // ============================================================
-// API DE LOCALIZAÇÃO (exemplo - substitua pela sua lógica real)
+// API DE LOCALIZAÇÃO (lógica real)
 // ============================================================
 app.post('/api/localizar', (req, res) => {
-    // Exemplo: retorna posição fixa para demonstração
-    // Você deve substituir pela consulta ao banco de torres
     const { cells } = req.body;
     if (!cells || !cells.length) {
         return res.status(400).json({ erro: 'Nenhuma célula fornecida.' });
     }
-    // Simula busca no banco (exemplo)
-    res.json({
-        status: 'localizado',
-        position: { latitude: -12.9714, longitude: -38.5016, raio_estimado: 500 },
-        fonte: 'exemplo (substitua pela lógica real)'
+
+    const db = new sqlite3.Database(DB_TOWERS);
+    let resultados = [];
+    let promises = cells.map((cell) => {
+        return new Promise((resolve) => {
+            const { cellId, mcc, mnc, lac } = cell;
+            db.get(
+                `SELECT lat, lon, range FROM cell_towers 
+                 WHERE cell = ? AND mcc = ? AND net = ? AND area = ?`,
+                [cellId, mcc || 0, mnc || 0, lac || 0],
+                (err, row) => {
+                    if (err || !row) {
+                        resolve(null);
+                    } else {
+                        resolve(row);
+                    }
+                }
+            );
+        });
+    });
+
+    Promise.all(promises).then((rows) => {
+        db.close();
+        const validos = rows.filter(r => r !== null);
+        if (validos.length === 0) {
+            return res.json({
+                status: 'nao_encontrado',
+                mensagem: 'Nenhuma torre encontrada para os dados fornecidos.'
+            });
+        }
+
+        // Cálculo de posição (média ponderada pelo range)
+        let lat = 0, lon = 0, pesoTotal = 0;
+        validos.forEach(r => {
+            const peso = 1 / Math.max(r.range || 500, 1);
+            lat += r.lat * peso;
+            lon += r.lon * peso;
+            pesoTotal += peso;
+        });
+
+        const pos = {
+            latitude: lat / pesoTotal,
+            longitude: lon / pesoTotal,
+            raio_estimado: Math.round(validos.reduce((a, r) => a + (r.range || 500), 0) / validos.length / Math.sqrt(validos.length))
+        };
+
+        res.json({
+            status: 'localizado',
+            position: pos,
+            torres_usadas: validos.length,
+            fonte: 'banco_local'
+        });
+    }).catch(err => {
+        db.close();
+        res.status(500).json({ erro: err.message });
     });
 });
 
 // ============================================================
-// FUNÇÕES DE IMPORTAÇÃO (mantidas)
+// FUNÇÕES DE IMPORTAÇÃO
 // ============================================================
 
 async function inserirBancoEmergencia(db) {
@@ -192,7 +157,9 @@ async function inserirBancoEmergencia(db) {
         ['GSM', 724, 5, 400, 208018001, 0, -47.9292, -15.7801, 6000, 120, 1, 1609459200, 1609459200, -68],
         ['GSM', 724, 5, 500, 208021001, 0, -38.5266, -3.7319, 4000, 90, 1, 1609459200, 1609459200, -69],
     ];
-    const stmt = db.prepare('INSERT OR REPLACE INTO cell_towers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+    const stmt = db.prepare(`INSERT OR REPLACE INTO cell_towers 
+        (radio, mcc, net, area, cell, unit, lon, lat, range, samples, changeable, created, updated, averageSignal)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     for (const t of torres) stmt.run(t);
     stmt.finalize();
     db.run('CREATE INDEX IF NOT EXISTS idx_cell ON cell_towers(cell)');
@@ -209,9 +176,10 @@ async function verificarERecuperarBanco(db) {
         await new Promise((resolve, reject) => {
             newDb.run(`CREATE TABLE IF NOT EXISTS cell_towers (
                 radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
-                cell INTEGER PRIMARY KEY, unit INTEGER, lon REAL, lat REAL,
+                cell INTEGER, unit INTEGER, lon REAL, lat REAL,
                 range INTEGER, samples INTEGER, changeable INTEGER,
-                created INTEGER, updated INTEGER, averageSignal INTEGER
+                created INTEGER, updated INTEGER, averageSignal INTEGER,
+                PRIMARY KEY (mcc, net, area, cell)
             )`, (err) => { if (err) reject(err); else resolve(); });
         });
         return newDb;
@@ -230,9 +198,10 @@ async function verificarERecuperarBanco(db) {
         await new Promise((resolve, reject) => {
             db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
                 radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
-                cell INTEGER PRIMARY KEY, unit INTEGER, lon REAL, lat REAL,
+                cell INTEGER, unit INTEGER, lon REAL, lat REAL,
                 range INTEGER, samples INTEGER, changeable INTEGER,
-                created INTEGER, updated INTEGER, averageSignal INTEGER
+                created INTEGER, updated INTEGER, averageSignal INTEGER,
+                PRIMARY KEY (mcc, net, area, cell)
             )`, (err) => { if (err) reject(err); else resolve(); });
         });
         try {
@@ -271,7 +240,7 @@ async function iniciarServidor() {
         try {
             log('info', 'Executando importação multi‑CSV...');
             const { importarTodosCSVs } = require('./scripts/import-coleta-campo.js');
-            const inseridos = await importarTodosCSVs(dbTowers, { maxRegistros: 300000 });
+            const inseridos = await importarTodosCSVs(dbTowers, { maxRegistros: 500000 });
             if (inseridos > 0) {
                 importado = true;
                 log('info', `Importação multi‑CSV concluída: ${inseridos} torres.`);
@@ -314,10 +283,10 @@ async function iniciarServidor() {
     dbTowers.close();
 
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 6.8.4 rodando na porta ' + port);
+        log('info', 'AI-DEPOM 6.8.5 rodando na porta ' + port);
         log('info', 'Cadeia: Multi‑CSV → Teleco → OpenCellID → Emergência');
         log('info', 'GitHub integração ativa.');
-        log('info', '🌐 Interface de teste: /teste');
+        log('info', '🌐 Interface: /mapa-localizar.html');
         log('info', '📁 Arquivos estáticos em /public');
     });
 }
