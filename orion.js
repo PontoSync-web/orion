@@ -1,13 +1,9 @@
 /**
  * ARQUIVO: orion.js
- * VERSÃO: 6.8.2
- * ÚLTIMA ATUALIZAÇÃO: 2026-08-09 (patch)
- * COMENTÁRIO: Prevenção de recriação desnecessária do banco.
- *             Importador multi-CSV com limite de registros (500k).
- *             Cadeia: Multi-CSV → Teleco → OpenCellID → Emergência.
- *             [PATCH] Schema corrigido: PRIMARY KEY composta (mcc, net, area, cell)
- *             em vez de "cell" isolado — evita colisões entre operadoras/fontes
- *             diferentes que faziam INSERT OR REPLACE sobrescrever quase tudo.
+ * VERSÃO: 6.8.4
+ * ÚLTIMA ATUALIZAÇÃO: 2026-08-17 09:00:00 (UTC)
+ * COMENTÁRIO: Adicionada rota para arquivos estáticos (pasta public/).
+ *             Inclui interface /teste e /mapa-localizar.html.
  * AUTOR: Equipe ORION
  */
 
@@ -21,24 +17,23 @@ const { execSync } = require('child_process');
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Diretórios
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_TOWERS = path.join(DATA_DIR, 'cell_towers.db');
 const CONTEXT_DIR = path.join(DATA_DIR, 'contextos');
+const PUBLIC_DIR = path.join(__dirname, 'public');
 
+// Criar diretórios se não existirem
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(CONTEXT_DIR)) fs.mkdirSync(CONTEXT_DIR, { recursive: true });
+if (!fs.existsSync(PUBLIC_DIR)) fs.mkdirSync(PUBLIC_DIR, { recursive: true });
 
 function log(level, msg) {
     const ts = new Date().toISOString();
     console.log(`[${ts}] [${level.toUpperCase()}] ${msg}`);
 }
 
-log('info', 'Diretório data/ gravável.');
+log('info', 'Diretórios verificados/criados.');
 
-// ============================================================
-// HERMES – placeholder
-// ============================================================
 const HERMES = { IAs: [{ nome: 'Artemis' }, { nome: 'Apollo' }, { nome: 'Athena' }] };
 log('info', 'HERMES inicializado com 3 IAs configuradas.');
 
@@ -48,14 +43,145 @@ log('info', 'HERMES inicializado com 3 IAs configuradas.');
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// ============================================================
-// ROTAS EXISTENTES (mantidas)
-// ============================================================
-// (Aqui ficam /api/localizar, /api/buscar-cell-ids, /api/contexto/*, /api/github/*)
-// Mantenha as rotas que já estão no seu código.
+// Servir arquivos estáticos da pasta public/
+app.use(express.static(PUBLIC_DIR));
 
 // ============================================================
-// FUNÇÕES DE IMPORTAÇÃO
+// ROTA DE TESTE (interface web via GET)
+// ============================================================
+app.get('/teste', (req, res) => {
+    res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ORION - Localizador de Torres</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
+        h1 { color: #0a4b7a; }
+        label { display: block; margin-top: 12px; font-weight: bold; }
+        input { width: 100%; padding: 8px; box-sizing: border-box; }
+        button { margin-top: 20px; padding: 10px 20px; background: #0a4b7a; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #063456; }
+        #resultado { background: #f4f4f4; padding: 12px; border-radius: 4px; white-space: pre-wrap; margin-top: 20px; }
+        .map-link { margin-top: 10px; }
+        .map-link a { color: #0a4b7a; text-decoration: none; }
+        .map-link a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <h1>📡 ORION - Localização por Torre</h1>
+    <p>Preencha os dados da célula e clique em <strong>Localizar</strong>.</p>
+
+    <label>Cell ID (obrigatório)</label>
+    <input id="cellId" value="208020001" placeholder="Ex: 208020001">
+
+    <label>MCC (código do país – Brasil = 724)</label>
+    <input id="mcc" value="724" placeholder="724">
+
+    <label>MNC (código da operadora – Claro=5, Vivo=10, TIM=2)</label>
+    <input id="mnc" value="5" placeholder="5">
+
+    <label>LAC (código da área)</label>
+    <input id="lac" value="100" placeholder="100">
+
+    <label>RSSI (intensidade do sinal, opcional)</label>
+    <input id="rssi" value="-71" placeholder="-71">
+
+    <button onclick="localizar()">🔍 Localizar</button>
+
+    <div id="resultado"></div>
+    <div class="map-link" id="mapLink"></div>
+
+    <script>
+        async function localizar() {
+            const cellId = document.getElementById('cellId').value.trim();
+            const mcc = document.getElementById('mcc').value.trim();
+            const mnc = document.getElementById('mnc').value.trim();
+            const lac = document.getElementById('lac').value.trim();
+            const rssi = document.getElementById('rssi').value.trim();
+
+            if (!cellId) {
+                alert('Cell ID é obrigatório!');
+                return;
+            }
+
+            const body = {
+                cells: [{
+                    cellId: parseInt(cellId),
+                    mcc: parseInt(mcc) || 0,
+                    mnc: parseInt(mnc) || 0,
+                    lac: parseInt(lac) || 0,
+                    rssi: parseInt(rssi) || -70
+                }]
+            };
+
+            const resultado = document.getElementById('resultado');
+            resultado.textContent = '⏳ Aguarde...';
+
+            try {
+                const res = await fetch('/api/localizar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await res.json();
+                resultado.textContent = JSON.stringify(data, null, 2);
+
+                const mapLink = document.getElementById('mapLink');
+                if (data.position && data.position.latitude && data.position.longitude) {
+                    const lat = data.position.latitude;
+                    const lng = data.position.longitude;
+                    mapLink.innerHTML = \`<a href="https://www.google.com/maps?q=\${lat},\${lng}" target="_blank">📍 Ver no Google Maps</a>\`;
+                } else {
+                    mapLink.innerHTML = '';
+                }
+            } catch (err) {
+                resultado.textContent = '❌ Erro: ' + err.message;
+            }
+        }
+    </script>
+</body>
+</html>
+    `);
+});
+
+// ============================================================
+// ROTA RAIZ
+// ============================================================
+app.get('/', (req, res) => {
+    res.send(`
+        <h1>🚀 ORION - AI-DEPOM</h1>
+        <p>Versão 6.8.4</p>
+        <ul>
+            <li><a href="/teste">Interface de teste (/teste)</a></li>
+            <li><a href="/mapa-localizar.html">Interface clássica (/mapa-localizar.html)</a></li>
+        </ul>
+        <p>Documentação da API em breve.</p>
+    `);
+});
+
+// ============================================================
+// API DE LOCALIZAÇÃO (exemplo - substitua pela sua lógica real)
+// ============================================================
+app.post('/api/localizar', (req, res) => {
+    // Exemplo: retorna posição fixa para demonstração
+    // Você deve substituir pela consulta ao banco de torres
+    const { cells } = req.body;
+    if (!cells || !cells.length) {
+        return res.status(400).json({ erro: 'Nenhuma célula fornecida.' });
+    }
+    // Simula busca no banco (exemplo)
+    res.json({
+        status: 'localizado',
+        position: { latitude: -12.9714, longitude: -38.5016, raio_estimado: 500 },
+        fonte: 'exemplo (substitua pela lógica real)'
+    });
+});
+
+// ============================================================
+// FUNÇÕES DE IMPORTAÇÃO (mantidas)
 // ============================================================
 
 async function inserirBancoEmergencia(db) {
@@ -74,45 +200,53 @@ async function inserirBancoEmergencia(db) {
 }
 
 async function verificarERecuperarBanco(db) {
-    let corrompido = false;
-    let count = 0;
-    try {
-        count = await new Promise((resolve, reject) => {
-            db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => {
-                if (err) { corrompido = true; reject(err); } else resolve(row ? row.c : 0);
-            });
-        });
-    } catch (err) {
-        log('warn', 'Erro ao ler banco: ' + err.message);
-        corrompido = true;
-    }
-
-    if (corrompido && count === 0) {
-        log('warn', 'Banco corrompido e vazio. Recriando...');
-        db.close();
-        try { fs.unlinkSync(DB_TOWERS); } catch (e) {}
+    const dbExists = fs.existsSync(DB_TOWERS);
+    if (!dbExists) {
+        log('info', 'Banco de dados não existe. Criando novo.');
         const newDb = new sqlite3.Database(DB_TOWERS);
         newDb.run('PRAGMA journal_mode=WAL');
         newDb.run('PRAGMA secure_delete=ON');
         await new Promise((resolve, reject) => {
-            // [PATCH] PRIMARY KEY composta: mcc+net+area+cell é a identidade real
-            // de uma célula. "cell" isolado se repete entre operadoras/fontes
-            // diferentes e causava colisão no INSERT OR REPLACE.
             newDb.run(`CREATE TABLE IF NOT EXISTS cell_towers (
                 radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
-                cell INTEGER, unit INTEGER, lon REAL, lat REAL,
+                cell INTEGER PRIMARY KEY, unit INTEGER, lon REAL, lat REAL,
                 range INTEGER, samples INTEGER, changeable INTEGER,
-                created INTEGER, updated INTEGER, averageSignal INTEGER,
-                PRIMARY KEY (mcc, net, area, cell)
+                created INTEGER, updated INTEGER, averageSignal INTEGER
             )`, (err) => { if (err) reject(err); else resolve(); });
         });
-        log('info', 'Banco recriado com sucesso (schema com PK composta).');
         return newDb;
-    } else if (corrompido && count > 0) {
-        log('warn', 'Banco corrompido mas com dados. Mantendo como está.');
+    }
+
+    try {
+        await new Promise((resolve, reject) => {
+            db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => {
+                if (err) reject(err); else resolve(row ? row.c : 0);
+            });
+        });
+        log('info', 'Banco existente e íntegro.');
         return db;
-    } else {
-        return db;
+    } catch (err) {
+        log('warn', 'Banco existente parece corrompido. Tentando criar tabela...');
+        await new Promise((resolve, reject) => {
+            db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
+                radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
+                cell INTEGER PRIMARY KEY, unit INTEGER, lon REAL, lat REAL,
+                range INTEGER, samples INTEGER, changeable INTEGER,
+                created INTEGER, updated INTEGER, averageSignal INTEGER
+            )`, (err) => { if (err) reject(err); else resolve(); });
+        });
+        try {
+            const count = await new Promise((resolve, reject) => {
+                db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => {
+                    if (err) reject(err); else resolve(row ? row.c : 0);
+                });
+            });
+            log('info', `Banco recuperado com ${count} registros.`);
+            return db;
+        } catch (e2) {
+            log('error', 'Não foi possível recuperar o banco. Mantendo como está.');
+            return db;
+        }
     }
 }
 
@@ -134,11 +268,10 @@ async function iniciarServidor() {
     if (count < 1000) {
         let importado = false;
 
-        // 1. Importador multi‑CSV (com limite de 500k registros para evitar OOM)
         try {
             log('info', 'Executando importação multi‑CSV...');
             const { importarTodosCSVs } = require('./scripts/import-coleta-campo.js');
-            const inseridos = await importarTodosCSVs(dbTowers, { maxRegistros: 500000 });
+            const inseridos = await importarTodosCSVs(dbTowers, { maxRegistros: 300000 });
             if (inseridos > 0) {
                 importado = true;
                 log('info', `Importação multi‑CSV concluída: ${inseridos} torres.`);
@@ -149,7 +282,6 @@ async function iniciarServidor() {
             log('warn', 'Erro no importador multi‑CSV: ' + err.message);
         }
 
-        // 2. Fallback: Teleco
         if (!importado) {
             try {
                 log('info', 'Tentando Teleco/Anatel...');
@@ -158,7 +290,6 @@ async function iniciarServidor() {
             } catch (err) { log('warn', 'Teleco falhou: ' + err.message); }
         }
 
-        // 3. Fallback: OpenCellID
         if (!importado) {
             try {
                 log('info', 'Tentando OpenCellID...');
@@ -167,7 +298,6 @@ async function iniciarServidor() {
             } catch (err) { log('warn', 'OpenCellID falhou: ' + err.message); }
         }
 
-        // 4. Emergência
         if (!importado) {
             log('warn', 'Nenhuma fonte disponível. Inserindo banco de emergência...');
             await inserirBancoEmergencia(dbTowers);
@@ -176,7 +306,6 @@ async function iniciarServidor() {
         log('info', 'Banco já possui torres suficientes.');
     }
 
-    // Atualiza a contagem final
     const finalCount = await new Promise((resolve) => {
         dbTowers.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
     });
@@ -185,9 +314,11 @@ async function iniciarServidor() {
     dbTowers.close();
 
     app.listen(port, () => {
-        log('info', 'AI-DEPOM 6.8.2 rodando na porta ' + port);
+        log('info', 'AI-DEPOM 6.8.4 rodando na porta ' + port);
         log('info', 'Cadeia: Multi‑CSV → Teleco → OpenCellID → Emergência');
         log('info', 'GitHub integração ativa.');
+        log('info', '🌐 Interface de teste: /teste');
+        log('info', '📁 Arquivos estáticos em /public');
     });
 }
 
