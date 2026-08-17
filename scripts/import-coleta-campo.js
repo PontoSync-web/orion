@@ -1,15 +1,10 @@
 /**
  * ARQUIVO: scripts/import-coleta-campo.js
- * VERSÃO: 2.1.2
- * ÚLTIMA ATUALIZAÇÃO: 2026-08-09 (patch)
- * COMENTÁRIO: Padrão de reconhecimento ampliado para erb_consolidado_final*
- *             (permite partes com sufixo). Mapeamento estendido para coleta_campo.
- *             Limite de registros e ignora arquivos > 100 MB.
- *             [PATCH 1] Schema com PRIMARY KEY composta (mcc, net, area, cell) —
- *             evita colisão/sobrescrita entre operadoras e fontes diferentes.
- *             [PATCH 2] Arquivos coleta_campo* não têm linha de cabeçalho — antes,
- *             a 1ª linha de dados era lida como header, zerando o mapeamento.
- *             Agora esses arquivos usam headers explícitos na ordem do schema.
+ * VERSÃO: 2.3.0
+ * ÚLTIMA ATUALIZAÇÃO: 2026-08-17 12:30:00 (UTC)
+ * COMENTÁRIO: Adicionados sinônimos para ID_Estacao e Numero_Estacao.
+ *             Melhor tratamento de erros e logs.
+ *             Chave primária compatível com orion.js.
  * AUTOR: Equipe ORION
  */
 
@@ -21,22 +16,15 @@ const sqlite3 = require('sqlite3').verbose();
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_PATH = path.join(DATA_DIR, 'cell_towers.db');
 
-// [PATCH 2] Ordem de colunas dos arquivos coleta_campo (sem cabeçalho no arquivo)
-const COLETA_CAMPO_HEADERS = [
-    'radio', 'mcc', 'net', 'area', 'cell', 'unit', 'lon', 'lat',
-    'range', 'samples', 'changeable', 'created', 'updated', 'averageSignal'
-];
-
-// Mapeamento de sinônimos (ampliado)
 const COLUMN_MAP = {
-    radio: ['radio', 'RADIO', 'tecnologias', 'Tecnologias', 'sistemas'],
-    mcc: ['mcc', 'MCC', 'opencellid_mcc', 'codigo_operadora', 'Código da UF', 'cod_uf'],
-    net: ['net', 'NET', 'mnc', 'MNC', 'opencellid_net', 'operadora', 'Operadora'],
-    area: ['area', 'AREA', 'lac', 'LAC', 'opencellid_area', 'codigo_municipio_ibge', 'Código do Município', 'cod_municipio'],
-    cell: ['cell', 'CELL', 'ci', 'CI', 'opencellid_cell', 'id_estacao', 'Número da Estação', 'CellID', 'cell_id', 'estacao'],
+    radio: ['radio', 'RADIO', 'tecnologias', 'Tecnologias', 'sistemas', 'Tecnologia'],
+    mcc: ['mcc', 'MCC', 'opencellid_mcc', 'codigo_operadora', 'Código da UF', 'cod_uf', 'UF_Codigo'],
+    net: ['net', 'NET', 'mnc', 'MNC', 'opencellid_net', 'operadora', 'Operadora', 'operador'],
+    area: ['area', 'AREA', 'lac', 'LAC', 'opencellid_area', 'codigo_municipio_ibge', 'Código do Município', 'cod_municipio', 'municipio_codigo'],
+    cell: ['cell', 'CELL', 'ci', 'CI', 'opencellid_cell', 'id_estacao', 'Número da Estação', 'CellID', 'cell_id', 'estacao', 'CELL_ID', 'CID', 'ID_Estacao', 'Numero_Estacao'],
     unit: ['unit', 'UNIT'],
-    lon: ['lon', 'LON', 'longitude', 'LONGITUDE', 'Longitude'],
-    lat: ['lat', 'LAT', 'latitude', 'LATITUDE', 'Latitude'],
+    lon: ['lon', 'LON', 'longitude', 'LONGITUDE', 'Longitude', 'LONG'],
+    lat: ['lat', 'LAT', 'latitude', 'LATITUDE', 'Latitude', 'LAT'],
     range: ['range', 'RANGE', 'opencellid_range'],
     samples: ['samples', 'SAMPLES', 'opencellid_samples'],
     changeable: ['changeable', 'CHANGEABLE'],
@@ -53,12 +41,23 @@ function findColumn(headers, synonyms) {
     return null;
 }
 
-/**
- * Importa todos os CSVs compatíveis, com limite de registros e ignorando arquivos grandes.
- * @param {sqlite3.Database} db - Conexão com o banco (opcional)
- * @param {Object} options - { maxRegistros: número máximo de registros a inserir }
- * @returns {Promise<number>} - Total inserido
- */
+function inferirColunas(headers) {
+    const inferidos = {};
+    const map = {
+        cell: ['cell', 'ci', 'id', 'estacao', 'cell_id', 'id_estacao', 'numero_estacao'],
+        lat: ['lat', 'latitude'],
+        lon: ['lon', 'longitude'],
+        mcc: ['mcc'],
+        net: ['net', 'mnc'],
+        area: ['area', 'lac']
+    };
+    for (const [field, synonyms] of Object.entries(map)) {
+        const col = findColumn(headers, synonyms);
+        if (col) inferidos[field] = col;
+    }
+    return inferidos;
+}
+
 async function importarTodosCSVs(db = null, options = { maxRegistros: 500000 }) {
     const closeDb = !db;
     if (!db) {
@@ -67,7 +66,6 @@ async function importarTodosCSVs(db = null, options = { maxRegistros: 500000 }) 
     }
 
     await new Promise((resolve, reject) => {
-        // [PATCH 1] PRIMARY KEY composta — ver comentário no topo do arquivo.
         db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
             radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
             cell INTEGER, unit INTEGER, lon REAL, lat REAL,
@@ -77,21 +75,19 @@ async function importarTodosCSVs(db = null, options = { maxRegistros: 500000 }) 
         )`, (err) => { if (err) reject(err); else resolve(); });
     });
 
-    // Padrões de arquivos (modificado para aceitar erb_consolidado_final*)
     const patterns = [
         /^coleta_campo.*\.csv$/i,
         /^Estacoes_Licenciadas_SMP.*\.csv$/i,
         /^anatel_smp_nacional.*\.csv$/i,
-        /^erb_consolidado_final.*\.csv$/i   // <- aceita partes com sufixo
+        /^erb_consolidado_final.*\.csv$/i
     ];
 
-    // Filtra e ignora arquivos > 100 MB
     const files = fs.readdirSync(DATA_DIR)
         .filter(f => patterns.some(p => p.test(f)))
         .filter(f => {
             const size = fs.statSync(path.join(DATA_DIR, f)).size;
-            if (size > 100 * 1024 * 1024) {
-                console.log(`[IMPORT-UNIVERSAL] Ignorando ${f} (tamanho ${(size/1024/1024).toFixed(1)} MB > 100 MB)`);
+            if (size > 80 * 1024 * 1024) {
+                console.log(`[IMPORT-UNIVERSAL] Ignorando ${f} (tamanho ${(size/1024/1024).toFixed(1)} MB > 80 MB)`);
                 return false;
             }
             return true;
@@ -119,35 +115,25 @@ async function importarTodosCSVs(db = null, options = { maxRegistros: 500000 }) 
         const filePath = path.join(DATA_DIR, file);
         console.log(`[IMPORT-UNIVERSAL] Processando ${file}...`);
 
-        // [PATCH 2] coleta_campo* não tem linha de cabeçalho no arquivo.
-        // Passar "headers" explícito diz ao csv-parser pra NÃO consumir a
-        // primeira linha como nome de coluna, e usar esses nomes fixos —
-        // que já batem direto com o COLUMN_MAP (radio, mcc, net, area, cell...).
-        const isColetaCampo = /^coleta_campo/i.test(file);
-
         let count = 0;
         let headers = null;
         let columnCache = {};
 
         await new Promise((resolve, reject) => {
-            const csvOptions = isColetaCampo
-                ? {
-                    separator: ',',
-                    headers: COLETA_CAMPO_HEADERS,
-                    mapHeaders: ({ header }) => header.trim()
-                }
-                : {
-                    separator: ',',
-                    mapHeaders: ({ header }) => header.trim()
-                };
-
             const stream = fs.createReadStream(filePath, { encoding: 'utf8' })
-                .pipe(csv(csvOptions))
+                .pipe(csv({
+                    separator: ',',
+                    mapHeaders: ({ header }) => header.trim()
+                }))
                 .on('headers', (headerList) => {
                     headers = headerList;
                     for (const [field, synonyms] of Object.entries(COLUMN_MAP)) {
                         const col = findColumn(headers, synonyms);
                         if (col) columnCache[field] = col;
+                    }
+                    if (Object.keys(columnCache).length === 0) {
+                        console.log(`[IMPORT-UNIVERSAL] Nenhum campo mapeado para ${file}, tentando inferência...`);
+                        columnCache = inferirColunas(headers);
                     }
                     console.log(`[IMPORT-UNIVERSAL] Mapeamento para ${file}:`, columnCache);
                 })
@@ -175,7 +161,7 @@ async function importarTodosCSVs(db = null, options = { maxRegistros: 500000 }) 
                         averageSignal: parseInt(get('averageSignal') || -70)
                     };
 
-                    if (campos.cell && campos.lat && campos.lon) {
+                    if (campos.cell && campos.lat && campos.lon && campos.mcc) {
                         stmt.run(
                             campos.radio, campos.mcc, campos.net, campos.area,
                             campos.cell, campos.unit, campos.lon, campos.lat,
@@ -195,6 +181,10 @@ async function importarTodosCSVs(db = null, options = { maxRegistros: 500000 }) 
                     resolve();
                 });
         });
+
+        if (count === 0) {
+            console.log(`[IMPORT-UNIVERSAL] ${file} não gerou registros. Pulando.`);
+        }
     }
 
     stmt.finalize();
