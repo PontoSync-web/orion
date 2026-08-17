@@ -1,314 +1,194 @@
-<!--
-    ARQUIVO: public/mapa-localizar.html
-    DATA: 29 de Julho de 2026
-    HORÁRIO: 01:30 (Horário Oficial — Salvador, Bahia, Brasil)
-    FUSO: América do Sul / Brasil / Bahia (GMT-3)
-    MOTIVO: Adicionado botão de localização GPS via navegador.
-            Splash screen de 10s, endereço completo, ERBs.
-            Compatível com ORION 5.8.7.
--->
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI-DEPOM — Sistema de Geolocalização</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <title>ORION - Localizador de Torres</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-
-        #splash {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: #0a0a1a; display: flex; flex-direction: column;
-            align-items: center; justify-content: center; z-index: 9999;
-            animation: fadeOut 1.5s ease 8.5s forwards;
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            max-width: 650px;
+            margin: 30px auto;
+            padding: 20px;
+            background: #f0f4f8;
+            color: #1a2a3a;
         }
-        #splash .logo {
-            font-family: 'Segoe UI', Arial, sans-serif; font-size: 36px;
-            font-weight: 900; color: #e94560; letter-spacing: 6px;
-            text-align: center; animation: pulse 1s ease-in-out infinite alternate;
+        .container {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
         }
-        #splash .subtitle {
-            font-family: 'Segoe UI', Arial, sans-serif; font-size: 16px;
-            color: #4fc3f7; margin-top: 15px; text-align: center;
-            animation: fadeText 0.5s ease-in-out infinite alternate;
+        h1 {
+            color: #0a4b7a;
+            margin-top: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
-        @keyframes pulse { from { opacity: 0.7; transform: scale(0.98); } to { opacity: 1; transform: scale(1.02); } }
-        @keyframes fadeText { from { opacity: 0.5; } to { opacity: 1; } }
-        @keyframes fadeOut { to { opacity: 0; visibility: hidden; } }
-
-        body { font-family: 'Segoe UI', Arial, sans-serif; background: #1a1a2e; color: #eee; height: 100vh; display: flex; flex-direction: column; }
-        #header { background: #16213e; padding: 15px 20px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-bottom: 2px solid #0f3460; }
-        #header h1 { font-size: 20px; color: #e94560; white-space: nowrap; }
-        #header input { flex: 1; min-width: 180px; padding: 10px; border-radius: 6px; border: 1px solid #0f3460; background: #0f3460; color: #eee; font-size: 14px; }
-        #header button { padding: 10px 20px; border-radius: 6px; border: none; background: #e94560; color: #fff; font-weight: bold; cursor: pointer; font-size: 14px; transition: background 0.2s; }
-        #header button:hover { background: #c23152; }
-        #gpsBtn { background: #4fc3f7 !important; color: #000 !important; }
-        #status { font-size: 13px; color: #aaa; margin-left: auto; white-space: nowrap; }
-        #map { flex: 1; width: 100%; }
-        #info { background: #16213e; padding: 10px 20px; border-top: 2px solid #0f3460; font-size: 13px; }
-        #info .row { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 5px; }
-        #info .row span { white-space: nowrap; }
-        #info .endereco { color: #4fc3f7; font-weight: bold; margin-top: 5px; padding-top: 5px; border-top: 1px solid #0f3460; }
-        #info .erbs { color: #aaa; font-size: 12px; margin-top: 3px; }
-        #alertBox { padding: 10px; margin: 0; text-align: center; font-weight: bold; display: none; }
-        .alert-info { background: #0f3460; color: #4fc3f7; display: block !important; }
-        .alert-error { background: #3e1a1a; color: #ef5350; display: block !important; }
+        h1 small {
+            font-size: 0.5em;
+            font-weight: normal;
+            color: #666;
+        }
+        label {
+            display: block;
+            margin-top: 14px;
+            font-weight: 600;
+            font-size: 0.9em;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 1em;
+            margin-top: 4px;
+        }
+        .row {
+            display: flex;
+            gap: 12px;
+        }
+        .row > div {
+            flex: 1;
+        }
+        button {
+            margin-top: 22px;
+            padding: 12px 28px;
+            background: #0a4b7a;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: background 0.2s;
+            width: 100%;
+        }
+        button:hover {
+            background: #063456;
+        }
+        #resultado {
+            background: #f4f7fb;
+            padding: 14px;
+            border-radius: 6px;
+            margin-top: 20px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 0.9em;
+            border: 1px solid #e0e4e8;
+            min-height: 60px;
+        }
+        .map-link {
+            margin-top: 12px;
+            text-align: center;
+        }
+        .map-link a {
+            color: #0a4b7a;
+            text-decoration: none;
+            font-weight: bold;
+            padding: 6px 14px;
+            border: 1px solid #0a4b7a;
+            border-radius: 6px;
+            display: inline-block;
+        }
+        .map-link a:hover {
+            background: #0a4b7a;
+            color: white;
+        }
+        .footer {
+            margin-top: 20px;
+            font-size: 0.8em;
+            color: #888;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
+<div class="container">
+    <h1>📡 ORION <small>Localizador de Torres</small></h1>
+    <p>Insira os dados da célula para obter a localização aproximada.</p>
 
-    <div id="splash">
-        <div class="logo">AI &mdash; DEPOM</div>
-        <div class="subtitle">CARREGANDO AI - DEPOM<br>Sistema de GeoLocalização...</div>
-    </div>
-
-    <div id="alertBox"></div>
-    <div id="header">
-        <h1>&#128752; AI-DEPOM</h1>
-        <input type="text" id="numeroInput" placeholder="Digite o número do alvo..." />
-        <button id="buscarBtn">&#128270; Localizar</button>
-        <button id="gpsBtn">&#128205; Minha Localização (GPS)</button>
-        <span id="status">&#9989; Online</span>
-    </div>
-    <div id="map"></div>
-    <div id="info">
-        <div class="row">
-            <span id="infoNumero"><b>Número:</b> —</span>
-            <span id="infoCoordenadas"><b>Coordenadas:</b> —</span>
-            <span id="infoPrecisao"><b>Precisão:</b> —</span>
+    <div class="row">
+        <div>
+            <label>Cell ID *</label>
+            <input id="cellId" value="208020001" placeholder="Ex: 208020001">
         </div>
-        <div class="row">
-            <span id="infoTorres"><b>Torres:</b> —</span>
-            <span id="infoFonte"><b>Fonte:</b> —</span>
-            <span id="infoTimestamp"><b>Data/Hora:</b> —</span>
+        <div>
+            <label>MCC</label>
+            <input id="mcc" value="724" placeholder="724">
         </div>
-        <div id="infoEndereco" class="endereco" style="display:none;"></div>
-        <div id="infoERBs" class="erbs" style="display:none;"></div>
     </div>
+    <div class="row">
+        <div>
+            <label>MNC</label>
+            <input id="mnc" value="5" placeholder="Ex: 5 (Claro), 10 (Vivo)">
+        </div>
+        <div>
+            <label>LAC</label>
+            <input id="lac" value="100" placeholder="Código da área">
+        </div>
+    </div>
+    <label>RSSI (opcional)</label>
+    <input id="rssi" value="-71" placeholder="Intensidade do sinal (dBm)">
 
-    <script>
-        const API_BASE = '/api/rastrear/';
-        const GEOCODE_URL = 'https://nominatim.openstreetmap.org/reverse?format=json&zoom=18&addressdetails=1';
+    <button onclick="localizar()">🔍 Localizar</button>
 
-        const map = L.map('map').setView([-14.235, -51.925], 4);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '&copy; OpenStreetMap',
-            maxZoom: 19
-        }).addTo(map);
+    <div id="resultado">Aguardando consulta...</div>
+    <div class="map-link" id="mapLink"></div>
+    <div class="footer">ORION v6.8.4 | <a href="/">Voltar ao início</a></div>
+</div>
 
-        let marker = null;
-        let circle = null;
+<script>
+    async function localizar() {
+        const cellId = document.getElementById('cellId').value.trim();
+        const mcc = document.getElementById('mcc').value.trim();
+        const mnc = document.getElementById('mnc').value.trim();
+        const lac = document.getElementById('lac').value.trim();
+        const rssi = document.getElementById('rssi').value.trim();
 
-        function showAlert(msg, type) {
-            const box = document.getElementById('alertBox');
-            box.textContent = msg;
-            box.className = type === 'error' ? 'alert-error' : 'alert-info';
-            clearTimeout(box._timeout);
-            box._timeout = setTimeout(() => { box.className = ''; }, 10000);
+        if (!cellId) {
+            alert('Cell ID é obrigatório!');
+            return;
         }
 
-        async function obterEndereco(lat, lng) {
-            try {
-                const res = await fetch(GEOCODE_URL + '&lat=' + lat + '&lon=' + lng);
-                const data = await res.json();
-                if (data && data.display_name) {
-                    return data.display_name;
-                }
-            } catch (e) {
-                console.log('Geocoding indisponível:', e.message);
-            }
-            return 'Endereço não disponível';
-        }
+        const body = {
+            cells: [{
+                cellId: parseInt(cellId),
+                mcc: parseInt(mcc) || 0,
+                mnc: parseInt(mnc) || 0,
+                lac: parseInt(lac) || 0,
+                rssi: parseInt(rssi) || -70
+            }]
+        };
 
-        async function atualizarMapa(lat, lng, raio, numero, torres, fonte, timestamp, cellData) {
-            if (marker) map.removeLayer(marker);
-            if (circle) map.removeLayer(circle);
+        const resultado = document.getElementById('resultado');
+        resultado.textContent = '⏳ Processando...';
 
-            const endereco = await obterEndereco(lat, lng);
+        try {
+            const res = await fetch('/api/localizar', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            resultado.textContent = JSON.stringify(data, null, 2);
 
-            let popupContent = '<b>&#128241; ' + numero + '</b><br>' +
-                'Lat: ' + lat.toFixed(6) + '<br>' +
-                'Lng: ' + lng.toFixed(6) + '<br>' +
-                'Raio: ' + raio + 'm<br>' +
-                'Torres: ' + torres + '<br>' +
-                'Fonte: ' + fonte + '<br>' +
-                '<small>' + endereco + '</small>';
-
-            marker = L.marker([lat, lng]).addTo(map);
-            marker.bindPopup(popupContent).openPopup();
-
-            circle = L.circle([lat, lng], {
-                radius: raio,
-                color: '#e94560',
-                fillColor: '#e94560',
-                fillOpacity: 0.15
-            }).addTo(map);
-
-            map.setView([lat, lng], 15);
-
-            document.getElementById('infoNumero').innerHTML = '<b>Número:</b> ' + numero;
-            document.getElementById('infoCoordenadas').innerHTML = '<b>Coordenadas:</b> ' + lat.toFixed(6) + ', ' + lng.toFixed(6);
-            document.getElementById('infoPrecisao').innerHTML = '<b>Precisão:</b> ' + raio + 'm';
-            document.getElementById('infoTorres').innerHTML = '<b>Torres:</b> ' + torres;
-            document.getElementById('infoFonte').innerHTML = '<b>Fonte:</b> ' + fonte;
-            document.getElementById('infoTimestamp').innerHTML = '<b>Data/Hora:</b> ' + new Date(timestamp).toLocaleString('pt-BR');
-
-            const enderecoDiv = document.getElementById('infoEndereco');
-            enderecoDiv.style.display = 'block';
-            enderecoDiv.innerHTML = '&#128205; <b>Endereço:</b> ' + endereco;
-
-            const erbsDiv = document.getElementById('infoERBs');
-            if (cellData) {
-                erbsDiv.style.display = 'block';
-                try {
-                    const cells = typeof cellData === 'string' ? JSON.parse(cellData) : cellData;
-                    let erbsHtml = '&#128246; <b>ERBs Fornecedoras:</b> ';
-                    if (Array.isArray(cells)) {
-                        erbsHtml += cells.map(c => 'Cell ID: ' + (c.cellId || c.cell_id) + ' (RSSI: ' + (c.rssi || 'N/A') + 'dBm)').join(' | ');
-                    }
-                    erbsDiv.innerHTML = erbsHtml;
-                } catch (e) {
-                    erbsDiv.innerHTML = '&#128246; <b>ERBs:</b> Dados disponíveis na resposta da API';
-                }
+            const mapLink = document.getElementById('mapLink');
+            if (data.position && data.position.latitude && data.position.longitude) {
+                const lat = data.position.latitude;
+                const lng = data.position.longitude;
+                mapLink.innerHTML = `<a href="https://www.google.com/maps?q=${lat},${lng}" target="_blank">📍 Ver localização no Google Maps</a>`;
             } else {
-                erbsDiv.style.display = 'none';
+                mapLink.innerHTML = '';
             }
+        } catch (err) {
+            resultado.textContent = '❌ Erro na requisição: ' + err.message;
         }
+    }
 
-        function limparInfo() {
-            document.getElementById('infoNumero').innerHTML = '<b>Número:</b> —';
-            document.getElementById('infoCoordenadas').innerHTML = '<b>Coordenadas:</b> —';
-            document.getElementById('infoPrecisao').innerHTML = '<b>Precisão:</b> —';
-            document.getElementById('infoTorres').innerHTML = '<b>Torres:</b> —';
-            document.getElementById('infoFonte').innerHTML = '<b>Fonte:</b> —';
-            document.getElementById('infoTimestamp').innerHTML = '<b>Data/Hora:</b> —';
-            document.getElementById('infoEndereco').style.display = 'none';
-            document.getElementById('infoERBs').style.display = 'none';
-        }
-
-        async function buscarLocalizacao() {
-            const numero = document.getElementById('numeroInput').value.trim();
-            if (!numero) { showAlert('Digite um número.', 'error'); return; }
-
-            const statusEl = document.getElementById('status');
-            statusEl.innerHTML = '⏳ Buscando...';
-            statusEl.style.color = '#ffaa00';
-            limparInfo();
-
-            try {
-                const response = await fetch(API_BASE + encodeURIComponent(numero));
-                const data = await response.json();
-
-                if (!response.ok) throw new Error(data.erro || 'Erro ' + response.status);
-
-                if (data.status === 'cadastrado') {
-                    showAlert('📡 ' + data.mensagem, 'info');
-                    statusEl.innerHTML = '⚠️ Aguardando dados';
-                    statusEl.style.color = '#ffaa00';
-                    document.getElementById('infoNumero').innerHTML = '<b>Número:</b> ' + numero;
-                    return;
-                }
-
-                if (data.status === 'sem_dados') {
-                    showAlert('📡 ' + data.mensagem, 'info');
-                    statusEl.innerHTML = '⚠️ Sem localização';
-                    statusEl.style.color = '#ffaa00';
-                    document.getElementById('infoNumero').innerHTML = '<b>Número:</b> ' + numero;
-                    return;
-                }
-
-                if (data.status === 'recebido') {
-                    showAlert('📡 ' + data.mensagem, 'info');
-                    statusEl.innerHTML = '⚠️ Dados recebidos';
-                    statusEl.style.color = '#ffaa00';
-                    document.getElementById('infoNumero').innerHTML = '<b>Número:</b> ' + numero;
-                    return;
-                }
-
-                if ((data.status === 'sucesso' || data.status === 'localizado') && data.position && data.position.latitude) {
-                    await atualizarMapa(
-                        data.position.latitude,
-                        data.position.longitude,
-                        data.position.raio_estimado || 500,
-                        data.numero || numero,
-                        data.torres_usadas || '1',
-                        data.fonte || 'real',
-                        data.timestamp,
-                        data.cell_data || null
-                    );
-                    statusEl.innerHTML = '✅ Localizado!';
-                    statusEl.style.color = '#4CAF50';
-                    showAlert('🎯 Alvo localizado com sucesso!', 'info');
-                    return;
-                }
-
-                throw new Error('Resposta não reconhecida');
-            } catch (error) {
-                statusEl.innerHTML = '❌ ' + error.message;
-                statusEl.style.color = '#ef5350';
-                showAlert('❌ ' + error.message, 'error');
-            }
-        }
-
-        // 29/07/2026 01:30 — Botão GPS
-        document.getElementById('gpsBtn').addEventListener('click', () => {
-            if (!navigator.geolocation) {
-                alert('Geolocalização não suportada pelo navegador.');
-                return;
-            }
-            navigator.geolocation.getCurrentPosition(
-                async (pos) => {
-                    const lat = pos.coords.latitude;
-                    const lng = pos.coords.longitude;
-                    const precisao = pos.coords.accuracy;
-                    const numero = document.getElementById('numeroInput').value.trim() || ('gps_' + Date.now());
-
-                    atualizarMapa(lat, lng, Math.round(precisao), numero, '1', 'gps_navegador', new Date().toISOString(), null);
-                    document.getElementById('status').innerHTML = '✅ GPS Localizado!';
-                    document.getElementById('status').style.color = '#4CAF50';
-
-                    try {
-                        await fetch('/api/localizar-por-cells', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                numero: numero,
-                                cells: [{ cellId: 0, rssi: 0 }],
-                                gps: { lat, lng, accuracy: precisao }
-                            })
-                        });
-                    } catch (e) {
-                        console.log('Erro ao enviar GPS:', e);
-                    }
-                },
-                (err) => {
-                    alert('Erro ao obter localização: ' + err.message);
-                },
-                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-            );
-        });
-
-        document.getElementById('buscarBtn').addEventListener('click', buscarLocalizacao);
-        document.getElementById('numeroInput').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') buscarLocalizacao();
-        });
-
-        async function checkHealth() {
-            try {
-                const res = await fetch('/health');
-                if (res.ok) {
-                    document.getElementById('status').innerHTML = '✅ Online';
-                    document.getElementById('status').style.color = '#4CAF50';
-                } else throw new Error('Offline');
-            } catch (e) {
-                document.getElementById('status').innerHTML = '⚠️ Offline';
-                document.getElementById('status').style.color = '#ef5350';
-            }
-        }
-        checkHealth();
-        setInterval(checkHealth, 30000);
-    </script>
+    // Executar automaticamente com valores iniciais (opcional)
+    // window.onload = localizar;
+</script>
 </body>
 </html>
