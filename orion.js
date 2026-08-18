@@ -1,12 +1,12 @@
 /**
  * ARQUIVO: orion.js
- * VERSÃO: 6.9.0
- * ÚLTIMA ATUALIZAÇÃO: 2026-08-17 21:00:00 (UTC)
- * COMENTÁRIO: Servidor inicia imediatamente, sem importação automática.
- *             Banco de emergência para funcionamento imediato.
- *             Rota /api/importar para importação sob demanda.
- *             Título corrigido para "ORION AI - DEPOM".
- * AUTOR: Equipe ORION
+ * VERSÃO: 6.10.0
+ * ÚLTIMA ATUALIZAÇÃO: 2026-08-18 12:00:00 (UTC)
+ * COMENTÁRIO: Restauração completa da funcionalidade de pesquisa por número de celular.
+ *             Inclui rotas /api/rastrear/:numero e /api/localizar-por-cells.
+ *             Tabelas targets e locations no banco.
+ *             Compatível com importação de CSVs e interface mapa-localizar.html.
+ * AUTOR: Equipe ORION (Eng Souza & Arion)
  */
 
 const express = require('express');
@@ -29,7 +29,7 @@ function log(msg) {
     console.log(`[${new Date().toISOString()}] ${msg}`);
 }
 
-log('✅ ORION 6.9.0 iniciando...');
+log('✅ ORION 6.10.0 iniciando...');
 
 // ============================================================
 // MIDDLEWARE
@@ -39,15 +39,33 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static(PUBLIC_DIR));
 
 // ============================================================
+// FUNÇÕES AUXILIARES
+// ============================================================
+function sanitizarNumero(numero) {
+    return numero.replace(/\D/g, '');
+}
+
+function validarCells(cells) {
+    if (!cells || !Array.isArray(cells) || cells.length === 0) {
+        return { valido: false, erro: 'Nenhuma célula fornecida.' };
+    }
+    for (const cell of cells) {
+        if (!cell.cellId || !cell.mcc || !cell.mnc || !cell.lac) {
+            return { valido: false, erro: 'Campos obrigatórios: cellId, mcc, mnc, lac.' };
+        }
+    }
+    return { valido: true };
+}
+
+// ============================================================
 // ROTAS
 // ============================================================
-
 app.get('/', (req, res) => {
     res.send(`
         <h1>🚀 ORION AI - DEPOM</h1>
-        <p>Versão 6.9.0</p>
+        <p>Versão 6.10.0</p>
         <ul>
-            <li><a href="/mapa-localizar.html">🔍 Localizar</a></li>
+            <li><a href="/mapa-localizar.html">🔍 Localizar por número</a></li>
             <li><a href="/teste">🧪 Teste</a></li>
         </ul>
         <p>Status: <strong>Operacional</strong></p>
@@ -61,7 +79,7 @@ app.get('/mapa-localizar.html', (req, res) => {
     if (fs.existsSync(filePath)) {
         res.sendFile(filePath);
     } else {
-        // Fallback com título corrigido
+        // Interface completa com campo de número
         res.send(`
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -85,29 +103,82 @@ app.get('/mapa-localizar.html', (req, res) => {
         .map-link a { color: #0a4b7a; font-weight: bold; padding: 6px 14px; border: 1px solid #0a4b7a; border-radius: 6px; display: inline-block; text-decoration: none; }
         .map-link a:hover { background: #0a4b7a; color: white; }
         .footer { margin-top: 20px; font-size: 0.8em; color: #888; text-align: center; }
+        .aba { display: flex; gap: 10px; margin-bottom: 20px; }
+        .aba button { padding: 10px 20px; background: #e0e4e8; border: none; border-radius: 6px; cursor: pointer; }
+        .aba button.ativo { background: #0a4b7a; color: white; }
+        .painel { display: none; }
+        .painel.ativo { display: block; }
     </style>
 </head>
 <body>
 <div class="container">
-    <h1>📡 ORION AI - DEPOM <small>Localizador de Torres</small></h1>
-    <p>Insira os dados da célula para obter a localização aproximada.</p>
-    <div class="row">
-        <div><label>Cell ID *</label><input id="cellId" value="208020001"></div>
-        <div><label>MCC</label><input id="mcc" value="724"></div>
+    <h1>📡 ORION AI - DEPOM <small>Localizador</small></h1>
+    <div class="aba">
+        <button class="ativo" onclick="mostrarPainel('numero')">📱 Por Número</button>
+        <button onclick="mostrarPainel('celula')">📶 Por Dados de Célula</button>
     </div>
-    <div class="row">
-        <div><label>MNC</label><input id="mnc" value="5"></div>
-        <div><label>LAC</label><input id="lac" value="100"></div>
+
+    <div id="painelNumero" class="painel ativo">
+        <label>Número de celular *</label>
+        <input id="numero" placeholder="Ex: 11999999999">
+        <button onclick="localizarPorNumero()">🔍 Localizar por número</button>
     </div>
-    <label>RSSI (opcional)</label>
-    <input id="rssi" value="-71">
-    <button onclick="localizar()">🔍 Localizar</button>
+
+    <div id="painelCelula" class="painel">
+        <div class="row">
+            <div><label>Cell ID *</label><input id="cellId" value="208020001"></div>
+            <div><label>MCC</label><input id="mcc" value="724"></div>
+        </div>
+        <div class="row">
+            <div><label>MNC</label><input id="mnc" value="5"></div>
+            <div><label>LAC</label><input id="lac" value="100"></div>
+        </div>
+        <label>RSSI (opcional)</label>
+        <input id="rssi" value="-71">
+        <button onclick="localizarPorCelula()">🔍 Localizar por célula</button>
+    </div>
+
     <div id="resultado">Aguardando consulta...</div>
     <div class="map-link" id="mapLink"></div>
-    <div class="footer">ORION v6.9.0</div>
+    <div class="footer">ORION v6.10.0</div>
 </div>
+
 <script>
-    async function localizar() {
+    function mostrarPainel(tipo) {
+        document.querySelectorAll('.painel').forEach(p => p.classList.remove('ativo'));
+        document.querySelectorAll('.aba button').forEach(b => b.classList.remove('ativo'));
+        if (tipo === 'numero') {
+            document.getElementById('painelNumero').classList.add('ativo');
+            document.querySelector('.aba button:first-child').classList.add('ativo');
+        } else {
+            document.getElementById('painelCelula').classList.add('ativo');
+            document.querySelector('.aba button:last-child').classList.add('ativo');
+        }
+    }
+
+    async function localizarPorNumero() {
+        const numero = document.getElementById('numero').value.trim();
+        if (!numero) { alert('Número é obrigatório!'); return; }
+
+        const resultado = document.getElementById('resultado');
+        resultado.textContent = '⏳ Buscando...';
+        document.getElementById('mapLink').innerHTML = '';
+
+        try {
+            const res = await fetch('/api/rastrear/' + encodeURIComponent(numero));
+            const data = await res.json();
+            resultado.textContent = JSON.stringify(data, null, 2);
+            if (data.position && data.position.latitude && data.position.longitude) {
+                const lat = data.position.latitude;
+                const lng = data.position.longitude;
+                document.getElementById('mapLink').innerHTML = `<a href="https://www.google.com/maps?q=${lat},${lng}" target="_blank">📍 Ver no mapa</a>`;
+            }
+        } catch (err) {
+            resultado.textContent = '❌ Erro: ' + err.message;
+        }
+    }
+
+    async function localizarPorCelula() {
         const cellId = document.getElementById('cellId').value.trim();
         const mcc = document.getElementById('mcc').value.trim();
         const mnc = document.getElementById('mnc').value.trim();
@@ -126,6 +197,7 @@ app.get('/mapa-localizar.html', (req, res) => {
 
         const resultado = document.getElementById('resultado');
         resultado.textContent = '⏳ Processando...';
+        document.getElementById('mapLink').innerHTML = '';
 
         try {
             const res = await fetch('/api/localizar', {
@@ -135,13 +207,10 @@ app.get('/mapa-localizar.html', (req, res) => {
             });
             const data = await res.json();
             resultado.textContent = JSON.stringify(data, null, 2);
-            const mapLink = document.getElementById('mapLink');
             if (data.position && data.position.latitude && data.position.longitude) {
                 const lat = data.position.latitude;
                 const lng = data.position.longitude;
-                mapLink.innerHTML = \`<a href="https://www.google.com/maps?q=\${lat},\${lng}" target="_blank">📍 Ver no mapa</a>\`;
-            } else {
-                mapLink.innerHTML = '';
+                document.getElementById('mapLink').innerHTML = `<a href="https://www.google.com/maps?q=${lat},${lng}" target="_blank">📍 Ver no mapa</a>`;
             }
         } catch (err) {
             resultado.textContent = '❌ Erro: ' + err.message;
@@ -155,12 +224,100 @@ app.get('/mapa-localizar.html', (req, res) => {
 });
 
 // ============================================================
-// API DE LOCALIZAÇÃO
+// API: LOCALIZAR POR NÚMERO DE CELULAR
+// ============================================================
+app.get('/api/rastrear/:numero', (req, res) => {
+    const numero = sanitizarNumero(req.params.numero);
+    if (!numero || numero.length < 10) {
+        return res.status(400).json({ erro: 'Número inválido. Use pelo menos 10 dígitos.' });
+    }
+
+    const db = new sqlite3.Database(DB_TOWERS);
+    db.run('PRAGMA busy_timeout = 5000');
+
+    // Busca os dados da célula associados ao número na tabela targets
+    db.get(
+        `SELECT cellId, mcc, mnc, lac FROM targets WHERE numero = ?`,
+        [numero],
+        (err, row) => {
+            if (err || !row) {
+                db.close();
+                return res.status(404).json({ erro: 'Número não encontrado na base de dados.' });
+            }
+
+            // Agora busca a localização da torre
+            const cells = [{
+                cellId: row.cellId,
+                mcc: row.mcc,
+                mnc: row.mnc,
+                lac: row.lac
+            }];
+
+            const promises = cells.map(cell => {
+                return new Promise((resolve) => {
+                    db.get(
+                        `SELECT lat, lon, range FROM cell_towers 
+                         WHERE cell = ? AND mcc = ? AND net = ? AND area = ?`,
+                        [cell.cellId, cell.mcc || 0, cell.mnc || 0, cell.lac || 0],
+                        (err, row) => {
+                            if (err || !row) resolve(null);
+                            else resolve(row);
+                        }
+                    );
+                });
+            });
+
+            Promise.all(promises).then(results => {
+                const validos = results.filter(r => r !== null);
+                if (validos.length === 0) {
+                    db.close();
+                    return res.json({ status: 'nao_encontrado', mensagem: 'Nenhuma torre encontrada para este número.' });
+                }
+
+                let lat = 0, lon = 0, pesoTotal = 0;
+                validos.forEach(r => {
+                    const peso = 1 / Math.max(r.range || 500, 1);
+                    lat += r.lat * peso;
+                    lon += r.lon * peso;
+                    pesoTotal += peso;
+                });
+
+                const pos = {
+                    latitude: lat / pesoTotal,
+                    longitude: lon / pesoTotal,
+                    raio_estimado: Math.round(validos.reduce((a, r) => a + (r.range || 500), 0) / validos.length / Math.sqrt(validos.length))
+                };
+
+                // Salva no histórico de localizações (tabela locations)
+                const stmt = db.prepare(
+                    `INSERT INTO locations (numero, lat, lon, raio, data_hora) VALUES (?, ?, ?, ?, ?)`
+                );
+                stmt.run(numero, pos.latitude, pos.longitude, pos.raio_estimado, new Date().toISOString());
+                stmt.finalize();
+
+                db.close();
+                res.json({
+                    status: 'localizado',
+                    numero: numero,
+                    position: pos,
+                    torres_usadas: validos.length
+                });
+            }).catch(err => {
+                db.close();
+                res.status(500).json({ erro: err.message });
+            });
+        }
+    );
+});
+
+// ============================================================
+// API: LOCALIZAR POR DADOS DE CÉLULA (mantida)
 // ============================================================
 app.post('/api/localizar', (req, res) => {
     const { cells } = req.body;
-    if (!cells || !cells.length) {
-        return res.status(400).json({ erro: 'Nenhuma célula fornecida.' });
+    const validacao = validarCells(cells);
+    if (!validacao.valido) {
+        return res.status(400).json({ erro: validacao.erro });
     }
 
     const db = new sqlite3.Database(DB_TOWERS);
@@ -168,11 +325,10 @@ app.post('/api/localizar', (req, res) => {
 
     const promises = cells.map(cell => {
         return new Promise((resolve) => {
-            const { cellId, mcc, mnc, lac } = cell;
             db.get(
                 `SELECT lat, lon, range FROM cell_towers 
                  WHERE cell = ? AND mcc = ? AND net = ? AND area = ?`,
-                [cellId, mcc || 0, mnc || 0, lac || 0],
+                [cell.cellId, cell.mcc || 0, cell.mnc || 0, cell.lac || 0],
                 (err, row) => {
                     if (err || !row) resolve(null);
                     else resolve(row);
@@ -212,7 +368,7 @@ app.post('/api/localizar', (req, res) => {
 });
 
 // ============================================================
-// ROTA PARA IMPORTAR DADOS SOB DEMANDA (opcional)
+// ROTA PARA IMPORTAR DADOS SOB DEMANDA
 // ============================================================
 app.post('/api/importar', (req, res) => {
     log('⚠️ Iniciando importação sob demanda...');
@@ -229,7 +385,7 @@ app.post('/api/importar', (req, res) => {
 });
 
 // ============================================================
-// FUNÇÕES DE BANCO DE DADOS (emergência)
+// FUNÇÕES DE BANCO DE DADOS
 // ============================================================
 function criarBancoEmergencia(db) {
     const torres = [
@@ -255,6 +411,7 @@ function initDatabase() {
         db.run('PRAGMA secure_delete=ON');
         db.run('PRAGMA busy_timeout = 10000');
 
+        // Tabela principal de torres
         db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
             radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
             cell INTEGER, unit INTEGER, lon REAL, lat REAL,
@@ -263,13 +420,39 @@ function initDatabase() {
             PRIMARY KEY (mcc, net, area, cell)
         )`, (err) => {
             if (err) reject(err);
-            else resolve(db);
         });
+
+        // Tabela de números (targets) – associando número aos dados de célula
+        db.run(`CREATE TABLE IF NOT EXISTS targets (
+            numero TEXT PRIMARY KEY,
+            cellId INTEGER,
+            mcc INTEGER,
+            mnc INTEGER,
+            lac INTEGER,
+            ultima_atualizacao DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`, (err) => {
+            if (err) reject(err);
+        });
+
+        // Tabela de histórico de localizações
+        db.run(`CREATE TABLE IF NOT EXISTS locations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            numero TEXT,
+            lat REAL,
+            lon REAL,
+            raio INTEGER,
+            data_hora DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (numero) REFERENCES targets(numero)
+        )`, (err) => {
+            if (err) reject(err);
+        });
+
+        resolve(db);
     });
 }
 
 // ============================================================
-// INICIALIZAÇÃO DO SERVIDOR (SEMPRE RÁPIDA)
+// INICIALIZAÇÃO DO SERVIDOR
 // ============================================================
 async function start() {
     try {
@@ -286,11 +469,12 @@ async function start() {
         }
         db.close();
 
-        // Inicia o servidor IMEDIATAMENTE
+        // Inicia o servidor
         app.listen(port, '0.0.0.0', () => {
-            log(`🚀 ORION 6.9.0 rodando em http://0.0.0.0:${port}`);
+            log(`🚀 ORION 6.10.0 rodando em http://0.0.0.0:${port}`);
             log(`🌐 Interface: /mapa-localizar.html`);
-            log(`📥 Para importar CSVs, use POST /api/importar ou execute manualmente scripts/import-coleta-campo.js`);
+            log(`📱 Rota: GET /api/rastrear/:numero`);
+            log(`📶 Rota: POST /api/localizar`);
         });
     } catch (err) {
         log('❌ ERRO FATAL: ' + err.message);
