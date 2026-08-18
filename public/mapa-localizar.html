@@ -3,167 +3,118 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ORION - Localizador de Torres</title>
+    <title>ORION AI - DEPOM - Localizador</title>
     <style>
         * { box-sizing: border-box; }
-        body {
-            font-family: 'Segoe UI', Arial, sans-serif;
-            max-width: 650px;
-            margin: 30px auto;
-            padding: 20px;
-            background: #f0f4f8;
-            color: #1a2a3a;
-        }
-        .container {
-            background: white;
-            padding: 25px;
-            border-radius: 12px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        }
-        h1 {
-            color: #0a4b7a;
-            margin-top: 0;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        h1 small {
-            font-size: 0.5em;
-            font-weight: normal;
-            color: #666;
-        }
-        label {
-            display: block;
-            margin-top: 14px;
-            font-weight: 600;
-            font-size: 0.9em;
-        }
-        input {
-            width: 100%;
-            padding: 10px;
-            border: 1px solid #ccc;
-            border-radius: 6px;
-            font-size: 1em;
-            margin-top: 4px;
-        }
-        .row {
-            display: flex;
-            gap: 12px;
-        }
-        .row > div {
-            flex: 1;
-        }
-        button {
-            margin-top: 22px;
-            padding: 12px 28px;
-            background: #0a4b7a;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            font-size: 1.1em;
-            cursor: pointer;
-            transition: background 0.2s;
-            width: 100%;
-        }
-        button:hover {
-            background: #063456;
-        }
-        #resultado {
-            background: #f4f7fb;
-            padding: 14px;
-            border-radius: 6px;
-            margin-top: 20px;
-            white-space: pre-wrap;
-            font-family: monospace;
-            font-size: 0.9em;
-            border: 1px solid #e0e4e8;
-            min-height: 60px;
-        }
-        .map-link {
-            margin-top: 12px;
-            text-align: center;
-        }
-        .map-link a {
-            color: #0a4b7a;
-            text-decoration: none;
-            font-weight: bold;
-            padding: 6px 14px;
-            border: 1px solid #0a4b7a;
-            border-radius: 6px;
-            display: inline-block;
-        }
-        .map-link a:hover {
-            background: #0a4b7a;
-            color: white;
-        }
-        .footer {
-            margin-top: 20px;
-            font-size: 0.8em;
-            color: #888;
-            text-align: center;
-        }
+        body { font-family: 'Segoe UI', Arial, sans-serif; max-width: 650px; margin: 30px auto; padding: 20px; background: #f0f4f8; }
+        .container { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        h1 { color: #0a4b7a; }
+        label { display: block; margin-top: 14px; font-weight: 600; }
+        input { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; margin-top: 4px; }
+        .row { display: flex; gap: 12px; }
+        .row > div { flex: 1; }
+        button { margin-top: 22px; padding: 12px; background: #0a4b7a; color: white; border: none; border-radius: 6px; font-size: 1.1em; cursor: pointer; width: 100%; }
+        button:hover { background: #063456; }
+        #resultado { background: #f4f7fb; padding: 14px; border-radius: 6px; margin-top: 20px; white-space: pre-wrap; font-family: monospace; border: 1px solid #e0e4e8; min-height: 60px; }
+        .map-link { margin-top: 12px; text-align: center; }
+        .map-link a { color: #0a4b7a; font-weight: bold; padding: 6px 14px; border: 1px solid #0a4b7a; border-radius: 6px; display: inline-block; text-decoration: none; }
+        .map-link a:hover { background: #0a4b7a; color: white; }
+        .footer { margin-top: 20px; font-size: 0.8em; color: #888; text-align: center; }
+        .aba { display: flex; gap: 10px; margin-bottom: 20px; }
+        .aba button { padding: 10px 20px; background: #e0e4e8; border: none; border-radius: 6px; cursor: pointer; }
+        .aba button.ativo { background: #0a4b7a; color: white; }
+        .painel { display: none; }
+        .painel.ativo { display: block; }
     </style>
 </head>
 <body>
 <div class="container">
-    <h1>📡 ORION AI - DEPOM <small>Localizador de Torres</small></h1>
-    <p>Insira os dados da célula para obter a localização aproximada.</p>
-
-    <div class="row">
-        <div>
-            <label>Cell ID *</label>
-            <input id="cellId" value="208020001" placeholder="Ex: 208020001">
-        </div>
-        <div>
-            <label>MCC</label>
-            <input id="mcc" value="724" placeholder="724">
-        </div>
+    <h1>📡 ORION AI - DEPOM <small>Localizador</small></h1>
+    <div class="aba">
+        <button class="ativo" onclick="mostrarPainel('numero')">📱 Por Número</button>
+        <button onclick="mostrarPainel('celula')">📶 Por Dados de Célula</button>
     </div>
-    <div class="row">
-        <div>
-            <label>MNC</label>
-            <input id="mnc" value="5" placeholder="Ex: 5 (Claro), 10 (Vivo)">
-        </div>
-        <div>
-            <label>LAC</label>
-            <input id="lac" value="100" placeholder="Código da área">
-        </div>
-    </div>
-    <label>RSSI (opcional)</label>
-    <input id="rssi" value="-71" placeholder="Intensidade do sinal (dBm)">
 
-    <button onclick="localizar()">🔍 Localizar</button>
+    <div id="painelNumero" class="painel ativo">
+        <label>Número de celular *</label>
+        <input id="numero" placeholder="Ex: 11999999999">
+        <button onclick="localizarPorNumero()">🔍 Localizar por número</button>
+    </div>
+
+    <div id="painelCelula" class="painel">
+        <div class="row">
+            <div><label>Cell ID *</label><input id="cellId" value="208020001"></div>
+            <div><label>MCC</label><input id="mcc" value="724"></div>
+        </div>
+        <div class="row">
+            <div><label>MNC</label><input id="mnc" value="5"></div>
+            <div><label>LAC</label><input id="lac" value="100"></div>
+        </div>
+        <label>RSSI (opcional)</label>
+        <input id="rssi" value="-71">
+        <button onclick="localizarPorCelula()">🔍 Localizar por célula</button>
+    </div>
 
     <div id="resultado">Aguardando consulta...</div>
     <div class="map-link" id="mapLink"></div>
-    <div class="footer">ORION v6.8.5 | <a href="/">Voltar ao início</a></div>
+    <div class="footer">ORION v6.10.2</div>
 </div>
 
 <script>
-    async function localizar() {
+    function mostrarPainel(tipo) {
+        document.querySelectorAll('.painel').forEach(p => p.classList.remove('ativo'));
+        document.querySelectorAll('.aba button').forEach(b => b.classList.remove('ativo'));
+        if (tipo === 'numero') {
+            document.getElementById('painelNumero').classList.add('ativo');
+            document.querySelector('.aba button:first-child').classList.add('ativo');
+        } else {
+            document.getElementById('painelCelula').classList.add('ativo');
+            document.querySelector('.aba button:last-child').classList.add('ativo');
+        }
+    }
+
+    async function localizarPorNumero() {
+        const numero = document.getElementById('numero').value.trim();
+        if (!numero) { alert('Número é obrigatório!'); return; }
+
+        const resultado = document.getElementById('resultado');
+        resultado.textContent = '⏳ Buscando...';
+        document.getElementById('mapLink').innerHTML = '';
+
+        try {
+            const res = await fetch('/api/rastrear/' + encodeURIComponent(numero));
+            const data = await res.json();
+            resultado.textContent = JSON.stringify(data, null, 2);
+            if (data.position && data.position.latitude && data.position.longitude) {
+                const lat = data.position.latitude;
+                const lng = data.position.longitude;
+                document.getElementById('mapLink').innerHTML = '<a href="https://www.google.com/maps?q=' + lat + ',' + lng + '" target="_blank">📍 Ver no mapa</a>';
+            }
+        } catch (err) {
+            resultado.textContent = '❌ Erro: ' + err.message;
+        }
+    }
+
+    async function localizarPorCelula() {
         const cellId = document.getElementById('cellId').value.trim();
         const mcc = document.getElementById('mcc').value.trim();
         const mnc = document.getElementById('mnc').value.trim();
         const lac = document.getElementById('lac').value.trim();
-        const rssi = document.getElementById('rssi').value.trim();
 
-        if (!cellId) {
-            alert('Cell ID é obrigatório!');
-            return;
-        }
+        if (!cellId) { alert('Cell ID é obrigatório!'); return; }
 
         const body = {
             cells: [{
                 cellId: parseInt(cellId),
                 mcc: parseInt(mcc) || 0,
                 mnc: parseInt(mnc) || 0,
-                lac: parseInt(lac) || 0,
-                rssi: parseInt(rssi) || -70
+                lac: parseInt(lac) || 0
             }]
         };
 
         const resultado = document.getElementById('resultado');
         resultado.textContent = '⏳ Processando...';
+        document.getElementById('mapLink').innerHTML = '';
 
         try {
             const res = await fetch('/api/localizar', {
@@ -173,17 +124,13 @@
             });
             const data = await res.json();
             resultado.textContent = JSON.stringify(data, null, 2);
-
-            const mapLink = document.getElementById('mapLink');
             if (data.position && data.position.latitude && data.position.longitude) {
                 const lat = data.position.latitude;
                 const lng = data.position.longitude;
-                mapLink.innerHTML = `<a href="https://www.google.com/maps?q=${lat},${lng}" target="_blank">📍 Ver localização no Google Maps</a>`;
-            } else {
-                mapLink.innerHTML = '';
+                document.getElementById('mapLink').innerHTML = '<a href="https://www.google.com/maps?q=' + lat + ',' + lng + '" target="_blank">📍 Ver no mapa</a>';
             }
         } catch (err) {
-            resultado.textContent = '❌ Erro na requisição: ' + err.message;
+            resultado.textContent = '❌ Erro: ' + err.message;
         }
     }
 </script>
