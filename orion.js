@@ -1,12 +1,10 @@
 /**
  * ARQUIVO: orion.js
- * VERSÃO: 6.10.0
- * ÚLTIMA ATUALIZAÇÃO: 2026-08-18 12:00:00 (UTC)
- * COMENTÁRIO: Restauração completa da funcionalidade de pesquisa por número de celular.
- *             Inclui rotas /api/rastrear/:numero e /api/localizar-por-cells.
- *             Tabelas targets e locations no banco.
- *             Compatível com importação de CSVs e interface mapa-localizar.html.
- * AUTOR: Equipe ORION (Eng Souza & Arion)
+ * VERSÃO: 6.10.1
+ * ÚLTIMA ATUALIZAÇÃO: 2026-08-18 13:30:00 (UTC)
+ * COMENTÁRIO: Correção de erro de sintaxe no fallback HTML.
+ *             Escapado template literals no JavaScript inline.
+ * AUTOR: Equipe ORION
  */
 
 const express = require('express');
@@ -29,7 +27,7 @@ function log(msg) {
     console.log(`[${new Date().toISOString()}] ${msg}`);
 }
 
-log('✅ ORION 6.10.0 iniciando...');
+log('✅ ORION 6.10.1 iniciando...');
 
 // ============================================================
 // MIDDLEWARE
@@ -63,7 +61,7 @@ function validarCells(cells) {
 app.get('/', (req, res) => {
     res.send(`
         <h1>🚀 ORION AI - DEPOM</h1>
-        <p>Versão 6.10.0</p>
+        <p>Versão 6.10.1</p>
         <ul>
             <li><a href="/mapa-localizar.html">🔍 Localizar por número</a></li>
             <li><a href="/teste">🧪 Teste</a></li>
@@ -79,7 +77,7 @@ app.get('/mapa-localizar.html', (req, res) => {
     if (fs.existsSync(filePath)) {
         res.sendFile(filePath);
     } else {
-        // Interface completa com campo de número
+        // Interface completa com campo de número (corrigida)
         res.send(`
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -140,7 +138,7 @@ app.get('/mapa-localizar.html', (req, res) => {
 
     <div id="resultado">Aguardando consulta...</div>
     <div class="map-link" id="mapLink"></div>
-    <div class="footer">ORION v6.10.0</div>
+    <div class="footer">ORION v6.10.1</div>
 </div>
 
 <script>
@@ -171,7 +169,7 @@ app.get('/mapa-localizar.html', (req, res) => {
             if (data.position && data.position.latitude && data.position.longitude) {
                 const lat = data.position.latitude;
                 const lng = data.position.longitude;
-                document.getElementById('mapLink').innerHTML = `<a href="https://www.google.com/maps?q=${lat},${lng}" target="_blank">📍 Ver no mapa</a>`;
+                document.getElementById('mapLink').innerHTML = '<a href="https://www.google.com/maps?q=' + lat + ',' + lng + '" target="_blank">📍 Ver no mapa</a>';
             }
         } catch (err) {
             resultado.textContent = '❌ Erro: ' + err.message;
@@ -210,7 +208,7 @@ app.get('/mapa-localizar.html', (req, res) => {
             if (data.position && data.position.latitude && data.position.longitude) {
                 const lat = data.position.latitude;
                 const lng = data.position.longitude;
-                document.getElementById('mapLink').innerHTML = `<a href="https://www.google.com/maps?q=${lat},${lng}" target="_blank">📍 Ver no mapa</a>`;
+                document.getElementById('mapLink').innerHTML = '<a href="https://www.google.com/maps?q=' + lat + ',' + lng + '" target="_blank">📍 Ver no mapa</a>';
             }
         } catch (err) {
             resultado.textContent = '❌ Erro: ' + err.message;
@@ -235,7 +233,6 @@ app.get('/api/rastrear/:numero', (req, res) => {
     const db = new sqlite3.Database(DB_TOWERS);
     db.run('PRAGMA busy_timeout = 5000');
 
-    // Busca os dados da célula associados ao número na tabela targets
     db.get(
         `SELECT cellId, mcc, mnc, lac FROM targets WHERE numero = ?`,
         [numero],
@@ -245,7 +242,6 @@ app.get('/api/rastrear/:numero', (req, res) => {
                 return res.status(404).json({ erro: 'Número não encontrado na base de dados.' });
             }
 
-            // Agora busca a localização da torre
             const cells = [{
                 cellId: row.cellId,
                 mcc: row.mcc,
@@ -288,7 +284,6 @@ app.get('/api/rastrear/:numero', (req, res) => {
                     raio_estimado: Math.round(validos.reduce((a, r) => a + (r.range || 500), 0) / validos.length / Math.sqrt(validos.length))
                 };
 
-                // Salva no histórico de localizações (tabela locations)
                 const stmt = db.prepare(
                     `INSERT INTO locations (numero, lat, lon, raio, data_hora) VALUES (?, ?, ?, ?, ?)`
                 );
@@ -311,7 +306,7 @@ app.get('/api/rastrear/:numero', (req, res) => {
 });
 
 // ============================================================
-// API: LOCALIZAR POR DADOS DE CÉLULA (mantida)
+// API: LOCALIZAR POR DADOS DE CÉLULA
 // ============================================================
 app.post('/api/localizar', (req, res) => {
     const { cells } = req.body;
@@ -411,7 +406,6 @@ function initDatabase() {
         db.run('PRAGMA secure_delete=ON');
         db.run('PRAGMA busy_timeout = 10000');
 
-        // Tabela principal de torres
         db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
             radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
             cell INTEGER, unit INTEGER, lon REAL, lat REAL,
@@ -422,7 +416,6 @@ function initDatabase() {
             if (err) reject(err);
         });
 
-        // Tabela de números (targets) – associando número aos dados de célula
         db.run(`CREATE TABLE IF NOT EXISTS targets (
             numero TEXT PRIMARY KEY,
             cellId INTEGER,
@@ -434,7 +427,6 @@ function initDatabase() {
             if (err) reject(err);
         });
 
-        // Tabela de histórico de localizações
         db.run(`CREATE TABLE IF NOT EXISTS locations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             numero TEXT,
@@ -469,9 +461,8 @@ async function start() {
         }
         db.close();
 
-        // Inicia o servidor
         app.listen(port, '0.0.0.0', () => {
-            log(`🚀 ORION 6.10.0 rodando em http://0.0.0.0:${port}`);
+            log(`🚀 ORION 6.10.1 rodando em http://0.0.0.0:${port}`);
             log(`🌐 Interface: /mapa-localizar.html`);
             log(`📱 Rota: GET /api/rastrear/:numero`);
             log(`📶 Rota: POST /api/localizar`);
