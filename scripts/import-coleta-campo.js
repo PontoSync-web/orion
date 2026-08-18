@@ -2,9 +2,10 @@
  * ARQUIVO: scripts/import-coleta-campo.js
  * VERSÃO: 2.3.0
  * ÚLTIMA ATUALIZAÇÃO: 2026-08-17 12:30:00 (UTC)
- * COMENTÁRIO: Adicionados sinônimos para ID_Estacao e Numero_Estacao.
- *             Melhor tratamento de erros e logs.
- *             Chave primária compatível com orion.js.
+ * COMENTÁRIO: Importação de CSVs de torres (cell_towers).
+ *             Mapeamento flexível de colunas.
+ *             Suporte a múltiplos arquivos (Anatel, OpenCellID, consolidado).
+ *             Não inclui importação de números (targets).
  * AUTOR: Equipe ORION
  */
 
@@ -16,6 +17,7 @@ const sqlite3 = require('sqlite3').verbose();
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_PATH = path.join(DATA_DIR, 'cell_towers.db');
 
+// Mapeamento de sinônimos para colunas de torres
 const COLUMN_MAP = {
     radio: ['radio', 'RADIO', 'tecnologias', 'Tecnologias', 'sistemas', 'Tecnologia'],
     mcc: ['mcc', 'MCC', 'opencellid_mcc', 'codigo_operadora', 'Código da UF', 'cod_uf', 'UF_Codigo'],
