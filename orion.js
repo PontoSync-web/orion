@@ -1,9 +1,11 @@
 /**
  * ARQUIVO: orion.js
- * VERSÃO: 6.10.1
- * ÚLTIMA ATUALIZAÇÃO: 2026-08-18 13:30:00 (UTC)
- * COMENTÁRIO: Correção de erro de sintaxe no fallback HTML.
- *             Escapado template literals no JavaScript inline.
+ * VERSÃO: 6.10.3
+ * ÚLTIMA ATUALIZAÇÃO: 2026-08-18 14:15:00 (UTC)
+ * COMENTÁRIO: Correção definitiva da criação de tabelas.
+ *             Criação síncrona com await e logs detalhados.
+ *             Fallback para recriação do banco se corrompido.
+ *             Compatível com rotas /api/rastrear/:numero e /api/localizar.
  * AUTOR: Equipe ORION
  */
 
@@ -27,7 +29,7 @@ function log(msg) {
     console.log(`[${new Date().toISOString()}] ${msg}`);
 }
 
-log('✅ ORION 6.10.1 iniciando...');
+log('✅ ORION 6.10.3 iniciando...');
 
 // ============================================================
 // MIDDLEWARE
@@ -61,7 +63,7 @@ function validarCells(cells) {
 app.get('/', (req, res) => {
     res.send(`
         <h1>🚀 ORION AI - DEPOM</h1>
-        <p>Versão 6.10.1</p>
+        <p>Versão 6.10.3</p>
         <ul>
             <li><a href="/mapa-localizar.html">🔍 Localizar por número</a></li>
             <li><a href="/teste">🧪 Teste</a></li>
@@ -77,7 +79,6 @@ app.get('/mapa-localizar.html', (req, res) => {
     if (fs.existsSync(filePath)) {
         res.sendFile(filePath);
     } else {
-        // Interface completa com campo de número (corrigida)
         res.send(`
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -138,7 +139,7 @@ app.get('/mapa-localizar.html', (req, res) => {
 
     <div id="resultado">Aguardando consulta...</div>
     <div class="map-link" id="mapLink"></div>
-    <div class="footer">ORION v6.10.1</div>
+    <div class="footer">ORION v6.10.3</div>
 </div>
 
 <script>
@@ -380,67 +381,117 @@ app.post('/api/importar', (req, res) => {
 });
 
 // ============================================================
-// FUNÇÕES DE BANCO DE DADOS
+// FUNÇÕES DE BANCO DE DADOS (DEFINITIVAS)
 // ============================================================
 function criarBancoEmergencia(db) {
-    const torres = [
-        ['GSM', 724, 5, 100, 208020001, 0, -38.5016, -12.9714, 5000, 100, 1, 1609459200, 1609459200, -71],
-        ['GSM', 724, 5, 200, 208017145, 0, -46.6333, -23.5505, 5000, 100, 1, 1609459200, 1609459200, -73],
-        ['GSM', 724, 5, 300, 208019001, 0, -43.2096, -22.9035, 3500, 85, 1, 1609459200, 1609459200, -74],
-        ['GSM', 724, 5, 400, 208018001, 0, -47.9292, -15.7801, 6000, 120, 1, 1609459200, 1609459200, -68],
-        ['GSM', 724, 5, 500, 208021001, 0, -38.5266, -3.7319, 4000, 90, 1, 1609459200, 1609459200, -69],
-    ];
-    const stmt = db.prepare(`INSERT OR REPLACE INTO cell_towers 
-        (radio, mcc, net, area, cell, unit, lon, lat, range, samples, changeable, created, updated, averageSignal)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-    for (const t of torres) stmt.run(t);
-    stmt.finalize();
-    db.run('CREATE INDEX IF NOT EXISTS idx_cell ON cell_towers(cell)');
-    log('✅ Banco de emergência criado com ' + torres.length + ' torres.');
+    return new Promise((resolve, reject) => {
+        const torres = [
+            ['GSM', 724, 5, 100, 208020001, 0, -38.5016, -12.9714, 5000, 100, 1, 1609459200, 1609459200, -71],
+            ['GSM', 724, 5, 200, 208017145, 0, -46.6333, -23.5505, 5000, 100, 1, 1609459200, 1609459200, -73],
+            ['GSM', 724, 5, 300, 208019001, 0, -43.2096, -22.9035, 3500, 85, 1, 1609459200, 1609459200, -74],
+            ['GSM', 724, 5, 400, 208018001, 0, -47.9292, -15.7801, 6000, 120, 1, 1609459200, 1609459200, -68],
+            ['GSM', 724, 5, 500, 208021001, 0, -38.5266, -3.7319, 4000, 90, 1, 1609459200, 1609459200, -69],
+        ];
+        const stmt = db.prepare(`INSERT OR REPLACE INTO cell_towers 
+            (radio, mcc, net, area, cell, unit, lon, lat, range, samples, changeable, created, updated, averageSignal)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+        for (const t of torres) stmt.run(t);
+        stmt.finalize();
+        db.run('CREATE INDEX IF NOT EXISTS idx_cell ON cell_towers(cell)');
+        log('✅ Banco de emergência criado com ' + torres.length + ' torres.');
+        resolve();
+    });
 }
 
-function initDatabase() {
-    return new Promise((resolve, reject) => {
-        const db = new sqlite3.Database(DB_TOWERS);
-        db.run('PRAGMA journal_mode=WAL');
-        db.run('PRAGMA secure_delete=ON');
-        db.run('PRAGMA busy_timeout = 10000');
+async function initDatabase() {
+    // Se o banco existir, tenta usá-lo; se não, cria do zero
+    const dbExists = fs.existsSync(DB_TOWERS);
+    const db = new sqlite3.Database(DB_TOWERS);
+    db.run('PRAGMA journal_mode=WAL');
+    db.run('PRAGMA secure_delete=ON');
+    db.run('PRAGMA busy_timeout = 10000');
 
-        db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
-            radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
-            cell INTEGER, unit INTEGER, lon REAL, lat REAL,
-            range INTEGER, samples INTEGER, changeable INTEGER,
-            created INTEGER, updated INTEGER, averageSignal INTEGER,
-            PRIMARY KEY (mcc, net, area, cell)
-        )`, (err) => {
-            if (err) reject(err);
+    log('🔧 Inicializando banco de dados...');
+
+    try {
+        // Tenta criar as tabelas sequencialmente
+        await new Promise((resolve, reject) => {
+            db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
+                radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
+                cell INTEGER, unit INTEGER, lon REAL, lat REAL,
+                range INTEGER, samples INTEGER, changeable INTEGER,
+                created INTEGER, updated INTEGER, averageSignal INTEGER,
+                PRIMARY KEY (mcc, net, area, cell)
+            )`, (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+        log('✅ Tabela cell_towers OK');
+
+        await new Promise((resolve, reject) => {
+            db.run(`CREATE TABLE IF NOT EXISTS targets (
+                numero TEXT PRIMARY KEY,
+                cellId INTEGER,
+                mcc INTEGER,
+                mnc INTEGER,
+                lac INTEGER,
+                ultima_atualizacao DATETIME DEFAULT CURRENT_TIMESTAMP
+            )`, (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+        log('✅ Tabela targets OK');
+
+        await new Promise((resolve, reject) => {
+            db.run(`CREATE TABLE IF NOT EXISTS locations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                numero TEXT,
+                lat REAL,
+                lon REAL,
+                raio INTEGER,
+                data_hora DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (numero) REFERENCES targets(numero)
+            )`, (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+        log('✅ Tabela locations OK');
+
+        // Verifica se a tabela cell_towers tem dados
+        const count = await new Promise((resolve) => {
+            db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => {
+                if (err) {
+                    log('❌ Erro ao contar torres: ' + err.message);
+                    resolve(0);
+                } else {
+                    resolve(row ? row.c : 0);
+                }
+            });
         });
 
-        db.run(`CREATE TABLE IF NOT EXISTS targets (
-            numero TEXT PRIMARY KEY,
-            cellId INTEGER,
-            mcc INTEGER,
-            mnc INTEGER,
-            lac INTEGER,
-            ultima_atualizacao DATETIME DEFAULT CURRENT_TIMESTAMP
-        )`, (err) => {
-            if (err) reject(err);
-        });
+        if (count === 0) {
+            log('⚠️ Banco vazio. Criando banco de emergência...');
+            await criarBancoEmergencia(db);
+        } else {
+            log(`✅ Banco com ${count} torres.`);
+        }
 
-        db.run(`CREATE TABLE IF NOT EXISTS locations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            numero TEXT,
-            lat REAL,
-            lon REAL,
-            raio INTEGER,
-            data_hora DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (numero) REFERENCES targets(numero)
-        )`, (err) => {
-            if (err) reject(err);
-        });
+        return db;
+    } catch (err) {
+        log('❌ Erro na inicialização do banco: ' + err.message);
+        db.close();
 
-        resolve(db);
-    });
+        // Se o banco estiver corrompido, remove e recria
+        if (dbExists) {
+            log('⚠️ Removendo banco corrompido e recriando...');
+            fs.unlinkSync(DB_TOWERS);
+        }
+        // Recursão para recriar
+        return await initDatabase();
+    }
 }
 
 // ============================================================
@@ -449,20 +500,10 @@ function initDatabase() {
 async function start() {
     try {
         const db = await initDatabase();
-        const count = await new Promise((resolve) => {
-            db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => resolve(row ? row.c : 0));
-        });
-
-        if (count === 0) {
-            log('⚠️ Banco vazio. Criando banco de emergência...');
-            criarBancoEmergencia(db);
-        } else {
-            log(`✅ Banco com ${count} torres.`);
-        }
         db.close();
 
         app.listen(port, '0.0.0.0', () => {
-            log(`🚀 ORION 6.10.1 rodando em http://0.0.0.0:${port}`);
+            log(`🚀 ORION 6.10.3 rodando em http://0.0.0.0:${port}`);
             log(`🌐 Interface: /mapa-localizar.html`);
             log(`📱 Rota: GET /api/rastrear/:numero`);
             log(`📶 Rota: POST /api/localizar`);
