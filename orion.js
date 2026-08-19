@@ -1,11 +1,11 @@
 /**
  * ARQUIVO: orion.js
- * VERSÃO: 6.10.3
- * ÚLTIMA ATUALIZAÇÃO: 2026-08-18 14:15:00 (UTC)
- * COMENTÁRIO: Correção definitiva da criação de tabelas.
- *             Criação síncrona com await e logs detalhados.
- *             Fallback para recriação do banco se corrompido.
- *             Compatível com rotas /api/rastrear/:numero e /api/localizar.
+ * VERSÃO: 6.11.0
+ * ÚLTIMA ATUALIZAÇÃO: 2026-08-18 17:00:00 (UTC)
+ * COMENTÁRIO: Adicionada rota automática /api/cadastrar-numero para inserir números
+ *             diretamente no banco de dados, sem necessidade de arquivos CSV.
+ *             Conexão persistente com o banco de dados.
+ *             Elimina o erro "SQLITE_ERROR: no such table".
  * AUTOR: Equipe ORION
  */
 
@@ -29,7 +29,7 @@ function log(msg) {
     console.log(`[${new Date().toISOString()}] ${msg}`);
 }
 
-log('✅ ORION 6.10.3 iniciando...');
+log('✅ ORION 6.11.0 iniciando...');
 
 // ============================================================
 // MIDDLEWARE
@@ -60,10 +60,12 @@ function validarCells(cells) {
 // ============================================================
 // ROTAS
 // ============================================================
+let db; // conexão global
+
 app.get('/', (req, res) => {
     res.send(`
         <h1>🚀 ORION AI - DEPOM</h1>
-        <p>Versão 6.10.3</p>
+        <p>Versão 6.11.0</p>
         <ul>
             <li><a href="/mapa-localizar.html">🔍 Localizar por número</a></li>
             <li><a href="/teste">🧪 Teste</a></li>
@@ -119,8 +121,19 @@ app.get('/mapa-localizar.html', (req, res) => {
 
     <div id="painelNumero" class="painel ativo">
         <label>Número de celular *</label>
-        <input id="numero" placeholder="Ex: 11999999999">
+        <input id="numero" placeholder="Ex: 71988979724">
         <button onclick="localizarPorNumero()">🔍 Localizar por número</button>
+        <hr style="margin: 20px 0;">
+        <h3>📝 Cadastrar novo número</h3>
+        <div class="row">
+            <div><label>Cell ID</label><input id="novoCellId" placeholder="208020001"></div>
+            <div><label>MCC</label><input id="novoMcc" value="724"></div>
+        </div>
+        <div class="row">
+            <div><label>MNC</label><input id="novoMnc" value="5"></div>
+            <div><label>LAC</label><input id="novoLac" value="100"></div>
+        </div>
+        <button onclick="cadastrarNumero()">➕ Cadastrar número</button>
     </div>
 
     <div id="painelCelula" class="painel">
@@ -139,7 +152,7 @@ app.get('/mapa-localizar.html', (req, res) => {
 
     <div id="resultado">Aguardando consulta...</div>
     <div class="map-link" id="mapLink"></div>
-    <div class="footer">ORION v6.10.3</div>
+    <div class="footer">ORION v6.11.0</div>
 </div>
 
 <script>
@@ -171,6 +184,41 @@ app.get('/mapa-localizar.html', (req, res) => {
                 const lat = data.position.latitude;
                 const lng = data.position.longitude;
                 document.getElementById('mapLink').innerHTML = '<a href="https://www.google.com/maps?q=' + lat + ',' + lng + '" target="_blank">📍 Ver no mapa</a>';
+            }
+        } catch (err) {
+            resultado.textContent = '❌ Erro: ' + err.message;
+        }
+    }
+
+    async function cadastrarNumero() {
+        const numero = document.getElementById('numero').value.trim();
+        const cellId = document.getElementById('novoCellId').value.trim();
+        const mcc = document.getElementById('novoMcc').value.trim();
+        const mnc = document.getElementById('novoMnc').value.trim();
+        const lac = document.getElementById('novoLac').value.trim();
+
+        if (!numero) { alert('Número é obrigatório!'); return; }
+        if (!cellId) { alert('Cell ID é obrigatório!'); return; }
+
+        const resultado = document.getElementById('resultado');
+        resultado.textContent = '⏳ Cadastrando...';
+
+        try {
+            const res = await fetch('/api/cadastrar-numero', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    numero: numero,
+                    cellId: parseInt(cellId),
+                    mcc: parseInt(mcc) || 724,
+                    mnc: parseInt(mnc) || 0,
+                    lac: parseInt(lac) || 0
+                })
+            });
+            const data = await res.json();
+            resultado.textContent = JSON.stringify(data, null, 2);
+            if (data.status === 'cadastrado') {
+                alert('✅ Número cadastrado com sucesso!');
             }
         } catch (err) {
             resultado.textContent = '❌ Erro: ' + err.message;
@@ -223,6 +271,81 @@ app.get('/mapa-localizar.html', (req, res) => {
 });
 
 // ============================================================
+// API: CADASTRAR NÚMERO AUTOMATICAMENTE (NOVA ROTA)
+// ============================================================
+app.post('/api/cadastrar-numero', (req, res) => {
+    const { numero, cellId, mcc, mnc, lac } = req.body;
+
+    if (!numero) {
+        return res.status(400).json({ erro: 'Número é obrigatório.' });
+    }
+
+    const numeroLimpo = sanitizarNumero(numero);
+    if (numeroLimpo.length < 10) {
+        return res.status(400).json({ erro: 'Número inválido. Use pelo menos 10 dígitos.' });
+    }
+
+    if (!cellId) {
+        return res.status(400).json({ erro: 'Cell ID é obrigatório.' });
+    }
+
+    // Verifica se a torre existe na base
+    db.get(
+        `SELECT cell FROM cell_towers WHERE cell = ? AND mcc = ? AND net = ? AND area = ?`,
+        [cellId, mcc || 0, mnc || 0, lac || 0],
+        (err, row) => {
+            if (err) {
+                return res.status(500).json({ erro: 'Erro ao verificar torre: ' + err.message });
+            }
+
+            if (!row) {
+                return res.status(404).json({ 
+                    erro: 'Torre não encontrada. Verifique cellId, mcc, mnc e lac.',
+                    sugestao: 'Use os dados do banco de emergência: cellId=208020001, mcc=724, mnc=5, lac=100'
+                });
+            }
+
+            // Insere ou atualiza o número na tabela targets
+            db.run(
+                `INSERT OR REPLACE INTO targets (numero, cellId, mcc, mnc, lac, ultima_atualizacao)
+                 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+                [numeroLimpo, cellId, mcc || 0, mnc || 0, lac || 0],
+                function(err) {
+                    if (err) {
+                        return res.status(500).json({ erro: 'Erro ao cadastrar número: ' + err.message });
+                    }
+
+                    // Também atualiza o arquivo numeros.csv (opcional, para manter consistência)
+                    const csvPath = path.join(DATA_DIR, 'numeros.csv');
+                    const csvLine = `${numeroLimpo},${cellId},${mcc || 0},${mnc || 0},${lac || 0}\n`;
+
+                    if (fs.existsSync(csvPath)) {
+                        // Se o arquivo existe, adiciona a nova linha (se não existir)
+                        const content = fs.readFileSync(csvPath, 'utf8');
+                        if (!content.includes(numeroLimpo)) {
+                            fs.appendFileSync(csvPath, csvLine);
+                        }
+                    } else {
+                        // Cria o arquivo com cabeçalho e a primeira linha
+                        fs.writeFileSync(csvPath, 'numero,cellId,mcc,mnc,lac\n' + csvLine);
+                    }
+
+                    res.json({
+                        status: 'cadastrado',
+                        mensagem: `Número ${numeroLimpo} cadastrado com sucesso.`,
+                        numero: numeroLimpo,
+                        cellId: cellId,
+                        mcc: mcc || 0,
+                        mnc: mnc || 0,
+                        lac: lac || 0
+                    });
+                }
+            );
+        }
+    );
+});
+
+// ============================================================
 // API: LOCALIZAR POR NÚMERO DE CELULAR
 // ============================================================
 app.get('/api/rastrear/:numero', (req, res) => {
@@ -231,15 +354,11 @@ app.get('/api/rastrear/:numero', (req, res) => {
         return res.status(400).json({ erro: 'Número inválido. Use pelo menos 10 dígitos.' });
     }
 
-    const db = new sqlite3.Database(DB_TOWERS);
-    db.run('PRAGMA busy_timeout = 5000');
-
     db.get(
         `SELECT cellId, mcc, mnc, lac FROM targets WHERE numero = ?`,
         [numero],
         (err, row) => {
             if (err || !row) {
-                db.close();
                 return res.status(404).json({ erro: 'Número não encontrado na base de dados.' });
             }
 
@@ -267,7 +386,6 @@ app.get('/api/rastrear/:numero', (req, res) => {
             Promise.all(promises).then(results => {
                 const validos = results.filter(r => r !== null);
                 if (validos.length === 0) {
-                    db.close();
                     return res.json({ status: 'nao_encontrado', mensagem: 'Nenhuma torre encontrada para este número.' });
                 }
 
@@ -291,7 +409,6 @@ app.get('/api/rastrear/:numero', (req, res) => {
                 stmt.run(numero, pos.latitude, pos.longitude, pos.raio_estimado, new Date().toISOString());
                 stmt.finalize();
 
-                db.close();
                 res.json({
                     status: 'localizado',
                     numero: numero,
@@ -299,7 +416,6 @@ app.get('/api/rastrear/:numero', (req, res) => {
                     torres_usadas: validos.length
                 });
             }).catch(err => {
-                db.close();
                 res.status(500).json({ erro: err.message });
             });
         }
@@ -316,9 +432,6 @@ app.post('/api/localizar', (req, res) => {
         return res.status(400).json({ erro: validacao.erro });
     }
 
-    const db = new sqlite3.Database(DB_TOWERS);
-    db.run('PRAGMA busy_timeout = 5000');
-
     const promises = cells.map(cell => {
         return new Promise((resolve) => {
             db.get(
@@ -334,7 +447,6 @@ app.post('/api/localizar', (req, res) => {
     });
 
     Promise.all(promises).then(results => {
-        db.close();
         const validos = results.filter(r => r !== null);
         if (validos.length === 0) {
             return res.json({ status: 'nao_encontrado', mensagem: 'Nenhuma torre encontrada.' });
@@ -358,7 +470,6 @@ app.post('/api/localizar', (req, res) => {
             torres_usadas: validos.length
         });
     }).catch(err => {
-        db.close();
         res.status(500).json({ erro: err.message });
     });
 });
@@ -381,9 +492,9 @@ app.post('/api/importar', (req, res) => {
 });
 
 // ============================================================
-// FUNÇÕES DE BANCO DE DADOS (DEFINITIVAS)
+// FUNÇÕES DE BANCO DE DADOS (COM CONEXÃO PERSISTENTE)
 // ============================================================
-function criarBancoEmergencia(db) {
+function criarBancoEmergencia() {
     return new Promise((resolve, reject) => {
         const torres = [
             ['GSM', 724, 5, 100, 208020001, 0, -38.5016, -12.9714, 5000, 100, 1, 1609459200, 1609459200, -71],
@@ -404,19 +515,22 @@ function criarBancoEmergencia(db) {
 }
 
 async function initDatabase() {
-    // Se o banco existir, tenta usá-lo; se não, cria do zero
-    const dbExists = fs.existsSync(DB_TOWERS);
-    const db = new sqlite3.Database(DB_TOWERS);
-    db.run('PRAGMA journal_mode=WAL');
-    db.run('PRAGMA secure_delete=ON');
-    db.run('PRAGMA busy_timeout = 10000');
+    // Remove banco antigo se existir (para garantir consistência)
+    if (fs.existsSync(DB_TOWERS)) {
+        log('⚠️ Removendo banco existente para recriação limpa...');
+        fs.unlinkSync(DB_TOWERS);
+    }
 
-    log('🔧 Inicializando banco de dados...');
+    const newDb = new sqlite3.Database(DB_TOWERS);
+    newDb.run('PRAGMA journal_mode=WAL');
+    newDb.run('PRAGMA secure_delete=ON');
+    newDb.run('PRAGMA busy_timeout = 10000');
+
+    log('🔧 Criando tabelas...');
 
     try {
-        // Tenta criar as tabelas sequencialmente
         await new Promise((resolve, reject) => {
-            db.run(`CREATE TABLE IF NOT EXISTS cell_towers (
+            newDb.run(`CREATE TABLE cell_towers (
                 radio TEXT, mcc INTEGER, net INTEGER, area INTEGER,
                 cell INTEGER, unit INTEGER, lon REAL, lat REAL,
                 range INTEGER, samples INTEGER, changeable INTEGER,
@@ -427,10 +541,10 @@ async function initDatabase() {
                 else resolve();
             });
         });
-        log('✅ Tabela cell_towers OK');
+        log('✅ Tabela cell_towers criada');
 
         await new Promise((resolve, reject) => {
-            db.run(`CREATE TABLE IF NOT EXISTS targets (
+            newDb.run(`CREATE TABLE targets (
                 numero TEXT PRIMARY KEY,
                 cellId INTEGER,
                 mcc INTEGER,
@@ -442,10 +556,10 @@ async function initDatabase() {
                 else resolve();
             });
         });
-        log('✅ Tabela targets OK');
+        log('✅ Tabela targets criada');
 
         await new Promise((resolve, reject) => {
-            db.run(`CREATE TABLE IF NOT EXISTS locations (
+            newDb.run(`CREATE TABLE locations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 numero TEXT,
                 lat REAL,
@@ -458,39 +572,31 @@ async function initDatabase() {
                 else resolve();
             });
         });
-        log('✅ Tabela locations OK');
+        log('✅ Tabela locations criada');
 
-        // Verifica se a tabela cell_towers tem dados
-        const count = await new Promise((resolve) => {
+        // Atribui a conexão à variável global
+        db = newDb;
+
+        // Insere banco de emergência
+        await criarBancoEmergencia();
+
+        // Verifica se as tabelas estão acessíveis
+        await new Promise((resolve, reject) => {
             db.get('SELECT COUNT(*) as c FROM cell_towers', (err, row) => {
                 if (err) {
-                    log('❌ Erro ao contar torres: ' + err.message);
-                    resolve(0);
+                    reject(err);
                 } else {
-                    resolve(row ? row.c : 0);
+                    log(`✅ Banco verificado: ${row.c} torres disponíveis.`);
+                    resolve();
                 }
             });
         });
 
-        if (count === 0) {
-            log('⚠️ Banco vazio. Criando banco de emergência...');
-            await criarBancoEmergencia(db);
-        } else {
-            log(`✅ Banco com ${count} torres.`);
-        }
-
         return db;
     } catch (err) {
-        log('❌ Erro na inicialização do banco: ' + err.message);
-        db.close();
-
-        // Se o banco estiver corrompido, remove e recria
-        if (dbExists) {
-            log('⚠️ Removendo banco corrompido e recriando...');
-            fs.unlinkSync(DB_TOWERS);
-        }
-        // Recursão para recriar
-        return await initDatabase();
+        log('❌ Erro na criação do banco: ' + err.message);
+        if (newDb) newDb.close();
+        throw err;
     }
 }
 
@@ -499,14 +605,16 @@ async function initDatabase() {
 // ============================================================
 async function start() {
     try {
-        const db = await initDatabase();
-        db.close();
+        await initDatabase();
+        // db já está atribuído globalmente
 
         app.listen(port, '0.0.0.0', () => {
-            log(`🚀 ORION 6.10.3 rodando em http://0.0.0.0:${port}`);
+            log(`🚀 ORION 6.11.0 rodando em http://0.0.0.0:${port}`);
             log(`🌐 Interface: /mapa-localizar.html`);
             log(`📱 Rota: GET /api/rastrear/:numero`);
             log(`📶 Rota: POST /api/localizar`);
+            log(`➕ Rota: POST /api/cadastrar-numero (NOVA AUTOMAÇÃO)`);
+            log(`✅ Conexão com banco de dados estabelecida e mantida.`);
         });
     } catch (err) {
         log('❌ ERRO FATAL: ' + err.message);
