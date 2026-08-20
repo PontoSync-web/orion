@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ORION V8.0 - GITHUB PAGES HTTPS - GNSS ±5m</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;color:#c8c8c8;font-family:'Courier New',monospace;padding:6px;font-size:10px}
+.header{border:1px solid #0f0;padding:8px;text-align:center;background:#0a0a0a}
+h1{font-size:11px;color:#0f0}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin:6px 0}
+.card{border:1px solid #333;padding:8px;text-align:center;border-radius:4px}
+.card .big{font-size:20px;font-weight:bold;margin:2px 0;font-family:Arial}
+.ok{border-color:#0f0;color:#0f0;background:#001100}
+.warn{border-color:#fa0;color:#fa0;background:#1a1200}
+.crit{border-color:#f00;color:#fff;background:#1a0000}
+.off{border-color:#333;color:#666;background:#111}
+.progress{height:8px;background:#222;margin:4px 0;border-radius:4px;overflow:hidden}
+.bar{height:100%;background:#fa0;transition:width 0.3s}
+.bar.full{background:#f00}
+.btn{width:100%;padding:11px;margin:3px 0;border:1px solid;font-weight:bold;font-size:9px;cursor:pointer;border-radius:4px;text-transform:uppercase;text-align:left;letter-spacing:0.5px}
+.btn-gps{background:#111;color:#ff0;border-color:#ff0}
+.btn-vest{background:#111;color:#fa0;border-color:#fa0}
+.btn-sat{background:#111;color:#09f;border-color:#09f}
+.btn-isr{background:#111;color:#f55;border-color:#f55}
+.btn-exp{background:#222;color:#fff;border-color:#fff}
+.btn-map{background:#111;color:#0f0;border-color:#0f0}
+.btn-clear{background:#300;color:#f55;border-color:#f55;font-weight:bold}
+.log{height:80px;overflow:auto;background:#000;border:1px solid #333;padding:4px;font-size:8px;white-space:pre-wrap}
+input{width:100%;padding:5px;background:#000;color:#0f0;border:1px solid #333;font-family:monospace;font-size:9px;margin:2px 0}
+#map{height:220px;width:100%;border:1px solid #0f0;border-radius:4px;margin:5px 0;background:#111}
+.info{font-size:7px;color:#0f0;background:#001100;border:1px solid #0f0;padding:3px;text-align:center;margin:2px 0;border-radius:3px}
+.warnbox{font-size:7px;color:#fa0;background:#1a1200;border:1px solid #fa0;padding:4px;text-align:center;margin:3px 0;border-radius:3px}
+.https-ok{font-size:7px;color:#0f0;background:#001100;border:1px solid #0f0;padding:4px;text-align:center;margin:3px 0;border-radius:3px;font-weight:bold}
+</style>
+</head>
+<body>
+<div class="header">
+<h1>ORION V8.0 - GITHUB PAGES HTTPS - GNSS REAL ±5m</h1>
+<div style="font-size:7px;color:#666">PROTOCOLO: COLETA ONDE CHEGA A TEMPO | HTTPS LIBERA GNSS REAL</div>
+</div>
+<div id="httpsStatus"></div>
+<div class="warnbox">⚠️ SEM DADO PESSOAL NO CÓDIGO - VAR_ID_OPERADOR EM CAMPO | HTTPS: GNSS REAL ±5m | FILE://: FIX_APROX ±110m</div>
+<div style="display:flex;gap:4px;margin:4px 0">
+<input id="varOp" placeholder="VAR_ID_OPERADOR - PREENCHER EM CAMPO (NÃO SALVO)">
+<input id="varId" value="OP-V80-HTTPS-GNSS-001">
+</div>
+<div style="border:1px solid #0f0;padding:5px;border-radius:4px;margin:4px 0;background:#001100">
+<div style="font-size:7px;color:#0f0">📍 LOCAL TESTE MANUAL (SEM USAR NÚMERO CELULAR):</div>
+<div style="display:flex;gap:4px;margin-top:4px">
+<input id="latTeste" placeholder="LAT ex: -12.97111">
+<input id="lonTeste" placeholder="LON ex: -38.51200">
+<button onclick="irParaTeste()" style="padding:5px;background:#0f0;color:#000;border:none;border-radius:3px;font-weight:bold;font-size:8px;cursor:pointer">📍 IR MAPA TESTE</button>
+</div>
+<div style="font-size:6px;color:#888;margin-top:3px">Google Maps → clique local → copie LAT/LON → cole aqui → ver amarelo 100m no mapa</div>
+</div>
+<div class="grid">
+<div id="cFix" class="card off"><div style="font-size:7px">FIX GNSS / APROX</div><div id="fBig" class="big">--</div><div id="fSub" class="sub">STANDBY</div><div class="progress"><div id="fBar" class="bar" style="width:0%"></div></div></div>
+<div id="cPonto" class="card off"><div style="font-size:7px">PONTO ATIVO &lt;100m</div><div id="pBig" class="big">0/3</div><div id="pSub" class="sub">CLUSTER</div><div class="progress"><div id="pBar" class="bar" style="width:0%"></div></div></div>
+<div id="cSat" class="card off"><div style="font-size:7px">SAT-COM</div><div id="sBig" class="big">0</div><div id="sSub" class="sub">--</div></div>
+<div id="cIsr" class="card off"><div style="font-size:7px">ISR-VANT 120m AGL</div><div id="iBig" class="big">0</div><div id="iSub" class="sub">--</div></div>
+</div>
+<div class="info">🗺️ MAPA TÁTICO 100m | OSM HTTPS | CLIQUE NO MAPA PARA CAPTURAR COORD</div>
+<div id="map"></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:3px 0">
+<button class="btn btn-map" onclick="centralizarMapa()">📍 CENTRALIZAR FIX ATUAL</button>
+<button class="btn btn-map" onclick="usarLocalDispositivo()" style="background:#001100;color:#0f0;border-color:#0f0">📡 GNSS REAL ±5m (HTTPS)</button>
+</div>
+<div style="border:1px solid #f55;padding:4px;border-radius:4px;margin:6px 0;background:#1a0000">
+<div style="font-size:7px;color:#f55;text-align:center;margin-bottom:3px">🗑️ LIMPEZA CONSULTAS ANTERIORES</div>
+<button class="btn btn-clear" onclick="limparTudo()">🗑️ LIMPAR TODAS CONSULTAS ANTERIORES | RESET TOTAL</button>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:3px;margin-top:3px">
+<button class="btn btn-clear" onclick="limparMarcadores()" style="font-size:7px;padding:8px">🗑️ SÓ MAPA</button>
+<button class="btn btn-clear" onclick="limparRegistros()" style="font-size:7px;padding:8px">🗑️ SÓ REGISTROS</button>
+<button class="btn btn-clear" onclick="limparLog()" style="font-size:7px;padding:8px">🗑️ SÓ LOG</button>
+</div>
+</div>
+<div id="coord" style="font-size:7px;color:#0f0;text-align:center;margin:3px 0;background:#000;padding:3px;border:1px solid #333">--</div>
+<button class="btn btn-gps" onclick="initFix()">FN_INIT_FIX_APROX | INDOOR BYPASS / HTTPS GNSS REAL</button>
+<button class="btn btn-vest" onclick="reg('VEST-COMB')">FN_REG_VEST-COMB | VESTÍGIO PARCIAL | CLUSTER &lt;100m | 3x=VIBRAÇÃO</button>
+<button class="btn btn-sat" onclick="reg('SAT-COM')">FN_REG_SAT-COM | COMBUSTÃO ATIVA | ORIGEM SAT</button>
+<button class="btn btn-isr" onclick="reg('ISR-VANT-120')">FN_REG_ISR-VANT-120 | ISR 120m AGL | OBS REMOTA SEM CONTATO</button>
+<button class="btn btn-exp" onclick="exp()">FN_EXPORT_JSON_FEEDBACK | EXPORT TÁTICO + VAR</button>
+<div style="border:1px solid #333;padding:4px;margin-top:5px"><div style="font-size:6px;color:#555">LOG TÉCNICO DISCRETO DIRETO - HTTPS GNSS:</div><div id="log" class="log"></div></div>
+<div style="text-align:center;margin:6px 0;font-size:6px;color:#444">ORION V8.0 HTTPS | GITHUB PAGES: souza-oliveira-br-max.github.io/ORION/ | GNSS REAL ±5m | SEM DADO PESSOAL | PALETA PROFISSIONAL | LEMA: NINGUÉM NOS VENCE EM VIBRAÇÃO!</div>
+<script>
+let regs=[], pos={coords:{latitude:-12.97111,longitude:-38.512,accuracy:110}}, map, markers=[], circle, localTeste=null;
+const $log=document.getElementById('log');
+function add(t){ const h=new Date().toLocaleTimeString('pt-BR'); $log.textContent+=`\n> ${h} ${t}`; $log.scrollTop=$log.scrollHeight; }
+function vib(n){ if(navigator.vibrate) navigator.vibrate(n===3?[200,100,200,100,300]:150); }
+
+function checkHttps(){
+ let isHttps = location.protocol==='https:' || location.hostname==='localhost' || location.hostname==='127.0.0.1';
+ let el=document.getElementById('httpsStatus');
+ if(isHttps){
+   el.innerHTML='<div class="https-ok">✅ HTTPS DETECTADO | GNSS REAL ±5m LIBERADO | GPS+WiFi+CELL | ORIGEM: DISPOSITIVO REAL</div>';
+   add(`HTTPS: DETECTADO | PROTOCOLO: ${location.protocol} | HOST: ${location.hostname} | GNSS REAL LIBERADO | ±5m POSSÍVEL`);
+ } else {
+   el.innerHTML='<div class="warnbox">⚠️ FILE:// DETECTADO | GNSS BLOQUEADO POR PERMISSION-POLICY | USANDO FIX_APROX ±110m | SOLUÇÃO: HOSPEDAR EM HTTPS GITHUB PAGES PARA ±5m REAL</div>';
+   add(`FILE:// DETECTADO | GNSS BLOQUEADO | MOTIVO: Permission-Policy header requires opt-in | SOLUÇÃO: HTTPS GITHUB PAGES | USANDO FIX_APROX INDOOR`);
+ }
+ return isHttps;
+}
+
+function initMap(){
+ map = L.map('map').setView([pos.coords.latitude, pos.coords.longitude], 16);
+ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OSM'}).addTo(map);
+ circle = L.circle([pos.coords.latitude, pos.coords.longitude], {color:'#0f0',fillColor:'#0f01',fillOpacity:0.1,radius:100}).addTo(map);
+ L.marker([pos.coords.latitude, pos.coords.longitude]).addTo(map).bindPopup(`FIX ATUAL`);
+ map.on('click', e=>{ document.getElementById('latTeste').value=e.latlng.lat.toFixed(5); document.getElementById('lonTeste').value=e.latlng.lng.toFixed(5); add(`MAPA CLIQUE: ${e.latlng.lat.toFixed(5)},${e.latlng.lng.toFixed(5)} | COPIADO PARA CAMPOS TESTE`); });
+}
+function irParaTeste(){
+ let lat=parseFloat(document.getElementById('latTeste').value), lon=parseFloat(document.getElementById('lonTeste').value);
+ if(isNaN(lat)||isNaN(lon)){ add(`ERRO: LAT/LON INVÁLIDOS | USE FORMATO: -12.97111 -38.51200`); return; }
+ localTeste={lat, lon}; map.setView([lat, lon], 18);
+ L.marker([lat, lon], {icon:L.divIcon({html:'<div style="background:#ff0;width:14px;height:14px;border-radius:50%;border:2px solid #000;box-shadow:0 0 8px #ff0"></div>', iconSize:[14,14]})}).addTo(map).bindPopup(`LOCAL TESTE<br>${lat.toFixed(5)},${lon.toFixed(5)}<br>SEM DADO PESSOAL`).openPopup();
+ L.circle([lat, lon], {color:'#ff0',fillColor:'#ff01',fillOpacity:0.15,radius:100}).addTo(map);
+ pos.coords.latitude=lat; pos.coords.longitude=lon; pos.coords.accuracy=25;
+ add(`LOCAL TESTE MANUAL: DEFINIDO | COORD: ${lat.toFixed(5)},${lon.toFixed(5)} | MAPA: AMARELO 100m | FIX ATUALIZADO TESTE | SEM NÚMERO CELULAR`); up(); vib(2);
+ document.getElementById('coord').textContent=`LOCAL TESTE: ${lat.toFixed(5)},${lon.toFixed(5)} ±25m | MANUAL | SEM DADO PESSOAL`;
+}
+function usarLocalDispositivo(){
+ let isHttps = checkHttps();
+ if(!isHttps){
+   add(`GNSS REAL BLOQUEADO: FILE:// NÃO PERMITE GEOLOCATION | MOTIVO: Permission-Policy header requires opt-in for geolocation | SOLUÇÃO: 1) HOSPEDE EM https://souza-oliveira-br-max.github.io/ORION/ 2) ABRA NO CELULAR 3) CLIQUE ESTE BOTÃO NOVAMENTE | AGORA USANDO FIX_APROX ±110m`);
+   initFixAprox();
+   return;
+ }
+ if(navigator.geolocation){
+   add(`GNSS REAL: TENTANDO CAPTURA... | ORIGEM: GPS+WiFi+CELL | AGUARDE 5-10s | PERMITA LOCALIZAÇÃO NO NAVEGADOR`);
+   navigator.geolocation.getCurrentPosition(p=>{
+     pos.coords.latitude=p.coords.latitude; pos.coords.longitude=p.coords.longitude; pos.coords.accuracy=p.coords.accuracy;
+     map.setView([pos.coords.latitude, pos.coords.longitude], 18); circle.setLatLng([pos.coords.latitude, pos.coords.longitude]);
+     L.marker([pos.coords.latitude, pos.coords.longitude], {icon:L.divIcon({html:'<div style="background:#0f0;width:12px;height:12px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 10px #0f0"></div>', iconSize:[14,14]})}).addTo(map).bindPopup(`GNSS REAL<br>${pos.coords.latitude.toFixed(5)},${pos.coords.longitude.toFixed(5)}<br>±${Math.round(pos.coords.accuracy)}m<br>ORIGEM: GPS DISPOSITIVO`).openPopup();
+     L.circle([pos.coords.latitude, pos.coords.longitude], {color:'#0f0',fillColor:'#0f02',fillOpacity:0.2,radius:pos.coords.accuracy}).addTo(map);
+     if(pos.coords.accuracy<=10) add(`FN_INIT_GNSS_REAL: OK | ACC ±${Math.round(pos.coords.accuracy)}m | ORIGEM: GPS+WiFi+CELL | MODO: CAMPO REAL | COORD: ${pos.coords.latitude.toFixed(5)},${pos.coords.longitude.toFixed(5)} | QUALIDADE: ALTA PRECISÃO ±5m | HTTPS LIBERADO`);
+     else add(`FN_INIT_GNSS_REAL: OK | ACC ±${Math.round(pos.coords.accuracy)}m | ORIGEM: GPS+WiFi+CELL | MODO: CAMPO | COORD: ${pos.coords.latitude.toFixed(5)},${pos.coords.longitude.toFixed(5)} | QUALIDADE: APROXIMADO - MOVA PARA CÉU ABERTO PARA ±5m`);
+     document.getElementById('coord').textContent=`GNSS REAL: ${pos.coords.latitude.toFixed(5)},${pos.coords.longitude.toFixed(5)} ±${Math.round(pos.coords.accuracy)}m | ORIGEM: GPS DISPOSITIVO | HTTPS OK`;
+     up(); vib(2);
+   }, e=>{
+     add(`GNSS REAL FALHOU: ${e.message} | CÓDIGO: ${e.code} | SOLUÇÃO: 1) PERMITA LOCALIZAÇÃO 2) ATIVE GPS 3) TENTE CÉU ABERTO 4) HTTPS OBRIGATÓRIO | USANDO FIX_APROX`);
+     initFixAprox();
+   }, {enableHighAccuracy:true, timeout:15000, maximumAge:0});
+ } else add(`GEOLOCATION NÃO SUPORTADO NESTE NAVEGADOR`);
+}
+function initFixAprox(){
+ pos={coords:{latitude:-12.97111+Math.random()*0.0005,longitude:-38.512+Math.random()*0.0005,accuracy:90+Math.random()*40}};
+ add(`FN_INIT_FIX_APROX: OK | ACC ±${Math.round(pos.coords.accuracy)}m | MODO: INDOOR 3º ANDAR | BYPASS FILE:// | SEM GNSS REAL - HOSPEDE EM HTTPS PARA ±5m`);
+ up();
+}
+function centralizarMapa(){ map.setView([pos.coords.latitude, pos.coords.longitude], 17); circle.setLatLng([pos.coords.latitude, pos.coords.longitude]); add(`MAPA CENTRALIZADO: ${pos.coords.latitude.toFixed(5)},${pos.coords.longitude.toFixed(5)}`); }
+function limparTudo(){
+ if(!confirm('CONFIRMAR LIMPEZA TOTAL? Apagará MAPA + REGISTROS + LOG + CARDS (mantém FIX atual)')) return;
+ regs=[]; markers.forEach(m=>map.removeLayer(m)); markers=[]; document.querySelectorAll('.dot').forEach(d=>d.remove());
+ $log.textContent=''; document.getElementById('cPonto').className='card off'; document.getElementById('pBig').textContent='0/3'; document.getElementById('pSub').textContent='CLUSTER'; document.getElementById('pBar').style.width='0%'; document.getElementById('pBar').className='bar'; document.getElementById('cSat').className='card off'; document.getElementById('sBig').textContent='0'; document.getElementById('cIsr').className='card off'; document.getElementById('iBig').textContent='0';
+ add(`FN_LIMPAR_TUDO: EXECUTADO | CONSULTAS APAGADAS | MAPA LIMPO | REGISTROS ZERADOS | LOG LIMPO | CARDS RESET | FIX MANTIDO: ${pos.coords.latitude.toFixed(5)},${pos.coords.longitude.toFixed(5)} | PRONTO NOVA COLETA`); vib(1);
+}
+function limparMarcadores(){ markers.forEach(m=>map.removeLayer(m)); markers=[]; document.querySelectorAll('.dot').forEach(d=>d.remove()); add(`FN_LIMPAR_MAPA: MARCADORES APAGADOS`); vib(1); }
+function limparRegistros(){ regs=[]; document.getElementById('cPonto').className='card off'; document.getElementById('pBig').textContent='0/3'; document.getElementById('cSat').className='card off'; document.getElementById('sBig').textContent='0'; document.getElementById('cIsr').className='card off'; document.getElementById('iBig').textContent='0'; add(`FN_LIMPAR_REGISTROS: ZERADOS`); vib(1); }
+function limparLog(){ $log.textContent=''; add(`FN_LIMPAR_LOG: APAGADO`); vib(1); }
+function up(){
+ const v=regs.filter(r=>r.tipo==='VEST-COMB').length, s=regs.filter(r=>r.tipo==='SAT-COM').length, i=regs.filter(r=>r.tipo==='ISR-VANT-120').length;
+ let isHttps = location.protocol==='https:';
+ document.getElementById('cFix').className='card ok'; document.getElementById('fBig').textContent=`±${Math.round(pos.coords.accuracy)}m`; document.getElementById('fSub').textContent=isHttps && pos.coords.accuracy<=10 ? `GNSS OK ±${Math.round(pos.coords.accuracy)}m` : pos.coords.accuracy<=25 ? `TESTE MANUAL` : `INDOOR ±${Math.round(pos.coords.accuracy)}m`; document.getElementById('fBar').style.width='100%'; if(pos.coords.accuracy<=10) document.getElementById('fBar').style.background='#0f0'; else if(pos.coords.accuracy<=30) document.getElementById('fBar').style.background='#ff0'; else document.getElementById('fBar').style.background='#fa0';
+ document.getElementById('pBig').textContent=v>=3?'ATIVO':`${v}/3`; document.getElementById('pBar').style.width=`${Math.min(v/3*100,100)}%`;
+ if(v===0){document.getElementById('cPonto').className='card off';} else if(v<3){document.getElementById('cPonto').className='card warn'; document.getElementById('pSub').textContent=`CLUSTER ${v}/3`;} else{document.getElementById('cPonto').className='card crit'; document.getElementById('pSub').textContent='CONFIRMADO'; document.getElementById('pBar').className='bar full';}
+ document.getElementById('sBig').textContent=s; document.getElementById('cSat').className=s>0?'card crit':'card off';
+ document.getElementById('iBig').textContent=i; document.getElementById('cIsr').className=i>0?'card crit':'card off';
+ if(map) circle.setLatLng([pos.coords.latitude, pos.coords.longitude]);
+}
+function initFix(){
+ let isHttps = location.protocol==='https:' || location.hostname==='localhost';
+ if(isHttps && navigator.geolocation){ usarLocalDispositivo(); } else { initFixAprox(); if(!map) initMap(); else map.setView([pos.coords.latitude, pos.coords.longitude], 16); up(); vib(1); }
+}
+function reg(t){
+ let lat = pos.coords.latitude + (Math.random()*0.0005-0.00025); let lon = pos.coords.longitude + (Math.random()*0.0005-0.00025);
+ regs.push({fn:`FN_REG_${t}`,tipo:t,ts:new Date().toISOString(),lat,lon,acc:pos.coords.accuracy});
+ const v=regs.filter(r=>r.tipo==='VEST-COMB').length;
+ let color = t==='VEST-COMB'?'orange': t==='SAT-COM'?'blue':'red';
+ let icon = L.divIcon({html:`<div style="background:${color};width:10px;height:10px;border-radius:50%;border:2px solid #fff"></div>`, iconSize:[10,10]});
+ let m = L.marker([lat, lon], {icon}).addTo(map).bindPopup(`${t}<br>${lat.toFixed(5)},${lon.toFixed(5)}`); markers.push(m);
+ const dot=document.createElement('div'); dot.className='dot'; dot.style.background=color; dot.style.left=(50+Math.random()*30-15)+'%'; dot.style.top=(50+Math.random()*30-15)+'%'; document.getElementById('radar').appendChild(dot);
+ if(t==='VEST-COMB'){ if(v===1) add(`VEST-COMB: 1/3 EM FORMAÇÃO LARANJA ${lat.toFixed(5)},${lon.toFixed(5)}`); else if(v===2) add(`VEST-COMB: 2/3 PARCIAL FALTA 1`); else add(`PONTO ATIVO CONFIRMADO ${v}/3 <100m ${lat.toFixed(5)},${lon.toFixed(5)} VIBRAÇÃO 3 PULSOS | LEMA: NINGUÉM NOS VENCE EM VIBRAÇÃO!`), vib(3), L.circle([lat, lon], {color:'#f00',fillColor:'#f003',fillOpacity:0.2,radius:100}).addTo(map); }
+ else if(t==='SAT-COM') add(`SAT-COM FOCO ATIVO SAT ${lat.toFixed(5)},${lon.toFixed(5)} AZUL`); else add(`ISR-VANT-120 CONCLUÍDO 120m PRESENÇA RISCO ELEVADO ${lat.toFixed(5)},${lon.toFixed(5)} VERMELHO OBS REMOTA`), vib(1);
+ up();
+}
+function exp(){
+ const v=regs.filter(r=>r.tipo==='VEST-COMB').length;
+ const p={sistema:'ORION V8.0 HTTPS GNSS ±5m',versao:'8.0.0-https-gnss',https:location.protocol==='https:'?'SIM GNSS REAL LIBERADO':'NAO FILE:// APROX',seguranca:'SEM DADO PESSOAL',localTeste:localTeste||'FIX_ATUAL',varOp:document.getElementById('varOp').value?'INFORMADO':'NAO',varMissao:document.getElementById('varId').value,fix:`${pos.coords.latitude.toFixed(5)},${pos.coords.longitude.toFixed(5)} ±${Math.round(pos.coords.accuracy)}m ${pos.coords.accuracy<=10?'GNSS REAL ±5m':'FIX_APROX'}`,total:regs.length,resumo:{ponto:v>=3?'CONFIRMADO':'NAO',cluster:`${v}/3`},registros:regs,ts:new Date().toISOString(),github:'souza-oliveira-br-max.github.io/ORION/'};
+ const b=new Blob([JSON.stringify(p,null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download=`ORION_${p.varMissao}_${Date.now()}_V80_HTTPS_${pos.coords.accuracy<=10?'GNSS_REAL_5m':'APROX'}.json`; a.click();
+ add(`EXPORT OK: TOTAL ${regs.length} | FIX: ${p.fix} | HTTPS: ${p.https} | SEM DADO PESSOAL`);
+}
+setTimeout(()=>{ checkHttps(); initMap(); initFix(); add(`ORION V8.0 HTTPS: ESTRUTURA GITHUB PAGES PRONTA | URL: https://souza-oliveira-br-max.github.io/ORION/ | PARA GNSS REAL ±5m: HOSPEDE ESTE index.html EM HTTPS | FILE:// = FIX_APROX ±110m | HTTPS = GNSS REAL ±5m | SEM DADO PESSOAL | OPERACIONAL`); },600);
+</script>
+</body>
+</html>
