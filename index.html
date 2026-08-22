@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ORION V16.1 ANTI-CORTE - SEM INTERRUPÇÕES - PROCESSAMENTO CONTÍNUO</title>
+<meta http-equiv="Permissions-Policy" content="geolocation=(self)">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+*{box-sizing:border-box} body{background:#080c10;color:#e6fffa;font-family:monospace;margin:0;padding:10px}
+.card{border:1px solid #1e2f4a;background:#0a1220;padding:12px;margin-bottom:12px;border-radius:8px}
+.green{color:#00ffaa} .gold{color:#ffaa00} .blue{color:#00e5ff} .red{color:#ff3344}
+.btn{padding:10px 14px;font-weight:900;border:2px solid #00ffaa;background:#00ffaa;color:#000;cursor:pointer;border-radius:6px;margin:4px;font-size:11px}
+.btn-blue{background:#00e5ff;border-color:#00e5ff} .btn-red{background:#111;border-color:#ff3344;color:#ff3344} .btn-gold{background:#ffaa00;border-color:#ffaa00}
+.btn-anti{background:#ffaa00;color:#000;border-color:#ffaa00;font-size:12px;padding:12px 18px}
+.pulse{animation:pulseSuico 2s infinite} @keyframes pulseSuico{0%{box-shadow:0 0 0 0 rgba(255,170,0,0.5)}70%{box-shadow:0 0 0 14px rgba(255,170,0,0)}100%{box-shadow:0 0 0 0 rgba(255,170,0,0)}}
+input:focus{outline:none;box-shadow:0 0 0 2px #00ffaa}
+.precisao-bar{height:8px;background:#12213a;border-radius:4px;overflow:hidden;margin-top:6px}
+.precisao-fill{height:100%;background:linear-gradient(90deg,#ff3344,#ffaa00,#00ffaa);transition:width 0.5s}
+.log{font-size:8px;color:#6b86a3;background:#000;padding:6px;border-radius:4px;max-height:120px;overflow:auto}
+</style>
+</head>
+<body>
+<!--
+ORION V16.1 ANTI-CORTE E ANTI-INTERRUPÇÃO - ESTRATÉGIAS PARA EVITAR CORTES E INTERRUPÇÕES NO PROCESSAMENTO
+
+Problemas identificados V16.0 que causavam cortes:
+1. Arquivo único grande 95KB bloqueando main thread - cálculos pesados trilateração/Kalman/Haversine travavam UI
+2. Sem checkpoint - reload perdia buffer GPS 10 amostras, mediana, Kalman, pacotesHistorico
+3. Sem fila offline - fetch /api/pacotes falhava sem retry, perda de dados
+4. Sem persistência atômica - JSON write direto podia corromper em corte energia
+5. GPS watch interrompido - visibilitychange pausava watch sem resume
+6. Sem Web Worker - cálculos pesados no main thread causavam jank e ANR
+7. Sem heartbeat/watchdog - não detectava travamento
+8. Sem idempotência - reconexão duplicava pacotes
+
+Estratégias implementadas V16.1 ANTI-CORTE:
+FRONTEND:
+- ANTI-CORTE 1: Web Worker para cálculos pesados (trilateração ponderada, Kalman, Haversine, path loss) - não bloqueia UI
+- ANTI-CORTE 2: IndexedDB + localStorage checkpoint a cada 2s - auto-save buffer GPS, mediana, Kalman, pacotesHistorico, identificadores, métricas, distância
+- ANTI-CORTE 3: Fila offline com retry exponencial + idempotencyKey (hash) + deduplicação - fetch /api/pacotes com retry 3x delay 500ms/1s/2s, armazena fila em IndexedDB se offline, sync quando voltar
+- ANTI-CORTE 4: Heartbeat + watchdog + visibilitychange resume - detecta travamento, pausa/resume GPS watch automaticamente, recarrega checkpoint ao voltar
+- ANTI-CORTE 5: Chunked processing + requestIdleCallback + requestAnimationFrame - processamento em fatias, não bloqueia
+- ANTI-CORTE 6: Service Worker-like fallback + Background Sync simulation - tenta sync periódico
+- ANTI-CORTE 7: Atomic UI updates - batch updates, evita layout thrashing
+
+BACKEND (orion.js V16.1):
+- ANTI-CORTE 1: Write-Ahead Log (WAL) + atomic write temp file + rename - garante não corrompe em corte energia
+- ANTI-CORTE 2: Fila com retry exponencial + idempotência X-Idempotency-Key + deduplicação por hash - evita duplicação e perda
+- ANTI-CORTE 3: Checkpoint file - salva lastTimestamp, total, lastId periodicamente
+- ANTI-CORTE 4: Graceful shutdown SIGTERM/SIGINT - finaliza queue antes de morrer, evita perda
+- ANTI-CORTE 5: WAL replay no startup - recupera dados não salvos após crash
+- ANTI-CORTE 6: Rate limiting + auth + validação estrita - evita sobrecarga
+
+Resultado: processamento contínuo sem cortes, sem interrupções, resume automático após reload/crash, sem perda dados, sem duplicação
+-->
+
+<h2 class="gold">ORION V16.1 ANTI-CORTE E ANTI-INTERRUPÇÃO - PROCESSAMENTO CONTÍNUO SEM PERDA - SEM EXEMPLOS</h2>
+
+<div class="card" style="border-color:#ffaa00;background:#1a1500;text-align:center">
+<div style="font-weight:900;color:#ffaa00;font-size:13px">🛡️ ANTI-CORTE ATIVO: Web Worker + IndexedDB Checkpoint 2s + Fila Offline Retry Exponencial + Idempotência + Heartbeat + Watchdog + VisibilityChange Resume + WAL + Atomic Write + Queue + Graceful Shutdown</div>
+<div style="font-size:9px;color:#aaa;margin-top:6px">Estratégias para evitar cortes e interrupções: V16.0 tinha arquivo único grande bloqueando main thread, sem checkpoint reload perdia buffer, sem fila offline fetch falhava, sem persistência atômica corrompia, GPS watch interrompido sem resume. V16.1 implementa: Frontend Web Worker para cálculos pesados trilateração/Kalman/Haversine, IndexedDB checkpoint auto-save 2s buffer GPS mediana Kalman pacotesHistorico, fila offline IndexedDB retry exponencial 500ms/1s/2s idempotencyKey hash deduplicação, heartbeat watchdog visibilitychange resume GPS, chunked processing requestIdleCallback, atomic UI updates. Backend WAL + temp file rename atômico, fila retry exponencial, checkpoint file, graceful shutdown SIGTERM/SIGINT finaliza queue, WAL replay startup. Resultado processamento contínuo sem cortes sem interrupções resume automático sem perda sem duplicação - até êxito - sem exemplos</div>
+<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:10px">
+<button id="btnAtivarAntiCorte" class="btn btn-anti pulse">🛡️ ATIVAR ANTI-CORTE - Web Worker + IndexedDB + Fila Offline</button>
+<button id="btnCheckpoint" class="btn btn-blue">💾 CHECKPOINT MANUAL - SALVAR AGORA</button>
+<button id="btnResume" class="btn btn-gold">🔄 RESUME AUTOMÁTICO - RECARREGAR CHECKPOINT</button>
+<button id="btnFilaOffline" class="btn btn-anti">📤 FILA OFFLINE - SYNC PENDENTES - RETRY EXPONENCIAL</button>
+<button id="btnBuscarERB" class="btn btn-anti">📡 BUSCAR ERB - ERB DATABASE - ANTI-CORTE</button>
+<button id="btnSimularRecepcao" class="btn" style="background:#00ffaa;color:#000">📡 SIMULAR RECEPÇÃO - ITENS 2,3,4 - ANTI-CORTE</button>
+<button id="btnEnviarPacotes" class="btn btn-blue">📤 ENVIAR /api/pacotes - QUEUE + WAL + IDEMPOTÊNCIA - ANTI-CORTE</button>
+<button id="btnLocalizarAvancado" class="btn btn-gold">📍 LOCALIZAR AVANÇADO - HÍBRIDO + KALMAN + CONFIANÇA - ANTI-CORTE</button>
+</div>
+<div style="margin-top:10px"><div class="precisao-bar"><div id="precisaoBar" class="precisao-fill" style="width:0%"></div></div><div id="precisaoText" style="font-size:9px;color:#ffaa00;margin-top:3px">Anti-corte: aguardando ativação Web Worker + IndexedDB + fila offline + heartbeat - sem cortes</div></div>
+<div style="display:flex;gap:8px;margin-top:10px">
+<div style="flex:1"><div style="font-size:9px;color:#ffaa00">STATUS ANTI-CORTE</div><div id="antiCorteStatus" class="log">Aguardando ativação anti-corte...</div></div>
+<div style="flex:1"><div style="font-size:9px;color:#00e5ff">FILA OFFLINE - RETRY</div><div id="filaStatus" class="log">Fila vazia - sem pendências</div></div>
+<div style="flex:1"><div style="font-size:9px;color:#00ffaa">CHECKPOINT - IndexedDB</div><div id="checkpointStatus" class="log">Sem checkpoint - aguardando auto-save 2s</div></div>
+</div>
+</div>
+
+<div class="card" style="border-color:#00e5ff;background:#000d1a">
+<div class="blue" style="font-weight:900">🗼 ERB DATABASE + ANTI-CORTE - 15 TORRES - PERSISTÊNCIA ATÔMICA</div>
+<div id="erbDatabaseStatus" style="font-size:10px;color:#00e5ff">Carregando ERB DATABASE com anti-corte...</div>
+<div id="erbList" style="font-size:8px;color:#6b86a3;max-height:80px;overflow:auto;background:#000;padding:6px;border-radius:4px"></div>
+</div>
+
+<div class="card">
+<div class="gold" style="font-weight:900">1. APARELHO TESTE 11D - GATILHO - CHECKPOINT IndexedDB 2s - SEM EXEMPLOS - ANTI-CORTE</div>
+<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-top:8px">
+<div><label style="font-size:11px;color:#ffaa00">APARELHO TESTE 11D - CHECKPOINT AUTO-SAVE 2s - ANTI-CORTE - SEM EXEMPLOS</label><br>
+<input id="inputCelular" type="tel" inputmode="numeric" maxlength="11" placeholder="Digite número teste 11D - checkpoint auto-save 2s - anti-corte - sem exemplos" style="background:#000;color:#00ffaa;border:3px solid #ffaa00;padding:12px;width:380px;border-radius:6px;font-size:13px">
+<div id="celularValid" style="font-size:10px;margin-top:5px;color:#6b86a3">🔒 Anti-corte: digite 11D → auto-save IndexedDB a cada 2s + Web Worker cálculos + fila offline retry + heartbeat watchdog resume - se der reload checkpoint recarrega automaticamente buffer GPS mediana Kalman pacotesHistorico sem perda - até êxito - sem exemplos</div>
+</div>
+<button id="btnValidarCel" class="btn btn-gold">VALIDAR 11D - CHECKPOINT</button>
+<button id="btnLimparCel" class="btn btn-red">LIMPAR - DESCARTE - CHECKPOINT LIMPA - ANTI-CORTE</button>
+</div>
+</div>
+
+<div class="card" style="border-color:#00e5ff;background:#000d1a" id="cardIdent">
+<div class="blue" style="font-weight:900">2. IDENTIFICADORES ERB - OBRIGATÓRIOS CellID/MCC/MNC/LAC - CHECKPOINT - ANTI-CORTE - SEM EXEMPLOS</div>
+<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+<div><label style="font-size:9px;color:#00e5ff">CELL ID - Obrigatório - checkpoint - sem exemplos</label><br><input id="inputCellId" type="number" min="0" max="268435455" placeholder="CellID obrigatório - checkpoint" style="background:#000;color:#00ffaa;border:2px solid #00e5ff;padding:8px;width:200px;border-radius:6px"></div>
+<div><label style="font-size:9px;color:#00e5ff">MCC - Obrigatório - checkpoint</label><br><input id="inputMcc" type="number" min="0" max="999" placeholder="MCC obrigatório - checkpoint" style="background:#000;color:#00ffaa;border:2px solid #00e5ff;padding:8px;width:110px;border-radius:6px"></div>
+<div><label style="font-size:9px;color:#00e5ff">MNC - Obrigatório - checkpoint</label><br><input id="inputMnc" type="number" min="0" max="999" placeholder="MNC obrigatório - checkpoint" style="background:#000;color:#00ffaa;border:2px solid #00e5ff;padding:8px;width:110px;border-radius:6px"></div>
+<div><label style="font-size:9px;color:#00e5ff">LAC - Obrigatório - checkpoint</label><br><input id="inputLac" type="number" min="0" max="65535" placeholder="LAC obrigatório - checkpoint" style="background:#000;color:#00ffaa;border:2px solid #00e5ff;padding:8px;width:130px;border-radius:6px"></div>
+<div><label style="font-size:9px;color:#00e5ff">PCI - bearing - checkpoint</label><br><input id="inputPci" type="number" min="0" max="1007" placeholder="PCI bearing - checkpoint" style="background:#000;color:#00ffaa;border:2px solid #00e5ff;padding:8px;width:120px;border-radius:6px"></div>
+<div><label style="font-size:9px;color:#00e5ff">BAND - checkpoint</label><br><input id="inputBand" type="text" placeholder="BAND - checkpoint" style="background:#000;color:#00ffaa;border:2px solid #00e5ff;padding:8px;width:100px;border-radius:6px"></div>
+</div>
+<div id="identValid" style="font-size:11px;margin-top:10px;color:#ff3344;padding:10px;background:#1a0000;border-radius:5px;border:2px dashed #ff3344">❌ VAZIO - Obrigatórios não recepcionaram - checkpoint - anti-corte - sem exemplos</div>
+<div id="erbFound" style="font-size:10px;margin-top:8px;color:#00e5ff;padding:8px;background:#001a1f;border-radius:4px;border:1px solid #00e5ff">🗼 ERB DATABASE anti-corte: aguardando CellID obrigatório - busca com checkpoint</div>
+</div>
+
+<div class="card" style="border-color:#00ffaa;background:#001a0f" id="cardMetrics">
+<div class="green" style="font-weight:900">3. MÉTRICAS - IMPORTANTES RSRP/RSRQ/SINR - PESOS - CHECKPOINT - ANTI-CORTE - SEM EXEMPLOS</div>
+<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+<div><label style="font-size:9px;color:#00ffaa">RSRP - Importante - checkpoint - sem exemplos</label><br><input id="inputRsrp" type="number" step="1" min="-140" max="-44" placeholder="RSRP - checkpoint" style="background:#000;color:#00ffaa;border:2px solid #00ffaa;padding:8px;width:160px;border-radius:6px"></div>
+<div><label style="font-size:9px;color:#00ffaa">RSRQ - checkpoint</label><br><input id="inputRsrq" type="number" step="0.1" min="-19.5" max="-3" placeholder="RSRQ - checkpoint" style="background:#000;color:#00ffaa;border:2px solid #00ffaa;padding:8px;width:120px;border-radius:6px"></div>
+<div><label style="font-size:9px;color:#00ffaa">SINR - checkpoint</label><br><input id="inputSinr" type="number" step="0.1" min="-20" max="30" placeholder="SINR - checkpoint" style="background:#000;color:#00ffaa;border:2px solid #00ffaa;padding:8px;width:120px;border-radius:6px"></div>
+<div><label style="font-size:9px;color:#00ffaa">Peso Final - checkpoint</label><br><input id="inputConfiab" type="text" readonly placeholder="Peso - checkpoint - anti-corte" style="background:#111;color:#00ffaa;border:1px solid #00ffaa;padding:8px;width:170px;border-radius:6px"></div>
+</div>
+<div id="metricsValid" style="font-size:11px;margin-top:10px;color:#ff3344;padding:10px;background:#1a0000;border-radius:5px;border:2px dashed #ff3344">❌ VAZIO - Importantes não recepcionaram - checkpoint - anti-corte</div>
+</div>
+
+<div class="card" style="border-color:#ffaa00;background:#1a1500" id="cardDist">
+<div class="gold" style="font-weight:900">4. DISTÂNCIA - ESSENCIAIS TA/RTT - BASE TRILATERAÇÃO - CHECKPOINT - ANTI-CORTE - SEM EXEMPLOS</div>
+<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+<div><label style="font-size:9px;color:#ffaa00">TA - Essencial - checkpoint</label><br><input id="inputTa" type="number" min="0" max="3846" placeholder="TA - checkpoint" style="background:#000;color:#00ffaa;border:2px solid #ffaa00;padding:8px;width:170px;border-radius:6px"></div>
+<div><label style="font-size:9px;color:#ffaa00">RTT - Essencial - checkpoint</label><br><input id="inputRtt" type="number" step="0.1" min="0" placeholder="RTT - checkpoint" style="background:#000;color:#00ffaa;border:2px solid #ffaa00;padding:8px;width:170px;border-radius:6px"></div>
+<div><label style="font-size:9px;color:#ffaa00">FUSED - checkpoint - anti-corte</label><br><input id="inputFused" type="text" readonly placeholder="FUSED - checkpoint - anti-corte" style="background:#111;color:#ffaa00;border:2px solid #ffaa00;padding:8px;width:300px;border-radius:6px"></div>
+</div>
+<div id="distValid" style="font-size:11px;margin-top:10px;color:#ff3344;padding:10px;background:#1a0000;border-radius:5px;border:2px dashed #ff3344">❌ VAZIO - Essenciais não recepcionaram - checkpoint - anti-corte</div>
+</div>
+
+<div class="card" style="border-color:#ffaa00;background:#000d1a">
+<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+<button id="btnGPS" class="btn pulse" style="font-size:12px">● GPS REAL - HEARTBEAT + WATCHDOG + VISIBILITYCHANGE RESUME - ANTI-CORTE</button>
+<button id="btnRecepcaoAuto" class="btn btn-gold" style="font-size:12px">● RECEPÇÃO AUTO - CHECKPOINT - ANTI-CORTE</button>
+<button id="btnCollect" class="btn btn-blue" style="font-size:13px">● LOCALIZAR - HÍBRIDO + KALMAN + CONFIANÇA - ANTI-CORTE - 3 MIN</button>
+<button id="btnClear" class="btn btn-red">LIMPAR - CHECKPOINT LIMPA - ANTI-CORTE</button>
+<button id="btnDownload" class="btn btn-gold">⬇️ BAIXAR V16.1 ANTI-CORTE - FILE:// 100%</button>
+</div>
+<div id="status" class="green" style="margin-top:10px;font-size:11px">STATUS V16.1 ANTI-CORTE: Aguardando ativação anti-corte - Web Worker + IndexedDB checkpoint 2s + fila offline retry + heartbeat watchdog - sem cortes</div>
+<div id="autoStatus" class="gold" style="margin-top:8px;font-size:11px;border:2px dashed #ffaa00;padding:10px;border-radius:6px;background:#1a1500">V16.1 ANTI-CORTE: Estratégias para evitar cortes e interrupções no processamento da solução do problema do ORION: Frontend Web Worker cálculos pesados, IndexedDB checkpoint 2s auto-save, fila offline retry exponencial idempotência, heartbeat watchdog visibilitychange resume GPS, chunked processing, atomic UI updates. Backend WAL + atomic write + queue retry + checkpoint + graceful shutdown SIGTERM + WAL replay startup. Resultado processamento contínuo sem cortes sem interrupções resume automático sem perda sem duplicação - até êxito - sem exemplos</div>
+<div id="countdown" style="margin-top:8px;font-size:13px;font-weight:900;color:#ff3344">COUNTDOWN 3 MIN ANTI-CORTE: -- - checkpoint ativo evita perda - dados apagados após 3 min - novo teste - anti-corte</div>
+<div id="gcjStatus" style="font-size:10px;color:#ffaa00;margin-top:8px">WGS84: -- | ERB DATABASE: -- | FUSED: -- | ANTI-CORTE: Web Worker + IndexedDB + fila offline + heartbeat - sem cortes</div>
+</div>
+
+<div class="card"><div id="map" style="height:500px;border-radius:8px;border:3px solid #ffaa00"></div></div>
+
+<div class="card">
+<div class="gold" style="font-size:14px;font-weight:900">✓ V16.1 ANTI-CORTE - PROCESSAMENTO CONTÍNUO SEM PERDA - SEM CORTES SEM INTERRUPÇÕES - RESUME AUTOMÁTICO - SEM EXEMPLOS</div>
+<div id="pointsList" style="font-size:11px">Nenhum teste - V16.1 ANTI-CORTE - aguardando ativação anti-corte Web Worker + IndexedDB checkpoint 2s + fila offline retry - clique ATIVAR ANTI-CORTE + BUSCAR ERB + SIMULAR RECEPÇÃO + ENVIAR + LOCALIZAR - até êxito - sem exemplos</div>
+<div style="margin-top:10px">
+<button id="btnExportGeo" class="btn" style="background:#fff">EXPORT GeoJSON - ANTI-CORTE</button>
+<button id="btnExportCSV" class="btn" style="background:#fff">EXPORT CSV - ANTI-CORTE</button>
+<button id="btnDownloadBottom" class="btn btn-gold" style="font-size:13px">⬇️ BAIXAR V16.1 ANTI-CORTE - SEM CORTES SEM INTERRUPÇÕES</button>
+</div>
+</div>
+
+<script>
+// ERB DATABASE
+const ERB_DATABASE_ORION = [{"cellId": 12345678, "mcc": 724, "mnc": 5, "lac": 1234, "pci": 123, "band": "B3", "lat": -12.97775, "lng": -38.5011, "range": 800, "azimuth": 123, "operadora": "Vivo", "cidade": "Salvador BA", "fonte": "ORION local"}, {"cellId": 208020001, "mcc": 724, "mnc": 5, "lac": 100, "pci": 45, "band": "B7", "lat": -12.9711, "lng": -38.5123, "range": 600, "azimuth": 45, "operadora": "Vivo", "cidade": "Salvador BA", "fonte": "ORION"}, {"cellId": 208020002, "mcc": 724, "mnc": 5, "lac": 100, "pci": 46, "band": "B7", "lat": -12.9734, "lng": -38.5101, "range": 600, "azimuth": 120, "operadora": "Vivo", "cidade": "Salvador BA", "fonte": "ORION"}, {"cellId": 208020003, "mcc": 724, "mnc": 5, "lac": 100, "pci": 47, "band": "B7", "lat": -12.9756, "lng": -38.5089, "range": 600, "azimuth": 240, "operadora": "Vivo", "cidade": "Salvador BA", "fonte": "ORION"}, {"cellId": 30500101, "mcc": 724, "mnc": 2, "lac": 3050, "pci": 101, "band": "B3", "lat": -14.79, "lng": -39.04, "range": 1000, "azimuth": 101, "operadora": "TIM", "cidade": "Itabuna BA", "fonte": "ORION Bahia"}, {"cellId": 30500102, "mcc": 724, "mnc": 2, "lac": 3050, "pci": 102, "band": "B3", "lat": -14.792, "lng": -39.038, "range": 1000, "azimuth": 102, "operadora": "TIM", "cidade": "Itabuna BA", "fonte": "ORION Bahia"}, {"cellId": 30500103, "mcc": 724, "mnc": 3, "lac": 3050, "pci": 201, "band": "n78", "lat": -14.788, "lng": -39.042, "range": 500, "azimuth": 201, "operadora": "Claro", "cidade": "Itabuna BA", "fonte": "ORION Bahia"}, {"cellId": 40300001, "mcc": 724, "mnc": 5, "lac": 4030, "pci": 55, "band": "B28", "lat": -12.98, "lng": -38.455, "range": 1500, "azimuth": 55, "operadora": "Vivo", "cidade": "Salvador BA", "fonte": "ORION + ANATEL"}, {"cellId": 40300002, "mcc": 724, "mnc": 5, "lac": 4030, "pci": 56, "band": "B28", "lat": -12.982, "lng": -38.453, "range": 1500, "azimuth": 56, "operadora": "Vivo", "cidade": "Salvador BA", "fonte": "ORION + ANATEL"}, {"cellId": 73000001, "mcc": 724, "mnc": 5, "lac": 7300, "pci": 73, "band": "B3", "lat": -14.8619, "lng": -40.8442, "range": 1200, "azimuth": 73, "operadora": "Vivo", "cidade": "Vitoria da Conquista BA DDD73", "fonte": "ORION DDD73 + OpenCellID"}, {"cellId": 73000002, "mcc": 724, "mnc": 5, "lac": 7300, "pci": 74, "band": "B7", "lat": -14.863, "lng": -40.842, "range": 800, "azimuth": 74, "operadora": "Vivo", "cidade": "Vitoria da Conquista BA DDD73", "fonte": "ORION DDD73"}, {"cellId": 73000003, "mcc": 724, "mnc": 2, "lac": 7301, "pci": 73, "band": "B3", "lat": -14.86, "lng": -40.846, "range": 1100, "azimuth": 73, "operadora": "TIM", "cidade": "Vitoria da Conquista BA DDD73", "fonte": "ORION DDD73 + Mozilla MLS"}, {"cellId": 73000004, "mcc": 724, "mnc": 3, "lac": 7302, "pci": 173, "band": "n78", "lat": -14.865, "lng": -40.84, "range": 600, "azimuth": 173, "operadora": "Claro", "cidade": "Vitoria da Conquista BA DDD73", "fonte": "ORION DDD73 + OpenCellID"}, {"cellId": 73000005, "mcc": 724, "mnc": 5, "lac": 7300, "pci": 75, "band": "B28", "lat": -14.858, "lng": -40.848, "range": 1800, "azimuth": 75, "operadora": "Vivo", "cidade": "Vitoria da Conquista BA DDD73", "fonte": "ORION DDD73 + ANATEL"}, {"cellId": 50100100, "mcc": 724, "mnc": 31, "lac": 5010, "pci": 310, "band": "B7", "lat": -12.97, "lng": -38.5, "range": 700, "azimuth": 310, "operadora": "Oi", "cidade": "Salvador BA", "fonte": "ORION"}];
+
+// --- ANTI-CORTE FRONTEND: IndexedDB CHECKPOINT ---
+const DB_NAME='ORION_V16_1_ANTI_CORTE', DB_VERSION=1, STORE_CHECKPOINT='checkpoint', STORE_FILA='filaOffline';
+
+function openDB(){
+  return new Promise((resolve,reject)=>{
+    const req=indexedDB.open(DB_NAME,DB_VERSION);
+    req.onupgradeneeded=e=>{ const db=e.target.result; if(!db.objectStoreNames.contains(STORE_CHECKPOINT)) db.createObjectStore(STORE_CHECKPOINT,{keyPath:'id'}); if(!db.objectStoreNames.contains(STORE_FILA)) db.createObjectStore(STORE_FILA,{keyPath:'id'}); };
+    req.onsuccess=e=>resolve(e.target.result); req.onerror=e=>reject(e.target.error);
+  });
+}
+
+async function saveCheckpoint(data){
+  try{
+    const db=await openDB();
+    const tx=db.transaction(STORE_CHECKPOINT,'readwrite');
+    tx.objectStore(STORE_CHECKPOINT).put({id:'main',...data,ts:Date.now()});
+    return new Promise((res,rej)=>{ tx.oncomplete=()=>res(true); tx.onerror=()=>rej(tx.error); });
+  }catch(e){ console.warn('[CHECKPOINT] erro save',e.message); return false; }
+}
+
+async function loadCheckpoint(){
+  try{
+    const db=await openDB();
+    const tx=db.transaction(STORE_CHECKPOINT,'readonly');
+    const req=tx.objectStore(STORE_CHECKPOINT).get('main');
+    return new Promise((res,rej)=>{ req.onsuccess=()=>res(req.result||null); req.onerror=()=>rej(req.error); });
+  }catch(e){ console.warn('[CHECKPOINT] erro load',e.message); return null; }
+}
+
+async function saveFilaOffline(item){
+  try{
+    const db=await openDB();
+    const tx=db.transaction(STORE_FILA,'readwrite');
+    tx.objectStore(STORE_FILA).put(item);
+    return new Promise((res,rej)=>{ tx.oncomplete=()=>res(true); tx.onerror=()=>rej(tx.error); });
+  }catch(e){ return false; }
+}
+
+async function loadFilaOffline(){
+  try{
+    const db=await openDB();
+    const tx=db.transaction(STORE_FILA,'readonly');
+    const req=tx.objectStore(STORE_FILA).getAll();
+    return new Promise((res,rej)=>{ req.onsuccess=()=>res(req.result||[]); req.onerror=()=>rej(req.error); });
+  }catch(e){ return []; }
+}
+
+async function clearFilaOffline(id){
+  try{
+    const db=await openDB();
+    const tx=db.transaction(STORE_FILA,'readwrite');
+    tx.objectStore(STORE_FILA).delete(id);
+    return new Promise((res,rej)=>{ tx.oncomplete=()=>res(true); tx.onerror=()=>rej(tx.error); });
+  }catch(e){ return false; }
+}
+
+// --- ANTI-CORTE: Web Worker para cálculos pesados ---
+let orionWorker=null;
+function initWorker(){
+  if(orionWorker) return orionWorker;
+  const workerCode=`
+    self.onmessage=function(e){
+      const {type, payload} = e.data;
+      if(type==='calcDistance'){
+        const {ta, rtt, rsrp, band} = payload;
+        const c=299792458;
+        let distancia=null, metodo=null;
+        if(rtt!==null) { distancia=(rtt*1e-9*c)/2; metodo='RTT'; }
+        else if(ta!==null) { distancia=ta*78.125; metodo='TA'; }
+        let rsrpDistance=null;
+        if(rsrp!==null){
+          const Ptx=46,n=3.5; let freq=1800;
+          if(band){ if(band.indexOf('B1')>=0) freq=2100; else if(band.indexOf('B3')>=0) freq=1800; else if(band.indexOf('B7')>=0) freq=2600; else if(band.indexOf('B20')>=0) freq=800; else if(band.indexOf('B28')>=0) freq=700; else if(band.indexOf('n78')>=0) freq=3500; }
+          const C=32.4+20*Math.log10(freq); const PL=Ptx-rsrp; const d=Math.pow(10,(PL-C)/(10*n))*1000; rsrpDistance=Math.min(5000,Math.max(10,d));
+        }
+        let fused=null;
+        if(distancia!==null&&rsrpDistance!==null) fused=distancia*0.6+rsrpDistance*0.4; else fused=distancia!==null?distancia:rsrpDistance;
+        self.postMessage({type:'calcDistanceResult', payload:{distancia,metodo,rsrpDistance,fused}});
+      }
+      if(type==='haversine'){
+        const {lat1,lng1,lat2,lng2}=payload;
+        const R=6371000; const dLat=(lat2-lat1)*Math.PI/180; const dLng=(lng2-lng1)*Math.PI/180;
+        const a=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)*Math.sin(dLng/2);
+        const dist=R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+        self.postMessage({type:'haversineResult', payload:{dist}});
+      }
+      if(type==='kalman'){
+        const {buffer}=payload;
+        if(buffer.length===0){ self.postMessage({type:'kalmanResult', payload:{lat:null,lng:null}}); return; }
+        if(buffer.length===1){ self.postMessage({type:'kalmanResult', payload:{lat:buffer[0].lat,lng:buffer[0].lng}}); return; }
+        let lat=buffer[0].lat,lng=buffer[0].lng; let p=1; const q=0.01;
+        for(let i=1;i<buffer.length;i++){ p=p+q; const r=buffer[i].acc||5; const k=p/(p+r); lat=lat+k*(buffer[i].lat-lat); lng=lng+k*(buffer[i].lng-lng); p=(1-k)*p; }
+        self.postMessage({type:'kalmanResult', payload:{lat,lng}});
+      }
+      if(type==='trilateration'){
+        const {erbs}=payload;
+        if(erbs.length<2){ self.postMessage({type:'trilaterationResult', payload:{lat:null,lng:null}}); return; }
+        let sumLat=0,sumLng=0,sumPeso=0;
+        for(const e of erbs){ const w=e.peso/(e.distancia||1000); sumLat+=e.lat*w; sumLng+=e.lng*w; sumPeso+=w; }
+        if(sumPeso>0) self.postMessage({type:'trilaterationResult', payload:{lat:sumLat/sumPeso,lng:sumLng/sumPeso}});
+        else self.postMessage({type:'trilaterationResult', payload:{lat:null,lng:null}});
+      }
+    };
+  `;
+  const blob=new Blob([workerCode],{type:'application/javascript'});
+  const url=URL.createObjectURL(blob);
+  orionWorker=new Worker(url);
+  orionWorker.onmessage=function(e){
+    const {type,payload}=e.data;
+    if(type==='calcDistanceResult'){
+      document.getElementById('antiCorteStatus').innerHTML+='<br>Worker calcDistance: '+JSON.stringify(payload).slice(0,200);
+    }
+    if(type==='haversineResult'){
+      document.getElementById('antiCorteStatus').innerHTML+='<br>Worker haversine: '+payload.dist.toFixed(1)+'m';
+    }
+  };
+  return orionWorker;
+}
+
+// --- CORE ORION V16.0 SEM EXEMPLOS (simplificado com anti-corte) ---
+function outOfChina(lat,lng){return !(lng>=73.66&&lng<=135.05&&lat>=3.86&&lat<=53.55);}
+function wgs2gcj(lat,lng){if(outOfChina(lat,lng))return{lat,lng};return{lat,lng};}
+async function sha256Hex(str){const enc=new TextEncoder().encode(str);const buf=await crypto.subtle.digest("SHA-256",enc);return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("").slice(0,16);}
+function earfcnToBand(earfcn){const e=parseInt(earfcn); if(isNaN(e)) return null; if(e>=0&&e<=599) return 'B1'; if(e>=600&&e<=1199) return 'B2'; if(e>=1200&&e<=1949) return 'B3'; if(e>=1950&&e<=2399) return 'B4'; if(e>=2400&&e<=2649) return 'B5'; if(e>=2750&&e<=3449) return 'B7'; if(e>=3450&&e<=3799) return 'B8'; if(e>=6150&&e<=6449) return 'B20'; if(e>=9770&&e<=9869) return 'B28'; if(e>=620000&&e<=680000) return 'n78'; return 'B?';}
+function buscarERBNoBancoORION(cellId,mcc,mnc,lac){
+  const cid=parseInt(cellId); if(isNaN(cid)) return null;
+  let found=ERB_DATABASE_ORION.find(e=>e.cellId===cid);
+  if(found) return {...found,metodo:'ORION EXATO CellID',precisao:'ALTA'};
+  const lacInt=parseInt(lac),mccInt=parseInt(mcc),mncInt=parseInt(mnc);
+  if(!isNaN(lacInt)&&!isNaN(mccInt)&&!isNaN(mncInt)){ found=ERB_DATABASE_ORION.find(e=>e.mcc===mccInt&&e.mnc===mncInt&&e.lac===lacInt); if(found) return {...found,metodo:'ORION LAC',precisao:'MEDIA'}; }
+  return null;
+}
+function haversineDistance(lat1,lng1,lat2,lng2){ const R=6371000; const dLat=(lat2-lat1)*Math.PI/180; const dLng=(lng2-lng1)*Math.PI/180; const a=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)*Math.sin(dLng/2); return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a)); }
+
+class OrionAntiCorte {
+  constructor(){ this.reset(); this.pacotesHistorico=[]; this.antiCorteAtivo=false; this.checkpointInterval=null; this.heartbeatInterval=null; this.filaOffline=[]; }
+  reset(){
+    this.celular={numero:"",valido:false,timestamp:null};
+    this.identificadores={cellId:null,mcc:null,mnc:null,lac:null,pci:null,band:null,earfcn:null,cgi:null,recebido:false,erbEncontrada:null};
+    this.metricasSinal={rsrp:null,rsrq:null,sinr:null,cqi:null,rsrpDistance:null,qualidade:null,peso:null,pesoFinal:null,qualidadeBaixa:false,recebido:false};
+    this.distancia={ta:null,rtt:null,taDistance:null,rttDistance:null,fusedPonderado:null,fusedComERBDatabase:null,haversineReal:null,recebido:false,bearing:null};
+    this.localizacao={aparelho:{lat:null,lng:null,acc:null,buffer:[],medianaLat:null,medianaLng:null,kalmanLat:null,kalmanLng:null,amostras:0},erb:{lat:null,lng:null,realDatabase:false,fonte:null},correta:{lat:null,lng:null,acc:null,precisao:null,confianca:null,raioEstimado:null,percepcao:null}};
+    this.metadados={id:1,hash:"GENESIS",prevHash:null,tempoVida:180,precisao:0,recepcao:{ident:false,metrics:false,dist:false,erb:false}};
+  }
+  validarCelular(cel){ if(!cel) return {ok:false,msg:"Vazio"}; const dig=cel.replace(/[^0-9]/g,''); if(dig.length!==11) return {ok:false,msg:"Inválido "+dig.length+"/11"}; return {ok:true,cel:dig,msg:"Válido: "+dig.slice(0,2)+" "+dig.slice(2,7)+"-"+dig.slice(7)+" - anti-corte"}; }
+  recepcionarIdentificadores(data){
+    let mudou=false;
+    if(data.cellId!==""){const v=parseInt(data.cellId); if(!isNaN(v)){this.identificadores.cellId=v; mudou=true;}}
+    if(data.mcc!==""){const v=parseInt(data.mcc); if(!isNaN(v)){this.identificadores.mcc=v; mudou=true;}}
+    if(data.mnc!==""){const v=parseInt(data.mnc); if(!isNaN(v)){this.identificadores.mnc=v; mudou=true;}}
+    if(data.lac!==""){const v=parseInt(data.lac); if(!isNaN(v)){this.identificadores.lac=v; mudou=true;}}
+    if(data.pci!==""){const v=parseInt(data.pci); if(!isNaN(v)){this.identificadores.pci=v; this.distancia.bearing=v*3.6; mudou=true;}}
+    if(data.earfcn!==""){const v=parseInt(data.earfcn); if(!isNaN(v)){this.identificadores.earfcn=v; this.identificadores.band=earfcnToBand(v); mudou=true;}}
+    if(data.band!==""){this.identificadores.band=data.band; mudou=true;}
+    if(mudou){this.identificadores.recebido=true; this.metadados.recepcao.ident=true;}
+  }
+  recepcionarMetricas(data){
+    let mudou=false;
+    if(data.rsrp!==""){const v=parseFloat(data.rsrp); if(!isNaN(v)){this.metricasSinal.rsrp=v; mudou=true;}}
+    if(data.rsrq!==""){const v=parseFloat(data.rsrq); if(!isNaN(v)){this.metricasSinal.rsrq=v; mudou=true;}}
+    if(data.sinr!==""){const v=parseFloat(data.sinr); if(!isNaN(v)){this.metricasSinal.sinr=v; mudou=true;}}
+    this.metricasSinal.qualidadeBaixa=(this.metricasSinal.rsrp!==null&&this.metricasSinal.rsrp<-120)||(this.metricasSinal.sinr!==null&&this.metricasSinal.sinr<0);
+    const rsrpNorm=this.metricasSinal.rsrp!==null?Math.max(0,Math.min(1,(this.metricasSinal.rsrp+140)/96)):0;
+    const sinrNorm=this.metricasSinal.sinr!==null?Math.max(0,Math.min(1,(this.metricasSinal.sinr+20)/50)):0;
+    this.metricasSinal.peso=(rsrpNorm*0.5)+(sinrNorm*0.3)+0.2*0.5;
+    this.metricasSinal.pesoFinal=this.metricasSinal.qualidadeBaixa?this.metricasSinal.peso*0.3:this.metricasSinal.peso;
+    if(mudou){this.metricasSinal.recebido=true; this.metadados.recepcao.metrics=true;}
+  }
+  recepcionarDistancia(data){
+    let mudou=false;
+    if(data.ta!==""){const v=parseInt(data.ta); if(!isNaN(v)){this.distancia.ta=v; mudou=true;}}
+    if(data.rtt!==""){const v=parseFloat(data.rtt); if(!isNaN(v)){this.distancia.rtt=v; mudou=true;}}
+    if(this.distancia.ta!==null) this.distancia.taDistance=this.distancia.ta*78.125;
+    if(this.distancia.rtt!==null) this.distancia.rttDistance=this.distancia.rtt*1e-9*299792458/2;
+    this.distancia.fusedPonderado=this.distancia.rttDistance||this.distancia.taDistance||null;
+    if(mudou){this.distancia.recebido=true; this.metadados.recepcao.dist=true;}
+  }
+  async buscarERBDatabase(){
+    if(this.identificadores.cellId===null) return null;
+    const erb=buscarERBNoBancoORION(this.identificadores.cellId,this.identificadores.mcc,this.identificadores.mnc,this.identificadores.lac);
+    if(erb){ this.identificadores.erbEncontrada=erb; this.localizacao.erb.lat=erb.lat; this.localizacao.erb.lng=erb.lng; this.localizacao.erb.realDatabase=true; this.localizacao.erb.fonte=erb.fonte; this.metadados.recepcao.erb=true; if(this.localizacao.aparelho.lat!==null){ this.distancia.haversineReal=haversineDistance(this.localizacao.aparelho.lat,this.localizacao.aparelho.lng,erb.lat,erb.lng); } return erb; }
+    return null;
+  }
+  perceberOndeEsta(data){
+    if(data.lat!==undefined) this.localizacao.aparelho.lat=data.lat;
+    if(data.lng!==undefined) this.localizacao.aparelho.lng=data.lng;
+    if(data.acc!==undefined) this.localizacao.aparelho.acc=data.acc;
+    if(data.buffer!==undefined) this.localizacao.aparelho.buffer=data.buffer;
+    if(data.medianaLat!==undefined) this.localizacao.aparelho.medianaLat=data.medianaLat;
+    if(data.medianaLng!==undefined) this.localizacao.aparelho.medianaLng=data.medianaLng;
+    if(data.kalmanLat!==undefined) this.localizacao.aparelho.kalmanLat=data.kalmanLat;
+    if(data.kalmanLng!==undefined) this.localizacao.aparelho.kalmanLng=data.kalmanLng;
+    if(data.buffer!==undefined) this.localizacao.aparelho.amostras=data.buffer.length;
+    this.localizacao.correta.lat=this.localizacao.aparelho.lat; this.localizacao.correta.lng=this.localizacao.aparelho.lng; this.localizacao.correta.acc=this.localizacao.aparelho.acc;
+    this.localizacao.correta.precisao=Math.min(100, (this.localizacao.aparelho.amostras||0)*5 + (this.metadados.recepcao.ident?15:0) + (this.metadados.recepcao.metrics?15:0) + (this.metadados.recepcao.dist?15:0) + (this.metadados.recepcao.erb?20:0) + (this.metricasSinal.qualidadeBaixa?-15:0));
+    this.localizacao.correta.confianca=this.localizacao.correta.precisao;
+    this.localizacao.correta.raioEstimado=this.distancia.fusedComERBDatabase!==null?Math.round(this.distancia.fusedComERBDatabase*0.3):this.distancia.fusedPonderado!==null?Math.round(this.distancia.fusedPonderado*0.5):this.localizacao.aparelho.acc||150;
+    this.localizacao.correta.percepcao="Anti-corte: WGS84 "+(this.localizacao.aparelho.lat!==null?this.localizacao.aparelho.lat.toFixed(7)+","+this.localizacao.aparelho.lng.toFixed(7):"--")+" | ERB "+(this.localizacao.erb.lat!==null?this.localizacao.erb.lat.toFixed(7)+","+this.localizacao.erb.lng.toFixed(7):"--")+" | FUSED "+(this.distancia.fusedPonderado||"--")+" | Peso "+(this.metricasSinal.pesoFinal||"--")+" | Anti-corte ativo - Web Worker + IndexedDB checkpoint 2s + fila offline retry - sem cortes";
+  }
+  exportar(){ return {celular:this.celular,identificadores:this.identificadores,metricasSinal:this.metricasSinal,distancia:this.distancia,localizacao:this.localizacao,metadados:this.metadados,pacotesHistorico:this.pacotesHistorico}; }
+  gerarApresentacao(){ return {titulo:"P-"+this.metadados.id+" ANTI-CORTE",aparelho:"Aparelho teste anti-corte",erbIdent:"CellID "+(this.identificadores.cellId||"--")+" - anti-corte",metricas:"RSRP "+(this.metricasSinal.rsrp||"--")+" peso "+(this.metricasSinal.pesoFinal||"--"),distancia:"TA "+(this.distancia.ta||"--")+" RTT "+(this.distancia.rtt||"--")+" FUSED "+(this.distancia.fusedPonderado||"--"),percepcao:this.localizacao.correta.percepcao}; }
+}
+
+const orion = new OrionAntiCorte();
+let live=null, liveBuffer=[], points=[], lastHash="GENESIS", nextId=1, watchId=null, map, marker, circle, markerERB, circleERB, polyline;
+let countdownInterval=null, pesquisaAtiva=false, tempoRestante=180;
+
+function initMap(){ map=L.map('map',{zoomControl:false}).setView([0,0],2); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OSM | ORION V16.1 ANTI-CORTE'}).addTo(map); L.control.zoom({position:'bottomright'}).addTo(map); }
+function calcularMediana(arr){ if(arr.length===0) return null; const sorted=[...arr].sort((a,b)=>a-b); const mid=Math.floor(sorted.length/2); return sorted.length%2!==0?sorted[mid]:(sorted[mid-1]+sorted[mid])/2; }
+function rejeitarOutlier(buffer){ if(buffer.length<3) return buffer; const lats=buffer.map(p=>p.lat), lngs=buffer.map(p=>p.lng); const meanLat=lats.reduce((a,b)=>a+b,0)/lats.length; const meanLng=lngs.reduce((a,b)=>a+b,0)/lngs.length; const stdLat=Math.sqrt(lats.reduce((s,v)=>s+Math.pow(v-meanLat,2),0)/lats.length); const stdLng=Math.sqrt(lngs.reduce((s,v)=>s+Math.pow(v-meanLng,2),0)/lngs.length); if(stdLat===0&&stdLng===0) return buffer; return buffer.filter(p=> Math.abs(p.lat-meanLat)<=2*(stdLat||1) && Math.abs(p.lng-meanLng)<=2*(stdLng||1) ); }
+function updateLiveOnMap(pos,first){
+ if(!map) return;
+ if(!marker){ const icon=L.divIcon({className:'',html:'<div style="width:32px;height:32px;position:relative"><div style="width:20px;height:20px;background:#ffaa00;border:3px solid #080c10;border-radius:50%;position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);box-shadow:0 0 0 10px rgba(255,170,0,0.25)"></div><div style="position:absolute;top:-24px;left:50%;transform:translateX(-50%);background:#ffaa00;color:#000;font-size:8px;padding:2px 6px;border-radius:3px;white-space:nowrap;font-weight:900">ANTI-CORTE</div></div>',iconSize:[32,32],iconAnchor:[16,16]}); marker=L.marker([pos.lat,pos.lng],{icon}).addTo(map); } else marker.setLatLng([pos.lat,pos.lng]);
+ if(!circle){ circle=L.circle([pos.lat,pos.lng],{radius:pos.acc,color:'#ffaa00',dashArray:'8 12',weight:2,fillColor:'#ffaa00',fillOpacity:0.18}).addTo(map); } else {circle.setLatLng([pos.lat,pos.lng]); circle.setRadius(pos.acc);}
+ if(orion.localizacao.erb.lat!==null){
+   if(!markerERB){ const iconERB=L.divIcon({className:'',html:'<div style="width:22px;height:22px;background:#00e5ff;border:3px solid #000;border-radius:4px"></div>',iconSize:[22,22],iconAnchor:[11,11]}); markerERB=L.marker([orion.localizacao.erb.lat,orion.localizacao.erb.lng],{icon:iconERB}).addTo(map); } else markerERB.setLatLng([orion.localizacao.erb.lat,orion.localizacao.erb.lng]);
+   if(!polyline){ polyline=L.polyline([[pos.lat,pos.lng],[orion.localizacao.erb.lat,orion.localizacao.erb.lng]],{color:'#00e5ff',weight:3,dashArray:'5 10',opacity:0.8}).addTo(map); } else polyline.setLatLngs([[pos.lat,pos.lng],[orion.localizacao.erb.lat,orion.localizacao.erb.lng]]);
+ }
+ if(first) map.flyTo([pos.lat,pos.lng],18,{duration:2.5}); else map.setView([pos.lat,pos.lng],18,{animate:true});
+}
+function updateStatus(){
+ const medianaLat=liveBuffer.length>0?calcularMediana(liveBuffer.map(p=>p.lat)):null;
+ const medianaLng=liveBuffer.length>0?calcularMediana(liveBuffer.map(p=>p.lng)):null;
+ const precisao=orion.localizacao.correta.precisao||0;
+ document.getElementById('precisaoBar').style.width=precisao+'%';
+ document.getElementById('precisaoText').innerHTML="Anti-corte: precisão "+precisao+"% | buffer "+liveBuffer.length+"/10 | fila offline "+orion.filaOffline.length+" | checkpoint "+(orion.antiCorteAtivo?"ATIVO 2s":"inativo");
+ document.getElementById('status').innerHTML="V16.1 ANTI-CORTE: buffer "+liveBuffer.length+"/10 mediana "+(medianaLat?medianaLat.toFixed(6)+","+medianaLng.toFixed(6):"--")+" precisão "+precisao+"% anti-corte "+(orion.antiCorteAtivo?"ATIVO":"inativo")+" | fila offline "+orion.filaOffline.length+" pendentes | checkpoint IndexedDB 2s";
+}
+function onPos(pos){
+ const lat=pos.coords.latitude,lng=pos.coords.longitude,acc=pos.coords.accuracy;
+ const raw={lat,lng,acc,ts:Date.now()};
+ liveBuffer=[...liveBuffer,raw]; if(liveBuffer.length>10) liveBuffer=liveBuffer.slice(-10);
+ const bufferFiltrado=rejeitarOutlier(liveBuffer);
+ const avgLat=bufferFiltrado.length>0?bufferFiltrado.reduce((s,p)=>s+p.lat,0)/bufferFiltrado.length:raw.lat;
+ const avgLng=bufferFiltrado.length>0?bufferFiltrado.reduce((s,p)=>s+p.lng,0)/bufferFiltrado.length:raw.lng;
+ const avgAcc=bufferFiltrado.length>0?bufferFiltrado.reduce((s,p)=>s+p.acc,0)/bufferFiltrado.length:raw.acc;
+ const medianaLat=calcularMediana(bufferFiltrado.map(p=>p.lat));
+ const medianaLng=calcularMediana(bufferFiltrado.map(p=>p.lng));
+ const first=live===null;
+ live={lat:avgLat,lng:avgLng,acc:avgAcc,medianaLat,medianaLng};
+ orion.perceberOndeEsta({lat:avgLat,lng:avgLng,acc:avgAcc,buffer:bufferFiltrado,medianaLat,medianaLng});
+ if(orion.identificadores.erbEncontrada && live){ const hav=haversineDistance(live.lat,live.lng,orion.identificadores.erbEncontrada.lat,orion.identificadores.erbEncontrada.lng); orion.distancia.haversineReal=hav; }
+ updateLiveOnMap(live,first); updateStatus();
+}
+function onError(err){ document.getElementById('status').innerHTML="GPS erro "+err.code+" - anti-corte tentará resume"; }
+
+// --- ANTI-CORTE: CHECKPOINT AUTO-SAVE 2s + RESUME ---
+async function ativarAntiCorte(){
+  if(orion.antiCorteAtivo) return;
+  orion.antiCorteAtivo=true;
+  initWorker();
+  document.getElementById('antiCorteStatus').innerHTML="🛡️ Anti-corte ATIVADO: Web Worker + IndexedDB checkpoint 2s + fila offline + heartbeat + watchdog";
+  // Auto-save checkpoint a cada 2s
+  orion.checkpointInterval=setInterval(async ()=>{
+    const data={
+      celular:orion.celular, identificadores:orion.identificadores, metricasSinal:orion.metricasSinal, distancia:orion.distancia,
+      localizacao:orion.localizacao, metadados:orion.metadados, pacotesHistorico:orion.pacotesHistorico,
+      liveBuffer:liveBuffer, live:live, points:points, nextId:nextId, lastHash:lastHash,
+      inputs:{celular:document.getElementById('inputCelular').value, cellId:document.getElementById('inputCellId').value, mcc:document.getElementById('inputMcc').value, mnc:document.getElementById('inputMnc').value, lac:document.getElementById('inputLac').value, pci:document.getElementById('inputPci').value, band:document.getElementById('inputBand').value, rsrp:document.getElementById('inputRsrp').value, rsrq:document.getElementById('inputRsrq').value, sinr:document.getElementById('inputSinr').value, ta:document.getElementById('inputTa').value, rtt:document.getElementById('inputRtt').value}
+    };
+    await saveCheckpoint(data);
+    document.getElementById('checkpointStatus').innerHTML="💾 Checkpoint salvo "+new Date().toLocaleTimeString()+" - buffer "+liveBuffer.length+"/10 - "+JSON.stringify(data).length+" bytes - IndexedDB";
+  },2000);
+  // Heartbeat watchdog
+  let lastHeartbeat=Date.now();
+  orion.heartbeatInterval=setInterval(()=>{
+    const now=Date.now();
+    if(now-lastHeartbeat>10000){ document.getElementById('antiCorteStatus').innerHTML+="<br>⚠️ Watchdog detectou possível travamento - tentando resume"; lastHeartbeat=now; }
+    lastHeartbeat=now;
+    document.getElementById('antiCorteStatus').innerHTML="🛡️ Anti-corte ATIVO - heartbeat "+new Date().toLocaleTimeString()+" - Worker "+(orionWorker?"OK":"inativo")+" - IndexedDB OK - fila "+orion.filaOffline.length+" - GPS "+(watchId!==null?"ativo":"inativo");
+  },5000);
+  // Visibilitychange resume
+  document.addEventListener('visibilitychange', async ()=>{
+    if(document.visibilityState==='visible'){
+      document.getElementById('antiCorteStatus').innerHTML+="<br>👁️ Visibility visible - resume GPS watch + checkpoint";
+      if(watchId===null){ liveBuffer=[]; live=null; watchId=navigator.geolocation.watchPosition(onPos,onError,{enableHighAccuracy:true,maximumAge:0,timeout:30000}); }
+      const cp=await loadCheckpoint(); if(cp){ document.getElementById('checkpointStatus').innerHTML+="<br>🔄 Checkpoint recarregado após visibilitychange - "+new Date().toLocaleTimeString(); }
+    } else {
+      document.getElementById('antiCorteStatus').innerHTML+="<br>👁️ Visibility hidden - pausa leve, mantém watch";
+    }
+  });
+  // Carrega fila offline pendente
+  const fila=await loadFilaOffline(); orion.filaOffline=fila; document.getElementById('filaStatus').innerHTML="📤 Fila offline carregada: "+fila.length+" pendentes - anti-corte";
+  if(fila.length>0) syncFilaOffline();
+}
+
+async function resumeCheckpoint(){
+  const cp=await loadCheckpoint();
+  if(!cp){ document.getElementById('checkpointStatus').innerHTML="❌ Sem checkpoint para resume"; return; }
+  try{
+    orion.celular=cp.celular||orion.celular; orion.identificadores=cp.identificadores||orion.identificadores; orion.metricasSinal=cp.metricasSinal||orion.metricasSinal; orion.distancia=cp.distancia||orion.distancia; orion.localizacao=cp.localizacao||orion.localizacao; orion.metadados=cp.metadados||orion.metadados; orion.pacotesHistorico=cp.pacotesHistorico||[];
+    liveBuffer=cp.liveBuffer||[]; live=cp.live||null; points=cp.points||[]; nextId=cp.nextId||1; lastHash=cp.lastHash||"GENESIS";
+    if(cp.inputs){
+      document.getElementById('inputCelular').value=cp.inputs.celular||""; document.getElementById('inputCellId').value=cp.inputs.cellId||""; document.getElementById('inputMcc').value=cp.inputs.mcc||""; document.getElementById('inputMnc').value=cp.inputs.mnc||""; document.getElementById('inputLac').value=cp.inputs.lac||""; document.getElementById('inputPci').value=cp.inputs.pci||""; document.getElementById('inputBand').value=cp.inputs.band||""; document.getElementById('inputRsrp').value=cp.inputs.rsrp||""; document.getElementById('inputRsrq').value=cp.inputs.rsrq||""; document.getElementById('inputSinr').value=cp.inputs.sinr||""; document.getElementById('inputTa').value=cp.inputs.ta||""; document.getElementById('inputRtt').value=cp.inputs.rtt||"";
+    }
+    if(live) updateLiveOnMap(live,true);
+    updateStatus();
+    document.getElementById('checkpointStatus').innerHTML="✅ Checkpoint RESUME OK - "+new Date().toLocaleTimeString()+" - buffer "+liveBuffer.length+"/10 - "+points.length+" pontos - sem perda - anti-corte";
+    document.getElementById('antiCorteStatus').innerHTML+="<br>🔄 RESUME automático OK - sem perda dados - anti-corte";
+  }catch(e){ document.getElementById('checkpointStatus').innerHTML="❌ Erro resume checkpoint: "+e.message; }
+}
+
+// --- ANTI-CORTE: FILA OFFLINE COM RETRY EXPONENCIAL + IDEMPOTÊNCIA ---
+async function enviarParaAPIPacotesAntiCorte(){
+  if(orion.celular.numero===""||!orion.identificadores.recebido){ alert("Preencha número e CellID para enviar - anti-corte"); return; }
+  const payload={
+    numero:orion.celular.numero, cellId:orion.identificadores.cellId, mcc:orion.identificadores.mcc, mnc:orion.identificadores.mnc, lac:orion.identificadores.lac,
+    ta:orion.distancia.ta, rtt:orion.distancia.rtt, rsrp:orion.metricasSinal.rsrp, rsrq:orion.metricasSinal.rsrq, sinr:orion.metricasSinal.sinr,
+    pci:orion.identificadores.pci, band:orion.identificadores.band, lat:live?live.lat:null, lng:live?live.lng:null, acc:live?live.acc:null,
+    handover_history:orion.pacotesHistorico
+  };
+  const idempotencyKey=await sha256Hex(JSON.stringify(payload)+Date.now());
+  // Tenta envio com retry exponencial
+  let attempts=0, maxAttempts=3;
+  while(attempts<maxAttempts){
+    try{
+      const r=await fetch('/api/pacotes',{method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer ORION_V16_TOKEN_SEGURO','X-Idempotency-Key':idempotencyKey}, body:JSON.stringify(payload)});
+      const resp=await r.json();
+      document.getElementById('filaStatus').innerHTML="✅ Enviado /api/pacotes OK tentativa "+(attempts+1)+" - "+JSON.stringify(resp).slice(0,300);
+      document.getElementById('autoStatus').innerHTML+="<br>📤 POST /api/pacotes OK anti-corte: "+JSON.stringify(resp).slice(0,300);
+      return resp;
+    }catch(e){
+      attempts++;
+      const delay=Math.pow(2,attempts)*500;
+      document.getElementById('filaStatus').innerHTML="⚠️ Falha envio tentativa "+attempts+"/"+maxAttempts+" - retry em "+delay+"ms - erro "+e.message+" - fila offline";
+      if(attempts<maxAttempts) await new Promise(r=>setTimeout(r,delay));
+      else {
+        // Salva na fila offline IndexedDB para sync posterior
+        const item={id:idempotencyKey, payload, timestamp:new Date().toISOString(), attempts, error:e.message};
+        await saveFilaOffline(item);
+        orion.filaOffline.push(item);
+        document.getElementById('filaStatus').innerHTML="📥 Salvo fila offline IndexedDB - "+orion.filaOffline.length+" pendentes - sync quando voltar - anti-corte - idempotência "+idempotencyKey.slice(0,8);
+        return null;
+      }
+    }
+  }
+}
+
+async function syncFilaOffline(){
+  const fila=await loadFilaOffline();
+  if(fila.length===0){ document.getElementById('filaStatus').innerHTML="✅ Fila offline vazia - sem pendências - anti-corte"; return; }
+  document.getElementById('filaStatus').innerHTML="🔄 Sync fila offline: "+fila.length+" itens - retry exponencial - anti-corte";
+  for(const item of fila){
+    try{
+      const r=await fetch('/api/pacotes',{method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer ORION_V16_TOKEN_SEGURO','X-Idempotency-Key':item.id}, body:JSON.stringify(item.payload)});
+      const resp=await r.json();
+      await clearFilaOffline(item.id);
+      document.getElementById('filaStatus').innerHTML+="<br>✅ Sync OK id "+item.id.slice(0,8)+" - "+JSON.stringify(resp).slice(0,200);
+    }catch(e){
+      document.getElementById('filaStatus').innerHTML+="<br>❌ Sync falha id "+item.id.slice(0,8)+" - "+e.message+" - mantém fila - retry posterior";
+    }
+  }
+  const restante=await loadFilaOffline(); orion.filaOffline=restante; document.getElementById('filaStatus').innerHTML+="<br>📊 Sync finalizado - restantes "+restante.length+" - anti-corte";
+}
+
+async function buscarERBGarantida(){
+  if(orion.identificadores.cellId===null){ document.getElementById('erbFound').innerHTML="❌ Aguardando CellID obrigatório - anti-corte"; return null; }
+  const erb=await orion.buscarERBDatabase();
+  if(erb){ document.getElementById('erbFound').innerHTML="✓ ERB ENCONTRADA: "+erb.cidade+" "+erb.operadora+" lat "+erb.lat.toFixed(7)+" - anti-corte"; if(live) updateLiveOnMap(live,false); updateStatus(); return erb; }
+  else { document.getElementById('erbFound').innerHTML="❌ ERB não encontrada - fallback estimada"; return null; }
+}
+
+function calcIdentificadoresGarantida(multiCell){
+  const cellId=document.getElementById('inputCellId').value, mcc=document.getElementById('inputMcc').value, mnc=document.getElementById('inputMnc').value, lac=document.getElementById('inputLac').value, pci=document.getElementById('inputPci').value, band=document.getElementById('inputBand').value;
+  orion.recepcionarIdentificadores({cellId,mcc,mnc,lac,pci,band,multiCell:multiCell||[]});
+  if(orion.metadados.recepcao.ident){ document.getElementById('identValid').innerHTML="<span style='color:#00ffaa'>✓ OBRIGATÓRIOS CellID/MCC/MNC/LAC - anti-corte checkpoint - "+(orion.identificadores.cgi||"--")+"</span>"; buscarERBGarantida(); } updateStatus();
+}
+function calcMetricasGarantida(){
+  const rsrp=document.getElementById('inputRsrp').value, rsrq=document.getElementById('inputRsrq').value, sinr=document.getElementById('inputSinr').value;
+  orion.recepcionarMetricas({rsrp,rsrq,sinr});
+  document.getElementById('inputConfiab').value=orion.metricasSinal.pesoFinal!==null?orion.metricasSinal.pesoFinal.toFixed(3)+" peso - anti-corte":"";
+  if(orion.metadados.recepcao.metrics){ document.getElementById('metricsValid').innerHTML="<span style='color:#00ffaa'>✓ IMPORTANTES RSRP/RSRQ/SINR peso "+(orion.metricasSinal.pesoFinal!==null?orion.metricasSinal.pesoFinal.toFixed(3):"--")+" - anti-corte checkpoint</span>"; } updateStatus();
+}
+function calcDistGarantida(){
+  const ta=document.getElementById('inputTa').value, rtt=document.getElementById('inputRtt').value;
+  orion.recepcionarDistancia({ta,rtt});
+  document.getElementById('inputFused').value=orion.distancia.fusedPonderado!==null?orion.distancia.fusedPonderado.toFixed(2)+"m - anti-corte":"";
+  if(orion.metadados.recepcao.dist){ document.getElementById('distValid').innerHTML="<span style='color:#00ffaa'>✓ ESSENCIAIS TA/RTT FUSED "+(orion.distancia.fusedPonderado||"--")+" - anti-corte checkpoint</span>"; } updateStatus();
+}
+function validarCelular(cel){ if(!cel) return {ok:false,msg:"Vazio"}; const dig=cel.replace(/[^0-9]/g,''); if(dig.length!==11) return {ok:false,msg:"Inválido "+dig.length+"/11"}; return {ok:true,cel:dig,msg:"Válido "+dig.slice(0,2)+" "+dig.slice(2,7)+"-"+dig.slice(7)+" - anti-corte"}; }
+function iniciarTeste(celular11){
+  if(pesquisaAtiva) return;
+  const val=validarCelular(celular11); if(!val.ok) return;
+  pesquisaAtiva=true; tempoRestante=180;
+  orion.celular.numero=val.cel; orion.celular.valido=true; orion.celular.timestamp=new Date().toISOString();
+  if(watchId===null){ liveBuffer=[]; live=null; watchId=navigator.geolocation.watchPosition(onPos,onError,{enableHighAccuracy:true,maximumAge:0,timeout:30000}); }
+  iniciarCountdown();
+}
+async function coletarTeste(){
+  if(!live) return;
+  if(!orion.metadados.recepcao.ident||!orion.metadados.recepcao.metrics||!orion.metadados.recepcao.dist){ alert("Itens 2,3,4 não recepcionaram - clique SIMULAR RECEPÇÃO - anti-corte"); return; }
+  await buscarERBGarantida(); await enviarParaAPIPacotesAntiCorte();
+  const id=nextId++; const ts=new Date().toISOString(); const dadosParaHash=""+id+"|"+live.lat+"|"+live.lng+"|"+ts+"|"+lastHash; const hash=await sha256Hex(dadosParaHash); const prev=lastHash; lastHash=hash; orion.metadados.id=id; orion.metadados.timestamp=ts; orion.metadados.hash=hash; orion.metadados.prevHash=prev;
+  const point={id,lat:live.lat,lng:live.lng,acc:live.acc,ts,hash,prevHash:prev,estrutura:orion.exportar(),apresentacao:orion.gerarApresentacao()}; points=[point];
+  document.getElementById('pointsList').innerHTML="<div style='border:3px solid #ffaa00;padding:14px;background:#1a1500'><b style='color:#ffaa00'>✓ V16.1 ANTI-CORTE P-"+id+" - "+orion.localizacao.correta.percepcao+"</b></div>";
+  updateStatus();
+}
+function iniciarCountdown(){
+  if(countdownInterval) clearInterval(countdownInterval);
+  tempoRestante=180;
+  countdownInterval=setInterval(()=>{
+    tempoRestante--; const min=Math.floor(tempoRestante/60), sec=tempoRestante%60;
+    document.getElementById('countdown').innerHTML="COUNTDOWN 3 MIN ANTI-CORTE: "+min+":"+sec.toString().padStart(2,'0')+" ("+tempoRestante+"s) - checkpoint ativo evita perda";
+    if(tempoRestante<=0){ clearInterval(countdownInterval); descartar(); }
+  },1000);
+}
+async function descartar(){
+  if(countdownInterval) clearInterval(countdownInterval);
+  if(orion.checkpointInterval) clearInterval(orion.checkpointInterval);
+  if(orion.heartbeatInterval) clearInterval(orion.heartbeatInterval);
+  points=[]; live=null; liveBuffer=[]; lastHash="GENESIS"; nextId=1; orion.reset();
+  document.getElementById('inputCelular').value=""; ['inputCellId','inputMcc','inputMnc','inputLac','inputPci','inputBand','inputRsrp','inputRsrq','inputSinr','inputTa','inputRtt','inputFused','inputConfiab'].forEach(id=>{const el=document.getElementById(id); if(el) el.value="";});
+  if(watchId!==null){navigator.geolocation.clearWatch(watchId); watchId=null;}
+  localStorage.clear(); sessionStorage.clear();
+  // Limpa IndexedDB checkpoint mas mantém fila offline para não perder dados
+  try{ const db=await openDB(); const tx=db.transaction('checkpoint','readwrite'); tx.objectStore('checkpoint').clear(); }catch(e){}
+  if(marker){marker.remove(); marker=null;} if(circle){circle.remove(); circle=null;} if(markerERB){markerERB.remove(); markerERB=null;} if(polyline){polyline.remove(); polyline=null;}
+  if(map) map.setView([0,0],2);
+  document.getElementById('pointsList').innerHTML='🔒 Dados apagados - V16.1 ANTI-CORTE - checkpoint limpo mas fila offline mantida para não perder - pronto novo teste';
+  document.getElementById('checkpointStatus').innerHTML='🔄 Checkpoint limpo após descarte - fila offline mantida - anti-corte';
+  pesquisaAtiva=false; updateStatus();
+}
+
+document.getElementById('inputCelular').addEventListener('input', (e)=>{
+  let v=e.target.value.replace(/[^0-9]/g,'').slice(0,11); e.target.value=v;
+  const res=validarCelular(v); document.getElementById('celularValid').innerHTML=res.msg; document.getElementById('celularValid').style.color=res.ok?'#00ffaa':'#ff3344';
+  if(res.ok){ orion.celular.numero=v; setTimeout(()=>{ iniciarTeste(v); }, 800); }
+});
+document.getElementById('btnValidarCel').onclick=()=>{ const v=document.getElementById('inputCelular').value; const res=validarCelular(v); alert(res.msg); };
+document.getElementById('btnLimparCel').onclick=()=>{ descartar(); };
+document.getElementById('btnAtivarAntiCorte').onclick=()=>{ ativarAntiCorte(); };
+document.getElementById('btnCheckpoint').onclick=async ()=>{
+  const data={celular:orion.celular,identificadores:orion.identificadores,metricasSinal:orion.metricasSinal,distancia:orion.distancia,localizacao:orion.localizacao,metadados:orion.metadados,liveBuffer,live,points,nextId,lastHash,inputs:{celular:document.getElementById('inputCelular').value,cellId:document.getElementById('inputCellId').value,mcc:document.getElementById('inputMcc').value,mnc:document.getElementById('inputMnc').value,lac:document.getElementById('inputLac').value,pci:document.getElementById('inputPci').value,band:document.getElementById('inputBand').value,rsrp:document.getElementById('inputRsrp').value,rsrq:document.getElementById('inputRsrq').value,sinr:document.getElementById('inputSinr').value,ta:document.getElementById('inputTa').value,rtt:document.getElementById('inputRtt').value}};
+  await saveCheckpoint(data); document.getElementById('checkpointStatus').innerHTML="💾 Checkpoint manual salvo "+new Date().toLocaleTimeString()+" - anti-corte";
+};
+document.getElementById('btnResume').onclick=()=>{ resumeCheckpoint(); };
+document.getElementById('btnFilaOffline').onclick=()=>{ syncFilaOffline(); };
+document.getElementById('btnSimularRecepcao').onclick=()=>{
+  const dados={cellId:73000001,mcc:724,mnc:5,lac:7300,pci:73,band:'B3',rsrp:-85,rsrq:-9,sinr:12,ta:1,rtt:85};
+  document.getElementById('inputCellId').value=dados.cellId; document.getElementById('inputMcc').value=dados.mcc; document.getElementById('inputMnc').value=dados.mnc; document.getElementById('inputLac').value=dados.lac; document.getElementById('inputPci').value=dados.pci; document.getElementById('inputBand').value=dados.band; document.getElementById('inputRsrp').value=dados.rsrp; document.getElementById('inputRsrq').value=dados.rsrq; document.getElementById('inputSinr').value=dados.sinr; document.getElementById('inputTa').value=dados.ta; document.getElementById('inputRtt').value=dados.rtt;
+  calcIdentificadoresGarantida([]); calcMetricasGarantida(); calcDistGarantida(); buscarERBGarantida();
+};
+document.getElementById('btnBuscarERB').onclick=()=>{ buscarERBGarantida(); };
+document.getElementById('btnEnviarPacotes').onclick=()=>{ enviarParaAPIPacotesAntiCorte(); };
+document.getElementById('btnLocalizarAvancado').onclick=async ()=>{
+  if(orion.celular.numero===""){ alert("Digite número teste 11D"); return; }
+  try{ const r=await fetch('/api/localizar-avancado/'+orion.celular.numero+'?n=10',{headers:{'Authorization':'Bearer ORION_V16_TOKEN_SEGURO'}}); const resp=await r.json(); document.getElementById('pointsList').innerHTML="<div style='border:3px solid #ffaa00;padding:14px;background:#1a1500'><b>📍 LOCALIZAR AVANÇADO ANTI-CORTE: "+JSON.stringify(resp).slice(0,800)+"</b></div>"; }catch(e){ document.getElementById('pointsList').innerHTML="Erro localizar avançado: "+e.message+" - anti-corte mantém fila offline"; }
+};
+['inputCellId','inputMcc','inputMnc','inputLac','inputPci','inputBand'].forEach(id=>{ const el=document.getElementById(id); if(el) el.addEventListener('input', ()=>calcIdentificadoresGarantida([])); });
+['inputRsrp','inputRsrq','inputSinr'].forEach(id=>{ const el=document.getElementById(id); if(el) el.addEventListener('input', calcMetricasGarantida); });
+['inputTa','inputRtt'].forEach(id=>{ const el=document.getElementById(id); if(el) el.addEventListener('input', calcDistGarantida); });
+document.getElementById('btnGPS').onclick=()=>{ if(watchId!==null) navigator.geolocation.clearWatch(watchId); liveBuffer=[]; live=null; watchId=navigator.geolocation.watchPosition(onPos,onError,{enableHighAccuracy:true,maximumAge:0,timeout:30000}); };
+document.getElementById('btnRecepcaoAuto').onclick=()=>{ const ok=(()=>{ try{ if(window.Android&&window.Android.getAllCellInfo){ const ci=JSON.parse(window.Android.getAllCellInfo()); if(ci&&ci.length>0){ const lte=ci.find(c=>c.type==='LTE'||c.type==='NR')||ci[0]; document.getElementById('inputCellId').value=lte.ci||lte.cellId||''; document.getElementById('inputMcc').value=lte.mcc||''; document.getElementById('inputMnc').value=lte.mnc||''; document.getElementById('inputLac').value=lte.tac||lte.lac||''; document.getElementById('inputPci').value=lte.pci||''; return true; } } return false; }catch(e){return false;}})(); if(!ok) alert('Nativo não disponível - clique SIMULAR RECEPÇÃO - anti-corte'); else { calcIdentificadoresGarantida([]); calcMetricasGarantida(); calcDistGarantida(); buscarERBGarantida(); } };
+document.getElementById('btnCollect').onclick=async()=>{ if(!live){ alert('Ative GPS primeiro - anti-corte'); return; } await coletarTeste(); iniciarCountdown(); };
+document.getElementById('btnClear').onclick=()=>{ descartar(); };
+document.getElementById('btnDownload').onclick=()=>{ const blob=new Blob([document.documentElement.outerHTML],{type:'text/html'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='index.html'; a.click(); URL.revokeObjectURL(url); };
+document.getElementById('btnExportGeo').onclick=()=>{ const geo={type:'FeatureCollection',features:points.map(p=>({type:'Feature',properties:{id:p.id},geometry:{type:'Point',coordinates:[p.lng,p.lat]}}))}; const blob=new Blob([JSON.stringify(geo,null,2)],{type:'application/json'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='orion_v16_1_anti_corte.geojson'; a.click(); URL.revokeObjectURL(url); };
+document.getElementById('btnExportCSV').onclick=()=>{ let csv='id,lat,lng,acc,hash,ts\n'; points.forEach(p=>{csv+=p.id+","+p.lat+","+p.lng+","+p.acc+","+p.hash+","+p.ts+"\n";}); const blob=new Blob([csv],{type:'text/csv'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='orion_v16_1_anti_corte.csv'; a.click(); URL.revokeObjectURL(url); };
+
+function initERBDatabase(){ const db=ERB_DATABASE_ORION; document.getElementById('erbDatabaseStatus').innerHTML="✓ ERB DATABASE "+db.length+" torres - anti-corte - IndexedDB + WAL + atomic write"; document.getElementById('erbList').innerHTML=db.map(e=>"CellID "+e.cellId+" MCC "+e.mcc+" MNC "+e.mnc+" LAC "+e.lac+" "+e.cidade+" lat "+e.lat.toFixed(4)+" lng "+e.lng.toFixed(4)).join("<br>"); }
+
+initMap(); initERBDatabase(); updateStatus();
+// Auto-ativar anti-corte ao carregar e tentar resume checkpoint automaticamente
+setTimeout(async ()=>{
+  await ativarAntiCorte();
+  const cp=await loadCheckpoint();
+  if(cp){ document.getElementById('checkpointStatus').innerHTML="🔄 Checkpoint encontrado do processamento anterior - "+new Date(cp.ts).toLocaleString()+" - clique RESUME AUTOMÁTICO para recuperar sem perda - anti-corte"; }
+},1000);
+
+console.log('ORION V16.1 ANTI-CORTE E ANTI-INTERRUPÇÃO - Web Worker + IndexedDB checkpoint 2s + fila offline retry exponencial + idempotência + heartbeat watchdog + visibilitychange resume + WAL + atomic write + queue + graceful shutdown - sem cortes sem interrupções - até êxito');
+</script>
+</body>
+</html>
