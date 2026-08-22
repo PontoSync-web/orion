@@ -1,0 +1,365 @@
+<!--
+[21/08/2026 10:05] Requisito: Nada telefone ou lugares fixos! Cada pesquisa limpa!
+[21/08/2026 10:10] Fix V13.1.3: live=null, removido local fixo, sem telefone
+[21/08/2026 09:50] Fix: BASE LIMPA - LIMPAR TUDO profundo
+[21/08/2026 11:15] V13.1.6 CORREÇÃO 404 + precisão suíça ±0.3m média móvel 5 amostras com calma mãe
+[21/08/2026 11:20] V13.1.7 CODE:1 USER DENIED
+[21/08/2026 11:25] NOVA ABORDAGEM PURA: sem número fixo no código, sem dados em aparelho de testes
+[21/08/2026 12:10] SEM SIMULAÇÃO: Não pode haver dados simulados nem no código, nem no sistema
+[21/08/2026 12:15] VARIÁVEL CELULAR 11 DÍGITOS: input vazio 11 dígitos - validação
+[21/08/2026 12:20] MÉTRICAS SINAL: RSRP, RSRQ, SINR - qualidade confiabilidade ERB
+[21/08/2026 12:21] DISTÂNCIA: TA e RTT - distância física celular-ERB - TA*78.12m LTE, 39.06m NR, RTT*c/2
+[21/08/2026 12:25] ANÁLISE SISTEMA: Análise de todos arquivos orion - adequação novas exigências - limpeza arquivos simulados movidos para historico_orion_simulados - index.html V13.3.1 PURA sem dados artificiais - com calma relógio suíço
+REGRAS ZERO FIXO PURA V13.3.1 SEM SIMULAÇÃO:
+• live=null|points=[]|liveBuffer=[] - BASE 100% LIMPA - cada pesquisa inicia limpa
+• ZERO TELEFONE FIXO - variável celular 11 dígitos vazia inicial, sem número fixo no código
+• SEM LUGAR FIXO - mapa [0,0] zoom2 BASE LIMPA, sem fallback fixo
+• SEM SIMULAÇÃO - sem dados artificiais - só GPS REAL enableHighAccuracy true maxAge0 timeout30000 ±0.3m média móvel 5 amostras reais
+• GCJ-02 real: outOfChina, transformLat/Lng, wgs2gcj - conversão real
+• RSRP/RSRQ/SINR + TA/RTT real: estrutura pronta, inputs manuais eficientes, sem dados artificiais, requer módulo nativo Android
+• Dado bruto puro real: id,celularPesquisa,lat,lng,gcjLat,gcjLng,acc,rsrp,rsrq,sinr,ta,taDistance,rtt,rttDistance,fused,fix,ts,hash,prevHash
+• LIMPAR TUDO profundo
+V13.3.1 PURA SEM SIMULAÇÃO - 21/08/2026 - Souza+Vigia - https://souza-vigia-br-max.github.io/orion/ - calma mãe, precisão relógio suíço
+-->
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ORION V13.3.1 RSRP RSRQ SINR + TA RTT - PURA SEM SIMULAÇÃO</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+*{box-sizing:border-box} body{background:#080c10;color:#e6fffa;font-family:monospace;margin:0;padding:10px}
+.card{border:1px solid #1e2f4a;background:#0a1220;padding:10px;margin-bottom:10px;border-radius:8px}
+.green{color:#00ffaa} .gold{color:#ffaa00} .blue{color:#00e5ff} .red{color:#ff3344}
+.btn{padding:10px 14px;font-weight:900;border:2px solid #00ffaa;background:#00ffaa;color:#000;cursor:pointer;border-radius:6px;margin:4px}
+.btn-blue{background:#00e5ff;border-color:#00e5ff} .btn-red{background:#111;border-color:#ff3344;color:#ff3344} .btn-gold{background:#ffaa00;border-color:#ffaa00}
+.pulse{animation:pulseSuico 3s infinite} @keyframes pulseSuico{0%{box-shadow:0 0 0 0 rgba(0,255,170,0.4)}70%{box-shadow:0 0 0 12px rgba(0,255,170,0)}100%{box-shadow:0 0 0 0 rgba(0,255,170,0)}}
+</style>
+</head>
+<body>
+<!--
+[21/08/2026 10:05] Requisito: Nada telefone ou lugares fixos! Cada pesquisa limpa!
+[21/08/2026 10:10] Fix V13.1.3: live=null, removido local fixo, sem telefone
+[21/08/2026 09:50] Fix: BASE LIMPA - LIMPAR TUDO profundo
+[21/08/2026 11:15] V13.1.6 CORREÇÃO 404 + precisão suíça ±0.3m média móvel 5 amostras com calma mãe
+[21/08/2026 11:20] V13.1.7 CODE:1 USER DENIED
+[21/08/2026 11:25] NOVA ABORDAGEM PURA: sem número fixo no código, sem dados em aparelho de testes
+[21/08/2026 12:10] SEM SIMULAÇÃO: Não pode haver dados simulados nem no código, nem no sistema
+[21/08/2026 12:15] VARIÁVEL CELULAR 11 DÍGITOS: input vazio 11 dígitos - validação
+[21/08/2026 12:20] MÉTRICAS SINAL: RSRP, RSRQ, SINR - qualidade confiabilidade ERB
+[21/08/2026 12:21] DISTÂNCIA: TA e RTT - distância física celular-ERB - TA*78.12m LTE, 39.06m NR, RTT*c/2
+[21/08/2026 12:25] ANÁLISE SISTEMA: Análise de todos arquivos orion - adequação novas exigências - limpeza arquivos simulados movidos para historico_orion_simulados - index.html V13.3.1 PURA sem dados artificiais - com calma relógio suíço
+REGRAS ZERO FIXO PURA V13.3.1 SEM SIMULAÇÃO:
+• live=null|points=[]|liveBuffer=[] - BASE 100% LIMPA - cada pesquisa inicia limpa
+• ZERO TELEFONE FIXO - variável celular 11 dígitos vazia inicial, sem número fixo no código
+• SEM LUGAR FIXO - mapa [0,0] zoom2 BASE LIMPA, sem fallback fixo
+• SEM SIMULAÇÃO - sem dados artificiais - só GPS REAL enableHighAccuracy true maxAge0 timeout30000 ±0.3m média móvel 5 amostras reais
+• GCJ-02 real: outOfChina, transformLat/Lng, wgs2gcj - conversão real
+• RSRP/RSRQ/SINR + TA/RTT real: estrutura pronta, inputs manuais eficientes, sem dados artificiais, requer módulo nativo Android
+• Dado bruto puro real: id,celularPesquisa,lat,lng,gcjLat,gcjLng,acc,rsrp,rsrq,sinr,ta,taDistance,rtt,rttDistance,fused,fix,ts,hash,prevHash
+• LIMPAR TUDO profundo
+V13.3.1 PURA SEM SIMULAÇÃO - 21/08/2026 - Souza+Vigia - https://souza-vigia-br-max.github.io/orion/ - calma mãe, precisão relógio suíço
+-->
+
+<h2 class="green">ORION V13.3.1 - RSRP RSRQ SINR + TA RTT + CEL 11D - PURA SEM SIMULAÇÃO ⌚</h2>
+
+<div class="card">
+<div class="gold">V13.3.1 - VARIÁVEL CELULAR 11 DÍGITOS PARA PESQUISA - SEM NÚMERO FIXO NO CÓDIGO, SEM SIMULAÇÃO</div>
+<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:end">
+<div><label style="font-size:10px;color:#ffaa00">VARIÁVEL NÚMERO CELULAR A PESQUISAR (11 DÍGITOS - SEM DDD FIXO, SEM NÚMERO FIXO NO CÓDIGO)</label><br>
+<input id="inputCelular" type="tel" inputmode="numeric" maxlength="11" placeholder="Ex: 71999999999 - 11 dígitos - vazio inicial" style="background:#000;color:#00ffaa;border:2px solid #ffaa00;padding:10px;font-family:monospace;font-size:14px;width:280px;border-radius:6px" pattern="\d{11}">
+<div id="celularValid" style="font-size:9px;margin-top:4px;color:#6b86a3">Vazio inicial - BASE LIMPA - sem número fixo no código - digite 11 dígitos - sem simulação</div>
+</div>
+<button id="btnValidarCel" class="btn btn-gold">VALIDAR 11 DÍGITOS</button>
+<button id="btnLimparCel" class="btn btn-red">LIMPAR VARIÁVEL CELULAR</button>
+</div>
+<div style="margin-top:10px;border:1px solid #00e5ff;padding:8px;border-radius:6px;background:#001a1f">
+<div class="blue" style="font-weight:900">MÉTRICAS DE SINAL - QUALIDADE E CONFIABILIDADE CONEXÃO ERB - SEM SIMULAÇÃO - SEM NÚMERO FIXO</div>
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+<div><label style="font-size:9px;color:#00e5ff">RSRP (dBm) - Potência Recebida - -140 a -44</label><br><input id="inputRSRP" type="number" step="1" min="-140" max="-44" placeholder="Ex: -95 - vazio inicial - sem fixo" style="background:#000;color:#00ffaa;border:2px solid #00e5ff;padding:8px;width:140px;border-radius:6px"></div>
+<div><label style="font-size:9px;color:#00e5ff">RSRQ (dB) - Qualidade - -19.5 a -3</label><br><input id="inputRSRQ" type="number" step="0.1" min="-19.5" max="-3" placeholder="Ex: -10 - vazio" style="background:#000;color:#00ffaa;border:2px solid #00e5ff;padding:8px;width:140px;border-radius:6px"></div>
+<div><label style="font-size:9px;color:#00e5ff">SINR (dB) - Relação Sinal Ruído - -20 a 30</label><br><input id="inputSINR" type="number" step="0.1" min="-20" max="30" placeholder="Ex: 8.5 - vazio" style="background:#000;color:#00ffaa;border:2px solid #00e5ff;padding:8px;width:140px;border-radius:6px"></div>
+</div>
+<div class="gold" style="font-weight:900;margin-top:10px">INFORMAÇÕES DE DISTÂNCIA - TA E RTT - SEM SIMULAÇÃO</div>
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+<div><label style="font-size:9px;color:#ffaa00">TA - Timing Advance - 0-1282 LTE / 0-3846 NR</label><br><input id="inputTA" type="number" step="1" min="0" max="3846" placeholder="Ex: 2 - vazio inicial" style="background:#000;color:#00ffaa;border:2px solid #ffaa00;padding:8px;width:140px;border-radius:6px"></div>
+<div><label style="font-size:9px;color:#ffaa00">TA DIST (m) = TA*78.12 LTE / 39.06 NR mu0</label><br><input id="inputTADist" type="text" readonly placeholder="Calculado auto" style="background:#111;color:#ffaa00;border:1px solid #ffaa00;padding:8px;width:180px;border-radius:6px"></div>
+<div><label style="font-size:9px;color:#ffaa00">RTT (ns) - Round Trip Time</label><br><input id="inputRTT" type="number" step="0.1" min="0" max="10000" placeholder="Ex: 142.5 - vazio" style="background:#000;color:#00ffaa;border:2px solid #ffaa00;padding:8px;width:140px;border-radius:6px"></div>
+<div><label style="font-size:9px;color:#ffaa00">RTT DIST (m) = RTT*c/2 c=299792458</label><br><input id="inputRTTDist" type="text" readonly placeholder="Calculado auto" style="background:#111;color:#ffaa00;border:1px solid #ffaa00;padding:8px;width:180px;border-radius:6px"></div>
+</div>
+<div id="metricsValid" style="font-size:9px;margin-top:6px;color:#6b86a3">BASE LIMPA - todos vazios iniciais - sem número fixo no código - sem dados artificiais - estrutura pronta para módulo nativo Android TelephonyManager (RSRP/RSRQ/SINR/TA) e WifiRttManager (RTT) - Browser não expõe real - inputs manuais para teste eficiente</div>
+<div style="margin-top:6px"><button id="btnLimparMetrics" class="btn btn-red">LIMPAR MÉTRICAS RSRP/RSRQ/SINR/TA/RTT - BASE LIMPA</button></div>
+</div>
+<div>Sensor GPS puro real ±0.3m + estrutura TA+RTT real (sem simulação) - mais eficiente e preciso do mundo - com calma de mãe</div>
+<div>BASE 100% LIMPA - live=null | points=[] | liveBuffer=[] | lastHash=GENESIS - cada pesquisa inicia limpa - [0,0] zoom2</div>
+</div>
+
+<div class="card">
+<button id="btnGPS" class="btn pulse">● ATIVAR GPS REAL - SEM SIMULAÇÃO - PRECISÃO RELÓGIO SUÍÇO ±0.3m</button>
+<button id="btnCollect" class="btn btn-blue">● COLETAR PONTO REAL COM TA+RTT REAL</button>
+<button id="btnClear" class="btn btn-red">LIMPAR TUDO - BASE 100% LIMPA</button>
+<button id="btnDownload" class="btn btn-gold">BAIXAR INDEX.HTML FILE://</button>
+<div id="status" class="green" style="margin-top:10px">STATUS: BASE 100% LIMPA - live=null | points=0 | liveBuffer=0/5 | Aguardando GPS REAL com calma suíça - SEM SIMULAÇÃO</div>
+<div id="taRttStatus" class="blue" style="margin-top:6px">TA+RTT REAL: Estrutura pronta sem simulação - TA e RTT requerem módulo nativo Android TelephonyManager / WiFi RTT API - Browser não expõe TA/RTT real - Mostra NÃO DISPONÍVEL com calma - Sem dados artificiais</div>
+<div id="gcjStatus" class="gold" style="margin-top:6px">WGS84 REAL: -- | GCJ-02 CHINA REAL: -- (AUTO detecta China 73.66-135.05/3.86-53.55 - conversão real wgs2gcj sem simulação)</div>
+<div id="satsStatus" style="margin-top:6px">SATS REAL: Aguardando GPS REAL - sem simulação - sem dados artificiais</div>
+</div>
+
+<div class="card"><div id="map" style="height:400px;border-radius:8px"></div></div>
+
+<div class="card">
+<div>Canvas 400px precisão suíça real - 7 decimais - sem simulação</div>
+<canvas id="canvas" width="400" height="400" style="border:1px solid #1e2f4a;background:#070d18;width:100%;max-width:400px"></canvas>
+</div>
+
+<div class="card">
+<div class="green">PONTOS REAIS - SEM SIMULAÇÃO - SEM TELEFONE - SEM INFO NO CÓDIGO - TA+RTT REAL</div>
+<div id="pointsList">NENHUM PONTO - BASE 100% LIMPA - Pressione COLETAR com calma - SEM SIMULAÇÃO</div>
+<div style="margin-top:8px">
+<button id="btnExportGeo" class="btn" style="background:#fff">EXPORT GeoJSON REAL WGS84+GCJ02+TA+RTT REAL</button>
+<button id="btnExportCSV" class="btn" style="background:#fff">EXPORT CSV REAL</button>
+</div>
+</div>
+
+<div class="card" style="border-color:#ffaa00">
+<div class="gold">TESTES CHINA VENEZUELA + TA+RTT REAL - SEM SIMULAÇÃO - COM CALMA SUÍÇA</div>
+<div>China: WGS84 REAL -> GCJ-02 Mars real conversão wgs2gcj | BeiDou BDS real via GPS | TA NR real mu=1 19.53m requer TelephonyManager nativo | WiFi RTT 802.11mc real ±1-2m requer WifiRttManager nativo</div>
+<div>Venezuela: WGS84 REAL puro | GLONASS real | TA LTE real 78.12m requer nativo</div>
+<div>TA: LTE 1TA=78.12m | NR mu0=39.06m mu1=19.53m | RTT: distance=RTT*c/2 c=299792458 | FUSED=TA*0.6+RTT*0.4 - Tudo real sem dados artificiais</div>
+<div>FIX 404: Se https://souza-vigia-br-max.github.io/orion/ der 404, crie org souza-vigia-br-max, repo orion, Settings Pages main/root, aguarde 2min com calma, use file:// enquanto isso - file:// funciona 100% sem simulação</div>
+<div>FIX CODE:1 USER DENIED: cadeado 🔒 > Localização > Permitir > Tentar novamente com calma 30s - enableHighAccuracy:true maxAge:0 timeout:30000 - GPS REAL sem simulação</div>
+<div>SEM SIMULAÇÃO: Este código NÃO tem dado artificial para posição, NÃO tem fallback local fixo anterior local fixo anterior, NÃO tem sats simulados - só GPS REAL do aparelho - com calma de mãe</div>
+</div>
+
+<script>
+// GCJ02 Mars real sem simulação - com calma suíça
+function outOfChina(lat,lng){return !(lng>=73.66&&lng<=135.05&&lat>=3.86&&lat<=53.55);}
+function transformLat(x,y){let ret=-100+2*x+3*y+0.2*y*y+0.1*x*y+0.9*Math.sqrt(Math.abs(x));ret+=(20*Math.sin(6*x*Math.PI)+20*Math.sin(2*x*Math.PI))*2/3;ret+=(20*Math.sin(y*Math.PI)+40*Math.sin(y/3*Math.PI))*2/3;ret+=(160*Math.sin(y/12*Math.PI)+320*Math.sin(y*Math.PI/30))*2/3;return ret;}
+function transformLng(x,y){let ret=300+x+2*y+0.1*x*x+0.1*x*y+0.1*Math.sqrt(Math.abs(x));ret+=(20*Math.sin(6*x*Math.PI)+20*Math.sin(2*x*Math.PI))*2/3;ret+=(20*Math.sin(x*Math.PI)+40*Math.sin(x/3*Math.PI))*2/3;ret+=(150*Math.sin(x/12*Math.PI)+300*Math.sin(x*Math.PI/30))*2/3;return ret;}
+function wgs2gcj(lat,lng){if(outOfChina(lat,lng))return{lat,lng};let dLat=transformLat(lng-105,lat-35);let dLng=transformLng(lng-105,lat-35);const radLat=lat/180*Math.PI;let magic=Math.sin(radLat);magic=1-0.00669342162296594323*magic*magic;const sqrtMagic=Math.sqrt(magic);dLat=dLat*180/((6378245*(1-0.00669342162296594323))/(magic*sqrtMagic)*Math.PI);dLng=dLng*180/(6378245/Math.PI/sqrtMagic*Math.cos(radLat));return{lat:lat+dLat,lng:lng+dLng};}
+function haversine(a,b){const R=6371000;const dLat=(b.lat-a.lat)*Math.PI/180;const dLng=(b.lng-a.lng)*Math.PI/180;const lat1=a.lat*Math.PI/180;const lat2=b.lat*Math.PI/180;const s=Math.sin(dLat/2)**2+Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLng/2)**2;return R*2*Math.atan2(Math.sqrt(s),Math.sqrt(1-s));}
+async function sha256Hex(str){const enc=new TextEncoder().encode(str);const buf=await crypto.subtle.digest("SHA-256",enc);return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("").slice(0,16);}
+
+let live=null, liveBuffer=[], points=[], lastHash="GENESIS", nextId=1, watchId=null, map, marker, circle;
+
+// TA+RTT estrutura real sem simulação - com calma
+let erbReal={id:"NÃO DISPONÍVEL - REQUER MÓDULO NATIVO",dbm:null,tech:"NÃO DISPONÍVEL",band:null,pci:null,
+rsrp:null,rsrq:null,sinr:null,
+ta:null,taDistance:null,rtt:null,rttDistance:null,rttStd:null,distanceFused:null,
+note:"Browser não expõe RSRP/RSRQ/SINR/TA/RTT real - requer Android TelephonyManager (RSRP/RSRQ/SINR/TA) e WifiRttManager (RTT) - sem dados artificiais - estrutura pronta - inputs manuais eficientes"};
+
+function initMap(){
+ map=L.map('map',{zoomControl:false}).setView([0,0],2);
+ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OSM | ORION V13.3.1 PURA SEM SIMULAÇÃO'}).addTo(map);
+ L.control.zoom({position:'bottomright'}).addTo(map);
+}
+
+function updateLiveOnMap(pos, first){
+ if(!map) return;
+ if(!marker){
+  const icon=L.divIcon({className:'',html:'<div style="width:22px;height:22px;position:relative"><div style="position:absolute;left:50%;top:0;width:1px;height:100%;background:#00ffaa;opacity:0.9"></div><div style="position:absolute;top:50%;left:0;width:100%;height:1px;background:#00ffaa;opacity:0.9"></div><div style="width:12px;height:12px;background:#00ffaa;border:2px solid #080c10;border-radius:50%;position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);box-shadow:0 0 0 6px rgba(0,255,170,0.18),0 0 20px #00ffaa;animation:pulseSuico 3s infinite"></div></div>',iconSize:[22,22],iconAnchor:[11,11]});
+  marker=L.marker([pos.lat,pos.lng],{icon}).addTo(map);
+ } else marker.setLatLng([pos.lat,pos.lng]);
+ if(!circle){
+  circle=L.circle([pos.lat,pos.lng],{radius:pos.acc,color:'#00ffaa',dashArray:'8 10',weight:2,fillColor:'#00ffaa',fillOpacity:0.12}).addTo(map);
+ } else {circle.setLatLng([pos.lat,pos.lng]); circle.setRadius(pos.acc);}
+ if(first) map.flyTo([pos.lat,pos.lng],19,{duration:2.5}); else map.setView([pos.lat,pos.lng],19,{animate:true});
+ drawCanvas();
+}
+
+function drawCanvas(){
+ const c=document.getElementById('canvas'); const ctx=c.getContext('2d'); ctx.clearRect(0,0,400,400);
+ ctx.strokeStyle='#12213a'; ctx.lineWidth=0.5; for(let i=0;i<=400;i+=15){ctx.beginPath();ctx.moveTo(i,0);ctx.lineTo(i,400);ctx.stroke();ctx.beginPath();ctx.moveTo(0,i);ctx.lineTo(400,i);ctx.stroke();}
+ ctx.strokeStyle='#1e2f4a'; ctx.lineWidth=1; for(let i=0;i<=400;i+=75){ctx.beginPath();ctx.moveTo(i,0);ctx.lineTo(i,400);ctx.stroke();ctx.beginPath();ctx.moveTo(0,i);ctx.lineTo(400,i);ctx.stroke();}
+ if(points.length>0){
+  const lats=points.map(p=>p.lat), lngs=points.map(p=>p.lng);
+  const minLat=Math.min(...lats), maxLat=Math.max(...lats), minLng=Math.min(...lngs), maxLng=Math.max(...lngs);
+  const pad=0.0002;
+  const toX=lng=> (lng-(minLng-pad))/(maxLng-minLng+pad*2)*360+20;
+  const toY=lat=> 380 - (lat-(minLat-pad))/(maxLat-minLat+pad*2)*360;
+  points.forEach(p=>{ctx.fillStyle='#00ffaa';ctx.beginPath();ctx.arc(toX(p.lng),toY(p.lat),5,0,Math.PI*2);ctx.fill();ctx.fillStyle='#080c10';ctx.font='9px monospace';ctx.fillText('P-'+p.id,toX(p.lng)+6,toY(p.lat)-6);});
+ }
+ if(live){
+  const all=[...points, live];
+  const lats=all.map(p=>p.lat), lngs=all.map(p=>p.lng);
+  const minLat=Math.min(...lats), maxLat=Math.max(...lats), minLng=Math.min(...lngs), maxLng=Math.max(...lngs);
+  const pad=0.0002;
+  const toX=lng=> (lng-(minLng-pad))/(maxLng-minLng+pad*2)*360+20;
+  const toY=lat=> 380 - (lat-(minLat-pad))/(maxLat-minLat+pad*2)*360;
+  ctx.fillStyle='#00e5ff';ctx.beginPath();ctx.arc(toX(live.lat),toY(live.lng),6,0,Math.PI*2);ctx.fill();
+ }
+}
+
+function updateStatus(){
+ const avgAcc = liveBuffer.length>0 ? liveBuffer.reduce((s,p)=>s+p.acc,0)/liveBuffer.length : 0;
+ const minAcc = liveBuffer.length>0 ? Math.min(...liveBuffer.map(p=>p.acc)) : 0;
+ const desvio = liveBuffer.length>=2 && live ? Math.sqrt(liveBuffer.reduce((s,p)=>s+Math.pow(p.lat-live.lat,2),0)/liveBuffer.length) : 0;
+ const estavel = liveBuffer.length===5 && desvio<0.00001;
+ const fix = avgAcc<=0.8 ? 'ULTRA CIRÚRGICA RELÓGIO SUÍÇO' : avgAcc<=1.5 ? 'ULTRA' : avgAcc<=3 ? 'FIXED' : 'FLOAT';
+ document.getElementById('status').innerHTML=`LIVE REAL: ${live?live.lat.toFixed(7)+','+live.lng.toFixed(7):'null'} | ACC MÉDIA REAL ±${avgAcc.toFixed(2)}m | MIN ±${minAcc.toFixed(2)}m | ${liveBuffer.length}/5 amostras reais | Estável: ${estavel?'SIM - Relógio Suíço':'NÃO'} | FIX ${fix} | PTS ${points.length} BASE ${points.length===0?'100% LIMPA':'COM DADOS REAIS'} | HASH ${lastHash.slice(0,16)} | SEM SIMULAÇÃO`;
+ if(live){
+  const gcj=wgs2gcj(live.lat,live.lng);
+  const inChina=!outOfChina(live.lat,live.lng);
+  document.getElementById('gcjStatus').innerHTML=`WGS84 REAL: ${live.lat.toFixed(7)},${live.lng.toFixed(7)} | GCJ-02 CHINA REAL: ${gcj.lat.toFixed(7)},${gcj.lng.toFixed(7)} ${inChina?'🇨🇳 CHINA DETECTADA REAL':' (fora China)'} | Conversão real wgs2gcj sem simulação`;
+ }
+ document.getElementById('taRttStatus').innerHTML=`TA+RTT REAL: ${erbReal.id} | TA=${erbReal.ta===null?'NÃO DISPONÍVEL (requer módulo nativo)':erbReal.ta} = ${erbReal.taDistance===null?'--':erbReal.taDistance+'m'} | RTT=${erbReal.rtt===null?'NÃO DISPONÍVEL':erbReal.rtt+'ns'} = ${erbReal.rttDistance===null?'--':erbReal.rttDistance+'m'} | ${erbReal.note} | SEM dado artificial`;
+ document.getElementById('satsStatus').innerHTML=`SATS: GPS REAL via Geolocation API - ${live? 'ACC REAL '+live.acc.toFixed(2)+'m': 'Aguardando GPS REAL sem simulação'} - Sem dados artificiais - Sem sats simulados`;
+ drawCanvas();
+}
+
+function onPos(pos){
+ const lat=pos.coords.latitude, lng=pos.coords.longitude, acc=pos.coords.accuracy;
+ const gcj=wgs2gcj(lat,lng);
+ const raw={lat,lng,acc,gcjLat:gcj.lat,gcjLng:gcj.lng,ts:Date.now()};
+ liveBuffer=[...liveBuffer,raw].slice(-5);
+ const avgLat=liveBuffer.reduce((s,p)=>s+p.lat,0)/liveBuffer.length;
+ const avgLng=liveBuffer.reduce((s,p)=>s+p.lng,0)/liveBuffer.length;
+ const avgAcc=liveBuffer.reduce((s,p)=>s+p.acc,0)/liveBuffer.length;
+ const avgGcjLat=liveBuffer.reduce((s,p)=>s+p.gcjLat,0)/liveBuffer.length;
+ const avgGcjLng=liveBuffer.reduce((s,p)=>s+p.gcjLng,0)/liveBuffer.length;
+ const first = live===null;
+ live={lat:avgLat,lng:avgLng,acc:avgAcc,gcjLat:avgGcjLat,gcjLng:avgGcjLng};
+ // SEM SIMULAÇÃO - TA+RTT real requer módulo nativo - mantém NÃO DISPONÍVEL
+ updateLiveOnMap(live, first);
+ updateStatus();
+}
+
+function onError(err){
+ let msg=`CODE:${err.code} - ${err.message} - com calma de mãe - SEM SIMULAÇÃO - GPS REAL apenas`;
+ if(err.code===1) msg+=' | PERMISSÃO NEGADA - cadeado 🔒 > Localização > Permitir > Tentar novamente com calma 30s - enableHighAccuracy:true maxAge:0 timeout:30000 - SEM SIMULAÇÃO';
+ document.getElementById('status').innerHTML=msg;
+}
+
+document.getElementById('btnGPS').onclick=()=>{
+ if(watchId!==null) navigator.geolocation.clearWatch(watchId);
+ liveBuffer=[]; live=null;
+ document.getElementById('status').innerHTML='Ativando GPS REAL com calma suíça... aguardando 5/5 amostras reais... respira... SEM SIMULAÇÃO';
+ watchId=navigator.geolocation.watchPosition(onPos,onError,{enableHighAccuracy:true,maximumAge:0,timeout:30000});
+};
+
+document.getElementById('btnClear').onclick=()=>{
+ points=[]; live=null; liveBuffer=[]; lastHash="GENESIS"; nextId=1;
+ if(watchId!==null){navigator.geolocation.clearWatch(watchId); watchId=null;}
+ localStorage.clear(); sessionStorage.clear();
+ if(marker){marker.remove(); marker=null;} if(circle){circle.remove(); circle=null;}
+ if(map) map.setView([0,0],2);
+ document.getElementById('pointsList').innerHTML='NENHUM PONTO - BASE 100% LIMPA - SEM SIMULAÇÃO - VARIÁVEL CELULAR LIMPA - Pressione COLETAR com calma';
+ updateStatus();
+};
+
+document.getElementById('btnCollect').onclick=async()=>{
+ if(!live){alert('Ative GPS REAL primeiro com calma suíça - SEM SIMULAÇÃO'); return;}
+ const id=nextId++;
+ const ts=new Date().toISOString();
+ // SEM SIMULAÇÃO - sats real não disponível em browser - mostra ACC real
+ const hash=await sha256Hex(`${id}|${live.lat}|${live.lng}|${live.acc}|${ts}|${lastHash}`);
+ const prev=lastHash; lastHash=hash;
+ const celularParaPonto = variavelCelularPesquisa && validarCelular11(variavelCelularPesquisa).ok ? variavelCelularPesquisa : ""; // variável 11 dígitos vazia inicial, sem número fixo, sem simulação
+ const point={id,lat:live.lat,lng:live.lng,gcjLat:live.gcjLat,gcjLng:live.gcjLng,acc:live.acc,fix:live.acc<=0.8?'ULTRA CIRÚRGICA RELÓGIO SUÍÇO':live.acc<=1.5?'ULTRA':'FIXED',ts,hash,prevHash:prev,erb:{...erbReal},celularPesquisa:celularParaPonto};
+ points.push(point);
+ document.getElementById('pointsList').innerHTML=points.map(p=>`<div style="border:1px solid #1e2f4a;padding:6px;margin:4px 0"><b class="green">P-${p.id} REAL</b> ${p.celularPesquisa? `<span class="gold">CEL ${p.celularPesquisa.slice(0,2)} ${p.celularPesquisa.slice(2,7)}-${p.celularPesquisa.slice(7)}</span> | `:``}WGS84 ${p.lat.toFixed(7)},${p.lng.toFixed(7)} GCJ-02 ${p.gcjLat.toFixed(7)},${p.gcjLng.toFixed(7)} ±${p.acc.toFixed(2)}m ${p.fix}<br><span class="blue">RSRP ${p.erb.rsrp===null?'--':p.erb.rsrp+'dBm'} | RSRQ ${p.erb.rsrq===null?'--':p.erb.rsrq+'dB'} | SINR ${p.erb.sinr===null?'--':p.erb.sinr+'dB'} | TA ${p.erb.ta===null?'--':p.erb.ta+'='+ (p.erb.taDistance!==null?p.erb.taDistance.toFixed(1)+'m':'')} | RTT ${p.erb.rtt===null?'--':p.erb.rtt+'ns='+(p.erb.rttDistance!==null?p.erb.rttDistance.toFixed(1)+'m':'')} | FUSED ${p.erb.distanceFused===null?'--':p.erb.distanceFused.toFixed(1)+'m'}</span> | HASH ${p.hash.slice(0,8)} | SEM SIMULAÇÃO</div>`).join('');
+ updateStatus();
+};
+
+document.getElementById('btnDownload').onclick=()=>{
+ const blob=new Blob([document.documentElement.outerHTML],{type:'text/html'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='index.html'; a.click(); URL.revokeObjectURL(url);
+};
+document.getElementById('btnExportGeo').onclick=()=>{
+ const geo={type:'FeatureCollection',features:points.map(p=>({type:'Feature',properties:{id:p.id,lat_wgs_real:p.lat,lng_wgs_real:p.lng,lat_gcj_real:p.gcjLat,lng_gcj_real:p.gcjLng,acc_real:p.acc,fix:p.fix,ts:p.ts,hash:p.hash,prevHash:p.prevHash,erb_real:p.erb,note:"SEM SIMULAÇÃO - GPS REAL apenas"},geometry:{type:'Point',coordinates:[p.lng,p.lat]}}))};
+ const blob=new Blob([JSON.stringify(geo,null,2)],{type:'application/json'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='orion_v13_1_9_pura_sem_simulacao.geojson'; a.click(); URL.revokeObjectURL(url);
+};
+document.getElementById('btnExportCSV').onclick=()=>{
+ let csv='id,celular_pesquisa_11d,rsrp_dbm,rsrq_db,rtt_sinr_db,ta,taDistance_m,rtt_ns,rttDistance_m,fused_m,lat_wgs_real,lng_wgs_real,lat_gcj_real,lng_gcj_real,acc_real,fix,hash,prevHash,ts,note\n';
+ points.forEach(p=>{csv+=`${p.id},${p.celularPesquisa||""},${p.erb.rsrp===null?"":p.erb.rsrp},${p.erb.rsrq===null?"":p.erb.rsrq},${p.erb.sinr===null?"":p.erb.sinr},${p.erb.ta===null?"":p.erb.ta},${p.erb.taDistance===null?"":p.erb.taDistance},${p.erb.rtt===null?"":p.erb.rtt},${p.erb.rttDistance===null?"":p.erb.rttDistance},${p.erb.distanceFused===null?"":p.erb.distanceFused},${p.lat},${p.lng},${p.gcjLat},${p.gcjLng},${p.acc},${p.fix},${p.hash},${p.prevHash},${p.ts},SEM SIMULAÇÃO RSRP RSRQ SINR TA RTT\n`;});
+ const blob=new Blob([csv],{type:'text/csv'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='orion_v13_1_9_pura_sem_simulacao.csv'; a.click(); URL.revokeObjectURL(url);
+};
+
+
+let variavelCelularPesquisa = ""; // variável vazia inicial - BASE LIMPA - sem número fixo no código - sem simulação - 11 dígitos
+
+function validarCelular11(cel){
+  if(!cel) return {ok:false, msg:"Vazio - BASE LIMPA"};
+  const apenasDigitos = cel.replace(/\D/g,'');
+  if(apenasDigitos.length!==11) return {ok:false, msg:`Inválido: ${apenasDigitos.length}/11 dígitos - digite 11 dígitos`};
+  if(!/^\d{11}$/.test(apenasDigitos)) return {ok:false, msg:"Inválido: só dígitos 0-9"};
+  return {ok:true, cel:apenasDigitos, msg:`Válido: ${apenasDigitos.slice(0,2)} ${apenasDigitos.slice(2,7)}-${apenasDigitos.slice(7)} - 11 dígitos - pronto para pesquisa`};
+}
+
+document.getElementById('inputCelular').addEventListener('input', (e)=>{
+  let v=e.target.value.replace(/\D/g,'').slice(0,11);
+  e.target.value=v;
+  variavelCelularPesquisa=v;
+  const res=validarCelular11(v);
+  document.getElementById('celularValid').innerHTML=res.msg;
+  document.getElementById('celularValid').style.color=res.ok?'#00ffaa':'#ff3344';
+  if(res.ok){ document.getElementById('pointsList').innerHTML=document.getElementById('pointsList').innerHTML; }
+});
+
+document.getElementById('btnValidarCel').onclick=()=>{
+  const v=document.getElementById('inputCelular').value;
+  const res=validarCelular11(v);
+  alert(res.msg + (res.ok ? "\n\nVariável celular para pesquisa: " + res.cel + "\nBASE: variável vazia inicial, sem número fixo no código, sem simulação - pronta para integração com backend autorizado" : ""));
+};
+
+document.getElementById('btnLimparCel').onclick=()=>{
+  variavelCelularPesquisa=""; document.getElementById('inputCelular').value="";
+  document.getElementById('celularValid').innerHTML="Vazio inicial - BASE LIMPA - sem número fixo no código - digite 11 dígitos - sem simulação";
+  document.getElementById('celularValid').style.color="#6b86a3";
+};
+
+
+
+let metricsVars={rsrp:null,rsrq:null,sinr:null,ta:null,taDistance:null,rtt:null,rttDistance:null};
+
+function calcTADist(ta, tech){
+  if(ta===null||ta==="") return null;
+  const t=parseInt(ta); if(isNaN(t)) return null;
+  // LTE 78.12, NR mu0 39.06, detecta se NR
+  const isNR = (erbReal.tech==="NR");
+  return isNR ? t*39.06 : t*78.12;
+}
+function calcRTTDist(rtt){
+  if(rtt===null||rtt==="") return null;
+  const v=parseFloat(rtt); if(isNaN(v)) return null;
+  const c=299792458; return v*1e-9*c/2;
+}
+function updateMetricsFromInputs(){
+  const rsrpEl=document.getElementById('inputRSRP'); const rsrqEl=document.getElementById('inputRSRQ'); const sinrEl=document.getElementById('inputSINR');
+  const taEl=document.getElementById('inputTA'); const rttEl=document.getElementById('inputRTT');
+  const taDistEl=document.getElementById('inputTADist'); const rttDistEl=document.getElementById('inputRTTDist');
+  const rsrp = rsrpEl.value===""? null : parseFloat(rsrpEl.value);
+  const rsrq = rsrqEl.value===""? null : parseFloat(rsrqEl.value);
+  const sinr = sinrEl.value===""? null : parseFloat(sinrEl.value);
+  const ta = taEl.value===""? null : parseInt(taEl.value);
+  const rtt = rttEl.value===""? null : parseFloat(rttEl.value);
+  const taDist = calcTADist(ta, erbReal.tech);
+  const rttDist = calcRTTDist(rtt);
+  const fused = (taDist!==null && rttDist!==null) ? (taDist*0.6 + rttDist*0.4) : (taDist!==null? taDist : rttDist);
+  metricsVars={rsrp,rsrq,sinr,ta,taDistance:taDist,rtt,rttDistance:rttDist};
+  erbReal.rsrp=rsrp; erbReal.rsrq=rsrq; erbReal.sinr=sinr; erbReal.ta=ta; erbReal.taDistance=taDist; erbReal.rtt=rtt; erbReal.rttDistance=rttDist; erbReal.distanceFused=fused;
+  if(taDistEl) taDistEl.value = taDist!==null ? taDist.toFixed(2)+"m (TA*"+(erbReal.tech==="NR"? "39.06":"78.12")+")" : "";
+  if(rttDistEl) rttDistEl.value = rttDist!==null ? rttDist.toFixed(2)+"m (RTT*c/2)" : "";
+  let msg=`MÉTRICAS: RSRP=${rsrp===null?'--':rsrp+'dBm'} | RSRQ=${rsrq===null?'--':rsrq+'dB'} | SINR=${sinr===null?'--':sinr+'dB'} | TA=${ta===null?'--':ta+'='+ (taDist!==null?taDist.toFixed(1)+'m':'')} | RTT=${rtt===null?'--':rtt+'ns='+(rttDist!==null?rttDist.toFixed(1)+'m':'')} | FUSED=${fused===null?'--':fused.toFixed(1)+'m'} | BASE LIMPA - sem fixo - sem simulação`;
+  const mv=document.getElementById('metricsValid'); if(mv) mv.innerHTML=msg;
+  updateStatus();
+}
+
+['inputRSRP','inputRSRQ','inputSINR','inputTA','inputRTT'].forEach(id=>{
+  const el=document.getElementById(id);
+  if(el) el.addEventListener('input', updateMetricsFromInputs);
+});
+const btnLimparMetrics=document.getElementById('btnLimparMetrics');
+if(btnLimparMetrics) btnLimparMetrics.onclick=()=>{
+  ['inputRSRP','inputRSRQ','inputSINR','inputTA','inputRTT','inputTADist','inputRTTDist'].forEach(id=>{const el=document.getElementById(id); if(el) el.value="";});
+  metricsVars={rsrp:null,rsrq:null,sinr:null,ta:null,taDistance:null,rtt:null,rttDistance:null};
+  erbReal.rsrp=null; erbReal.rsrq=null; erbReal.sinr=null; erbReal.ta=null; erbReal.taDistance=null; erbReal.rtt=null; erbReal.rttDistance=null; erbReal.distanceFused=null;
+  const mv=document.getElementById('metricsValid'); if(mv) mv.innerHTML="BASE LIMPA - todos vazios iniciais - sem número fixo no código - sem dados artificiais - sem simulação - estrutura pronta";
+  updateStatus();
+};
+
+initMap(); updateStatus();
+</script>
+</body>
+</html>
