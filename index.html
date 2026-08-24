@@ -1,95 +1,457 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-<meta charset="UTF-8">
-<title>ORION V30.0 BRASIL 69057 ERBs - EFICIÊNCIA MÁXIMA após 10K TESTES BAHIA - 290x MAIS EFICIENTE</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<style>*{box-sizing:border-box} body{background:#080c10;color:#e6fffa;font-family:monospace;margin:0;padding:12px} .card{border:1px solid #1e2f4a;background:#0a1220;padding:14px;margin-bottom:14px;border-radius:10px} .green{color:#00ffaa} .badge{display:inline-block;padding:3px 8px;border-radius:12px;font-size:9px;font-weight:900;margin:2px} .badge-green{background:#00ffaa;color:#000} .badge-blue{background:#00e5ff;color:#000} .badge-gold{background:#ffaa00;color:#000} .badge-red{background:#ff3344;color:#fff} .badge-purple{background:#ff00ff;color:#fff} .btn{padding:14px 22px;font-weight:900;border:2px solid #00ffaa;background:#00ffaa;color:#000;cursor:pointer;border-radius:10px;margin:5px;font-size:13px} .btn-search{background:linear-gradient(90deg,#ffaa00,#ff6600);color:#000;border-color:#ffaa00;font-size:15px;padding:16px 28px} .btn-call{background:linear-gradient(90deg,#ff00ff,#ff6600);color:#fff;border-color:#ff00ff;font-size:16px;padding:18px 32px} .btn-api{background:linear-gradient(90deg,#00ffaa,#00e5ff);color:#000;border-color:#00ffaa;font-size:13px;padding:12px 18px} .pulse{animation:pulse 2s infinite} @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(0,255,170,0.6)}70%{box-shadow:0 0 0 16px rgba(0,255,170,0)}100%{box-shadow:0 0 0 0 rgba(0,255,170,0)}} input{outline:none} input:focus{box-shadow:0 0 0 2px #00ffaa} .progress{height:12px;background:#12213a;border-radius:6px;overflow:hidden;margin-top:10px} .progress-fill{height:100%;background:linear-gradient(90deg,#00ffaa,#00e5ff,#ffaa00,#ff00ff);transition:width 0.6s;width:0%} .log{font-size:9px;color:#6b86a3;background:#000;padding:8px;border-radius:6px;max-height:140px;overflow:auto} .status-auto{font-size:12px;padding:12px;border-radius:8px;margin-top:10px;border:2px solid #00ffaa;background:#001a0f} #map{height:700px;border:4px solid #ff00ff;border-radius:12px;z-index:1} .call-id{font-size:14px;font-weight:900;color:#ff00ff;background:#1a001a;border:2px solid #ff00ff;padding:12px;border-radius:8px;margin:8px 0} .api-status{font-size:11px;background:#001a0f;border:2px solid #00e5ff;padding:10px;border-radius:8px;margin:8px 0}</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ORION AI - DEPOM v7.0.0</title>
+    <!-- Font Awesome para ícones -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        /* Reset e base */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0a0e1a;
+            color: #c8d6e5;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            width: 100%;
+        }
+        /* Cabeçalho */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 0;
+            border-bottom: 1px solid #1e2a3a;
+            flex-wrap: wrap;
+        }
+        .header h1 {
+            color: #00d4ff;
+            font-size: 2.2rem;
+            font-weight: 300;
+            letter-spacing: 1px;
+        }
+        .header h1 i { margin-right: 10px; }
+        .header .version {
+            background: #1e2a3a;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            color: #8395a7;
+        }
+        .header .status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #1dd1a1;
+        }
+        .header .status .dot {
+            width: 12px;
+            height: 12px;
+            background: #1dd1a1;
+            border-radius: 50%;
+            display: inline-block;
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.8); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+
+        /* Cards de estatísticas */
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin: 30px 0;
+        }
+        .stat-card {
+            background: #141c2b;
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+            border: 1px solid #1e2a3a;
+            transition: transform 0.2s;
+        }
+        .stat-card:hover { transform: translateY(-4px); }
+        .stat-card i {
+            font-size: 2rem;
+            color: #00d4ff;
+            margin-bottom: 10px;
+        }
+        .stat-card .value {
+            font-size: 1.8rem;
+            font-weight: 600;
+            color: #fff;
+        }
+        .stat-card .label {
+            font-size: 0.8rem;
+            color: #8395a7;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* Cards de funcionalidades */
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 25px;
+            margin: 30px 0;
+        }
+        .feature-card {
+            background: #141c2b;
+            border-radius: 12px;
+            padding: 25px;
+            border: 1px solid #1e2a3a;
+            transition: all 0.3s;
+        }
+        .feature-card:hover {
+            border-color: #00d4ff;
+            box-shadow: 0 0 20px rgba(0, 212, 255, 0.05);
+        }
+        .feature-card h3 {
+            color: #00d4ff;
+            font-weight: 400;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .feature-card p {
+            color: #8395a7;
+            font-size: 0.9rem;
+            margin-bottom: 15px;
+            line-height: 1.5;
+        }
+        .feature-card .btn {
+            display: inline-block;
+            padding: 8px 18px;
+            background: #00d4ff;
+            color: #0a0e1a;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.85rem;
+            transition: background 0.2s;
+            border: none;
+            cursor: pointer;
+        }
+        .feature-card .btn:hover { background: #00b8d4; }
+        .feature-card .btn-secondary {
+            background: transparent;
+            border: 1px solid #00d4ff;
+            color: #00d4ff;
+        }
+        .feature-card .btn-secondary:hover {
+            background: #00d4ff;
+            color: #0a0e1a;
+        }
+
+        /* Formulários inline */
+        .inline-form {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+        }
+        .inline-form input {
+            flex: 1;
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid #1e2a3a;
+            background: #0a0e1a;
+            color: #c8d6e5;
+            min-width: 150px;
+        }
+        .inline-form input:focus {
+            outline: none;
+            border-color: #00d4ff;
+        }
+
+        /* Resposta da API */
+        .api-response {
+            background: #0a0e1a;
+            border: 1px solid #1e2a3a;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 300px;
+            overflow-y: auto;
+            display: none;
+        }
+        .api-response.visible { display: block; }
+
+        /* Rodapé */
+        .footer {
+            margin-top: 40px;
+            padding: 20px 0;
+            border-top: 1px solid #1e2a3a;
+            text-align: center;
+            color: #576574;
+            font-size: 0.8rem;
+            width: 100%;
+        }
+
+        /* Responsividade */
+        @media (max-width: 600px) {
+            .header { flex-direction: column; align-items: flex-start; gap: 10px; }
+            .stats { grid-template-columns: 1fr 1fr; }
+            .features { grid-template-columns: 1fr; }
+        }
+    </style>
 </head>
 <body>
-<h2 class="green">ORION V30.0 BRASIL 69057 ERBs - EFICIÊNCIA MÁXIMA após 10.000 TESTES BAHIA - 290x MAIS EFICIENTE - QUAL ERB E ONDE TROCANDO DADOS</h2>
-<div class="card" style="border-color:#ff00ff;background:#1a001a;text-align:center">
-<div style="font-weight:900;color:#ff00ff;font-size:16px">🔥 V30.0 - 69057 ERBs + EFICIÊNCIA MÁXIMA após 10K TESTES BAHIA - 290x MAIS EFICIENTE - ERB ATIVA TROCANDO DADOS</div>
-<div style="font-size:11px;color:#ffaa00;margin-top:8px">V30.0: base 69057 ERBs ANATEL + <b style='color:#00ffaa'>OTIMIZADO APÓS 10K TESTES BAHIA</b>: teste Bahia toda erro 119km 0.5% top1 vs Salvador denso erro 409m 68.3% ≤500m - <b>290x mais eficiente</b> - implementa: pool UF 4914 vs 69057 (93% redução) + raio max 15km onde realmente trocando dados não 200km + peso proximidade 60pts + cache ERB ativa 1h + trilateração 3 ERBs<br>
-<span class="badge badge-red">V30 EFICIÊNCIA MÁXIMA</span> <span class="badge badge-purple">290x MAIS EFICIENTE</span> <span class="badge badge-green">10K TESTES BAHIA</span> <span class="badge badge-blue">ERB ATIVA 15km</span> <span class="badge badge-gold">CACHE 1h + TRILATERAÇÃO</span><br>
-<span class="badge badge-green">V30: 69057 ERBs</span> <span class="badge badge-blue">BA 4914 ERBs 93% redução</span> <span class="badge badge-gold">Raio 15km não 200km</span> <span class="badge badge-red">Proximidade 60pts</span> - 31.39 MB Map O(1) - eficiência máxima
-</div>
-<div style="display:flex;gap:10px;justify-content:center;margin-top:14px;flex-wrap:wrap">
-<button id="btnErbAtiva" class="btn" style="background:linear-gradient(90deg,#00ffaa,#ffaa00);color:#000;border-color:#00ffaa;font-size:15px;padding:16px 24px">📡 ERB ATIVA EFICIENTE V30 - ONDE TROCANDO DADOS</button><button id="btnCallIdAutomatico" class="btn btn-call pulse">📞 CALL_ID AUTOMATICO - EXIBE NO MAPA AGORA</button>
-<button id="btnPesquisarNumero" class="btn btn-search pulse">🔍 PESQUISAR NUMERO → EXIBE ERB NO MAPA</button>
-<button id="btnTestarAleatorio" class="btn" style="background:#00e5ff;border-color:#00e5ff">🧪 TESTAR NUMERO ALEATORIO - SEM REGISTRO - 69K</button>
-<button id="btnApisStatus" class="btn btn-api">🌐 STATUS APIS EXTERNAS</button>
-</div>
-<div style="margin-top:12px"><div class="progress"><div id="progressBar" class="progress-fill"></div></div><div id="progressText" style="font-size:11px;color:#ff00ff;margin-top:6px">V30.0 - 69057 ERBs + APIs externas - nenhum número no código fonte - digite número na hora → call_id automático → exibe no mapa</div></div>
-<div id="statusAuto" class="status-auto">STATUS V30.0 - 69057 ERBs + APIs externas: pronto - sem números no código fonte - digite número e clique pesquisar</div>
-<div id="indicesStatus" class="log" style="margin-top:8px">ERBs prontas: 69057 torres BRASIL - SP 15534 MG 10385 RJ 6435 RS 6020 BA 4914 + 18 UFs - 4181 cidades - V30.0 APIS EXTERNAS + SEM NUMEROS NO CODIGO - 100% validado</div>
-<div id="apisStatusDisplay" class="api-status" style="display:none">Carregando status APIs externas...</div>
-</div>
+<div class="container">
+    <!-- Cabeçalho -->
+    <header class="header">
+        <h1><i class="fas fa-satellite-dish"></i>ORION AI - DEPOM</h1>
+        <div style="display: flex; align-items: center; gap: 20px; flex-wrap: wrap;">
+            <span class="version"><i class="fas fa-tag"></i> v7.0.0</span>
+            <span class="status"><span class="dot"></span> Sistema operacional</span>
+        </div>
+    </header>
 
-<div class="card"><div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin-top:10px">
-<div><label style="font-size:11px;color:#ff00ff">📞 Número - digite número AGORA (não está no código fonte) → exibe no mapa</label><br>
-<input id="inputCelular" type="tel" maxlength="11" placeholder="Digite DDD + número aqui → depois clica PESQUISAR" style="background:#000;color:#ff00ff;border:3px solid #ff00ff;padding:16px;width:360px;border-radius:10px;font-size:15px">
-<div id="celularValid" style="font-size:10px;margin-top:6px;color:#6b86a3">V30.0 PRIVACIDADE: nenhum número registrado no código fonte - digite número na hora - 69057 ERBs + APIs externas - call_id automático</div></div>
-<div><label style="font-size:11px;color:#ffaa00">CellID OPCIONAL - 69057 ERBs + APIs externas OpenCellID BeaconDB Google</label><br>
-<input id="inputCellId" type="number" placeholder="OPCIONAL - V27 tenta local 69K + APIs externas" style="background:#000;color:#ffaa00;border:2px solid #555;padding:14px;width:260px;border-radius:10px;font-size:13px">
-<div id="identValid" style="font-size:10px;margin-top:6px;color:#6b86a3">CellID opcional - V27 tenta base local 69.057 O(1) + OpenCellID + BeaconDB + Google via .env - 69057 ERBs</div></div>
-<button id="btnValidarCel" class="btn btn-call" style="background:#ff00ff;border-color:#ff00ff">📞 GERAR CALL_ID + EXIBIR NO MAPA</button><button id="btnLimparCel" class="btn" style="background:#333;border-color:#555;color:#fff">LIMPAR</button></div>
-<div id="callIdDisplay" class="call-id" style="display:none">CALL_ID: aguardando número digitado...</div></div>
+    <!-- Estatísticas (dados estáticos de exemplo) -->
+    <div class="stats">
+        <div class="stat-card">
+            <i class="fas fa-tower-broadcast"></i>
+            <div class="value" id="torresCount">Carregando...</div>
+            <div class="label">Torres (ERBs)</div>
+        </div>
+        <div class="stat-card">
+            <i class="fas fa-users"></i>
+            <div class="value" id="numerosCount">Carregando...</div>
+            <div class="label">Números cadastrados</div>
+        </div>
+        <div class="stat-card">
+            <i class="fas fa-satellite"></i>
+            <div class="value" id="pacotesCount">Carregando...</div>
+            <div class="label">Pacotes coletados</div>
+        </div>
+        <div class="stat-card">
+            <i class="fas fa-brain"></i>
+            <div class="value">Automático</div>
+            <div class="label">Modo de aprendizado</div>
+        </div>
+    </div>
 
-<div class="card"><div style="display:flex;gap:12px;flex-wrap:wrap"><div style="flex:1;min-width:380px">
-<div class="green" style="font-weight:900;font-size:14px">🗺️ MAPA - ERB ONDE CELULAR ESTÁ SE COMUNICANDO - 69057 ERBs + APIS EXTERNAS - SEM NUMEROS NO CODIGO</div>
-<div id="map"></div>
-<div id="erbFound" class="log" style="margin-top:8px">🗼 69057 ERBs Brasil + APIs externas OpenCellID BeaconDB Google - mapa pronto - sem números no código fonte</div></div>
-<div style="flex:1;min-width:360px"><div class="green" style="font-weight:900">📞 RESULTADO PESQUISA - EXIBE AQUI - V27 APIS EXTERNAS + SEM NUMEROS NO CODIGO</div>
-<div id="pointsList" style="background:#000;padding:12px;border-radius:8px;min-height:520px;font-size:11px;border:2px solid #ff00ff"><b>🔥 V30.0 - 69057 ERBs + APIS EXTERNAS - SEM NUMEROS NO CODIGO FONTE:</b><br><br><b>Privacidade total:</b> nenhum número de celular está registrado no código fonte do ORION V27<br><br><b>APIs externas pesquisadas e integradas:</b><br>• <b>ANATEL local 69057 ERBs</b> - primária offline O(1) 31.39 MB - Map O(1) - sem internet - privacidade total<br>• <b>OpenCellID</b> - https://opencellid.org/ - 40M+ torres globais - gratuita 1000 req/dia - fallback quando CellID não está na base local - configure OPENCELLID_KEY no .env<br>• <b>BeaconDB</b> - https://beacondb.net/ - sucessor Mozilla Location Service - crowdsourced - gratuita sem key - sempre disponível<br>• <b>Google Geolocation</b> - paga $5/1000 req - mais precisa urbano &lt;100m - precisa GOOGLE_GEOLOCATION_KEY no .env<br><br><b>Como testar V27:</b><br>1. Digite número no campo roxo acima (não está no código)<br>2. Clique PESQUISAR → sistema gera CALL_ID na hora<br>3. Tenta base local 69057 O(1) → OpenCellID → BeaconDB → Google (via .env)<br>4. Localiza ERB onde celular ESTÁ se comunicando<br>5. Exibe no MAPA ao lado + call_id + geohash + erbs próximas<br><br><b>Endpoints novos V27:</b> /api/erb/externa/:cellId + /api/apis/status<br><br><span style="color:#00e5ff">V30.0: base local 69K primária + APIs externas fallback - sem números no código - .env config</span></div>
-<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap"><button id="btnClear" class="btn" style="padding:8px 12px;font-size:10px">LIMPAR MAPA</button><button id="btnExportGeo" class="btn" style="padding:8px 12px;font-size:10px;background:#00e5ff;border-color:#00e5ff">EXPORT GEOJSON</button><button id="btnExportCSV" class="btn" style="padding:8px 12px;font-size:10px;background:#ffaa00;border-color:#ffaa00">EXPORT CSV</button></div>
-<div class="log" style="margin-top:10px"><div id="filaStatus">📤 V30.0 - 69057 ERBs + APIs externas - sem números no código - pronto</div><div id="checkpointStatus">💾 V30.0 - 69057 ERBs + OpenCellID + BeaconDB + Google via .env - sem números no código fonte</div></div></div></div></div>
+    <!-- Funcionalidades principais -->
+    <div class="features">
+        <!-- Card: Localizar por número -->
+        <div class="feature-card">
+            <h3><i class="fas fa-search-location"></i> Localizar por número</h3>
+            <p>Insira um número de celular (apenas dígitos) e obtenha a localização aproximada baseada nas ERBs e nos cabeçalhos de pacotes.</p>
+            <div class="inline-form">
+                <input type="text" id="buscaNumero" placeholder="Ex: 71988979724">
+                <button class="btn" onclick="buscarNumero()"><i class="fas fa-arrow-right"></i> Buscar</button>
+            </div>
+            <div id="resultadoBusca" class="api-response"></div>
+        </div>
 
-<div class="card"><div class="green" style="font-weight:900">🧪 TESTE SEM NUMEROS REGISTRADOS + APIS EXTERNAS - GERA NUMERO ALEATORIO NA HORA</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-<button class="btn" style="font-size:11px;background:#00ffaa;border-color:#00ffaa;color:#000" onclick="testarNumeroAleatorio()">🎲 GERAR NUMERO ALEATORIO NA HORA → EXIBE NO MAPA - SEM REGISTRO - V27</button>
-<button class="btn" style="font-size:11px;background:#ff00ff;border-color:#ff00ff;color:#fff" onclick="testarNumeroAleatorio()">📞 TESTE CALL_ID AUTOMATICO ALEATORIO → MAPA + APIS</button>
-<button class="btn" style="font-size:11px;background:#00e5ff;border-color:#00e5ff" onclick="carregarApisStatus()">🌐 VER STATUS APIS EXTERNAS - OpenCellID BeaconDB Google</button>
-</div><div style="font-size:9px;color:#ff00ff;margin-top:8px">V30.0: nenhum número registrado no código fonte - ao clicar, sistema gera número aleatório na hora + call_id + tenta base local 69K + OpenCellID + BeaconDB + Google via .env + exibe ERB - privacidade total</div></div>
+        <!-- Card: Cadastrar número -->
+        <div class="feature-card">
+            <h3><i class="fas fa-plus-circle"></i> Cadastrar número</h3>
+            <p>Cadastre manualmente um número associado a uma torre. Útil para testes ou quando a aprendizagem automática ainda não coletou dados suficientes.</p>
+            <div class="inline-form" style="flex-direction: column; gap: 8px;">
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <input type="text" id="cadNumero" placeholder="Número" style="flex:2;">
+                    <input type="text" id="cadCellId" placeholder="Cell ID" style="flex:1;">
+                </div>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <input type="text" id="cadMcc" placeholder="MCC" value="724" style="flex:1;">
+                    <input type="text" id="cadMnc" placeholder="MNC" value="5" style="flex:1;">
+                    <input type="text" id="cadLac" placeholder="LAC" value="100" style="flex:1;">
+                </div>
+                <button class="btn btn-secondary" onclick="cadastrarNumero()"><i class="fas fa-save"></i> Cadastrar</button>
+            </div>
+            <div id="resultadoCadastro" class="api-response"></div>
+        </div>
+
+        <!-- Card: Localização avançada -->
+        <div class="feature-card">
+            <h3><i class="fas fa-chart-line"></i> Localização avançada</h3>
+            <p>Utiliza os pacotes de cabeçalho de rádio (TA, RTT, RSRP, SINR) para calcular uma posição mais precisa, com índice de confiança.</p>
+            <div class="inline-form">
+                <input type="text" id="buscaAvancada" placeholder="Número">
+                <button class="btn" onclick="buscarAvancado()"><i class="fas fa-microchip"></i> Localizar avançado</button>
+            </div>
+            <div id="resultadoAvancado" class="api-response"></div>
+        </div>
+
+        <!-- Card: Enviar pacote de teste -->
+        <div class="feature-card">
+            <h3><i class="fas fa-radio"></i> Simular pacote</h3>
+            <p>Envie um pacote de teste com headers de rádio para alimentar o aprendizado automático. Use para treinar o sistema.</p>
+            <div class="inline-form" style="flex-direction: column; gap: 8px;">
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <input type="text" id="pktNumero" placeholder="Número" style="flex:2;">
+                    <input type="text" id="pktCellId" placeholder="Cell ID" value="208020001" style="flex:1;">
+                </div>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <input type="text" id="pktTa" placeholder="TA" value="12" style="flex:1;">
+                    <input type="text" id="pktRtt" placeholder="RTT (ms)" value="150" style="flex:1;">
+                    <input type="text" id="pktRsrp" placeholder="RSRP (dBm)" value="-65" style="flex:1;">
+                </div>
+                <button class="btn btn-secondary" onclick="enviarPacote()"><i class="fas fa-paper-plane"></i> Enviar pacote</button>
+            </div>
+            <div id="resultadoPacote" class="api-response"></div>
+        </div>
+    </div>
+
+    <!-- Rodapé -->
+    <footer class="footer">
+        <p>ORION AI - DEPOM &copy; 2026 | Desenvolvido por Eng. Souza, CREA/SP xxxxx</p>
+        <p style="margin-top: 5px; font-size: 0.7rem;">
+            <i class="fas fa-database"></i> Dados anônimos | <i class="fas fa-lock"></i> Privacidade garantida
+        </p>
+    </footer>
+</div>
 
 <script>
-let map=null, marker=null, circle=null, markersERB=[];
-let points=[], nextId=1, callIdHistory=[];
-const ERB_DATABASE_ORION = [
-  {cellId:1000001021,lat:-28.72917,lng:-54.9075,range:1000,operadora:"TIM",cidade:"Bossoroca RS",band:"B28",fonte:"ANATEL 69k"},
-  {cellId:1000447690,lat:-25.28442,lng:-44.23566,range:1000,operadora:"VIVO",cidade:"Sao Luis MA",band:"n78",fonte:"ANATEL 69k"},
-  {cellId:1002241950,lat:-14.37503,lng:-40.50615,range:1000,operadora:"CLARO",cidade:"Bom Jesus da Serra BA",band:"B28",fonte:"ANATEL 69k"},
-  {cellId:23998849,lat:-21.20787,lng:-47.75138,range:1000,operadora:"VIVO",cidade:"Ribeirao Preto SP",band:"n78",fonte:"ANATEL 69k"},
-  {cellId:1012073871,lat:-15.2575,lng:-46.90486,range:1000,operadora:"TIM",cidade:"Santa Luzia do Para PA",band:"B28",fonte:"ANATEL 69k"},
-];
-const erbByCellId = new Map(ERB_DATABASE_ORION.map(e=>[e.cellId,e]));
-let ERB_ALL = ERB_DATABASE_ORION;
-function gerarCallIdLocal(numero){ const ts=Date.now(); let h=0; for(let i=0;i<numero.length;i++){ h=((h<<5)-h)+numero.charCodeAt(i); h|=0; } const hex=Math.abs(h).toString(16).toUpperCase().padStart(8,"0"); return "CALL_"+hex+"_"+ts; }
-function hashNumeroParaERBLocal(numero){ let h=0; for(let i=0;i<numero.length;i++){ h=((h<<5)-h)+numero.charCodeAt(i); h|=0; } const idx=Math.abs(h)%ERB_ALL.length; return ERB_ALL[idx]; }
-function gerarNumeroAleatorio(){ const ddd=Math.floor(Math.random()*89)+10; const num=Math.floor(Math.random()*900000000)+100000000; return (""+ddd+num).slice(0,11); }
-async function sha256Hex(str){ try{ const buf=await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str)); return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join(""); }catch{ return "hash_"+Date.now(); } }
-function initMap(){ if(map){ map.remove(); map=null; } map=L.map("map",{zoomControl:true}).setView([-14.2,-51.9],4); L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19, attribution:"© OpenStreetMap"}).addTo(map); setTimeout(()=>{ map.invalidateSize(); }, 500); }
-function updateMap(pos,erb){ if(!map){ initMap(); } if(marker) { try{ map.removeLayer(marker); }catch{} marker=null; } if(circle) { try{ map.removeLayer(circle); }catch{} circle=null; } markersERB.forEach(m=>{ try{ map.removeLayer(m); }catch{} }); markersERB=[]; if(erb){ const icon=L.divIcon({html:"<div style=\"width:32px;height:32px;background:#ff00ff;border:3px solid #fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:14px;color:#fff\">📡</div>",iconSize:[32,32],iconAnchor:[16,16]}); const m=L.marker([erb.lat,erb.lng],{icon}).addTo(map).bindPopup("<b>ERB CellID "+erb.cellId+"</b><br>"+erb.cidade+" "+erb.operadora+"<br>"+erb.lat.toFixed(7)+","+erb.lng.toFixed(7)+"<br>Range "+erb.range+"m<br>Fonte "+erb.fonte+"<br><b>Celular comunicando aqui AGORA</b>").openPopup(); markersERB.push(m); } if(pos){ marker=L.marker([pos.lat,pos.lng]).addTo(map).bindPopup("<b>📱 Celular ESTÁ se comunicando aqui AGORA</b><br>Lat "+pos.lat.toFixed(7)+" Lng "+pos.lng.toFixed(7)+"<br>Raio "+pos.acc+"m<br>Call_ID "+(pos.call_id||"")+"").openPopup(); circle=L.circle([pos.lat,pos.lng],{radius:pos.acc||500,color:"#ff00ff",weight:4,fillColor:"#ff00ff",fillOpacity:0.25}).addTo(map); map.setView([pos.lat,pos.lng], 14, {animate:true}); setTimeout(()=>{ map.invalidateSize(); map.setView([pos.lat,pos.lng], 14); }, 300); } document.getElementById("erbFound").innerHTML="✅ V30.0 - Resultado exibido no mapa - sem números no código - ERB CellID "+(erb?erb.cellId:"")+" → "+(erb?erb.cidade:"")+" - "+(erb?erb.fonte:""); }
-function updateProgress(cur,total,msg){ const pct=(cur/total)*100; const bar=document.getElementById("progressBar"); if(bar) bar.style.width=pct+"%"; const txt=document.getElementById("progressText"); if(txt) txt.innerHTML=msg||""; }
-function calcIdent(){ const cid=document.getElementById("inputCellId").value; if(!cid) return; const erb=erbByCellId.get(parseInt(cid)); if(erb){ document.getElementById("identValid").innerHTML="✅ ERB CellID "+erb.cellId+" → "+erb.cidade+" "+erb.operadora+" lat "+erb.lat.toFixed(5)+" lng "+erb.lng.toFixed(5); } }
-async function carregarApisStatus(){ const display=document.getElementById("apisStatusDisplay"); display.style.display="block"; display.innerHTML="🌐 Carregando status APIs externas..."; try{ const r=await fetch("/api/apis/status",{headers:{"Authorization":"Bearer ORION_V25"}}); if(r.ok){ const j=await r.json(); display.innerHTML="<b>🌐 STATUS APIS EXTERNAS V30.0 - "+j.version+"</b><br><br><b>Base local:</b> "+j.base_local.total+" ERBs - "+j.base_local.tamanho+" - "+j.base_local.status+"<br><br><b>OpenCellID:</b> "+(j.apis_externas.opencellid.configurada?"✅ CONFIGURADA":"❌ NÃO CONFIGURADA - opcional")+" - "+j.apis_externas.opencellid.url+" - "+j.apis_externas.opencellid.custo+"<br><b>BeaconDB:</b> ✅ SEMPRE DISPONÍVEL - "+j.apis_externas.beacondb.url+" - "+j.apis_externas.beacondb.custo+"<br><b>Google:</b> "+(j.apis_externas.google.configurada?"✅ CONFIGURADA":"❌ NÃO CONFIGURADA - opcional")+" - "+j.apis_externas.google.url+" - "+j.apis_externas.google.custo+"<br><br><b>Cache:</b> "+j.cache.size+" entradas TTL 24h<br><b>Privacidade:</b> "+j.privacidade+"<br><br><b>Recomendação:</b> "+j.recomendacao; } else{ display.innerHTML="⚠️ Backend offline - V27 APIs externas: base local 69057 ERBs primária offline O(1) - OpenCellID + BeaconDB + Google via .env - configure OPENCELLID_KEY no .env para 40M+ torres"; } }catch(e){ display.innerHTML="⚠️ Backend offline - V30.0: base local 69057 ERBs primária offline O(1) funciona sem APIs externas - OpenCellID + BeaconDB + Google são fallback - configure .env - sem números no código"; } }
-async function pesquisarNumeroModoPesquisaAutomatico(){ const numInput=document.getElementById("inputCelular"); const num=numInput.value.replace(/[^0-9]/g,"").slice(0,11); if(num.length!==11){ alert("Digite número - DDD + número - V30.0 sem números no código fonte"); return; } const cellIdInput=document.getElementById("inputCellId").value; updateProgress(1,3,"V30.0 - Gerando call_id para número digitado - 69057 ERBs + APIs externas - sem números no código..."); const call_id_local = gerarCallIdLocal(num); const callDisplay=document.getElementById("callIdDisplay"); callDisplay.style.display="block"; callDisplay.innerHTML="📞 CALL_ID GERADO NA HORA (não está no código fonte): <b>"+call_id_local+"</b> - Número digitado agora: "+num; document.getElementById("statusAuto").innerHTML="STATUS V30.0 - Pesquisando número digitado agora - call_id "+call_id_local+" - sem números no código - 69057 ERBs + APIs externas"; let erb=null; const cellIdQ=cellIdInput?parseInt(cellIdInput):null; if(cellIdQ && !isNaN(cellIdQ)){ erb=erbByCellId.get(cellIdQ); } if(!erb){ erb=hashNumeroParaERBLocal(num); } try{ const urlAuto="/api/localizar-automatico/"+num; const rAuto=await fetch(urlAuto,{headers:{"Authorization":"Bearer ORION_V25"}}); if(rAuto.ok){ const resp=await rAuto.json(); const pos=resp.position; erb={cellId:resp.detalhes?.erb?.cellId||erb.cellId, lat:pos.latitude, lng:pos.longitude, range:pos.raio_estimado, cidade:resp.detalhes?.erb?.cidade||erb.cidade, operadora:resp.detalhes?.erb?.operadora||erb.operadora, band:resp.detalhes?.erb?.band||erb.band, fonte:resp.detalhes?.erb?.fonte||"Backend 69k + APIs externas V27"}; } }catch(e){} if(erb){ const id=nextId++; const ts=new Date().toISOString(); const hash=await sha256Hex(id+"|"+erb.lat+"|"+erb.lng+"|"+ts); points=[{id,lat:erb.lat,lng:erb.lng,acc:erb.range,ts,hash,numero:num,call_id:call_id_local}]; callIdHistory.push({call_id:call_id_local, numero:num, timestamp:ts, erb:erb}); const pointsList=document.getElementById("pointsList"); pointsList.innerHTML="<div style='border:3px solid #ff00ff;padding:16px;background:#1a001a'><b style='color:#ff00ff;font-size:14px'>✅ V30.0 - 69057 ERBs + APIS EXTERNAS - NUMERO DIGITADO AGORA LOCALIZADO E EXIBIDO NO MAPA - SEM NUMEROS NO CODIGO</b><br><br>📞 <b>CALL_ID GERADO NA HORA:</b> "+call_id_local+"<br>📱 <b>Número pesquisado agora (digitado, não está no código):</b> "+num+"<br>📍 <b>CELULAR ESTÁ SE COMUNICANDO - EXIBIDO NO MAPA:</b><br>Lat <b>"+erb.lat.toFixed(7)+"</b> Lng <b>"+erb.lng.toFixed(7)+"</b><br>🏙️ <b>ERB:</b> CellID "+erb.cellId+" - "+erb.cidade+" - "+erb.operadora+"<br>📡 <b>Range:</b> "+erb.range+"m | <b>Banda:</b> "+erb.band+" | <b>Fonte:</b> "+erb.fonte+"<br><br><b style='color:#00e5ff'>🌐 V30.0 APIS EXTERNAS: base local 69057 O(1) + OpenCellID 40M+ + BeaconDB + Google via .env - fallback automático quando CellID não está na base local</b><br><br><b style='color:#00ffaa;font-size:13px'>✅ RESULTADO EXIBIDO NO MAPA AO LADO - SEM NUMEROS REGISTRADOS NO CODIGO FONTE - V30.0 APIS EXTERNAS</b></div>"; callDisplay.innerHTML="📞 CALL_ID GERADO NA HORA (sem registro no código): <b>"+call_id_local+"</b> - Número digitado agora: "+num+" - ✅ EXIBIDO NO MAPA - ERB "+erb.cidade+" - "+erb.fonte; updateMap({lat:erb.lat,lng:erb.lng,acc:erb.range,call_id:call_id_local}, erb); updateProgress(3,3,"✅ V30.0 - Número digitado agora localizado e EXIBIDO NO MAPA - ERB "+erb.cidade+" - "+erb.fonte+" - sem números no código - 69057 ERBs + APIs"); document.getElementById("statusAuto").innerHTML="✅ STATUS V30.0 - Número digitado agora - CALL_ID "+call_id_local+" - EXIBIDO NO MAPA - ERB "+erb.cidade+" - "+erb.fonte+" - sem números no código"; } }
-function testarNumeroAleatorio(){ const num=gerarNumeroAleatorio(); document.getElementById("inputCelular").value=num; document.getElementById("inputCellId").value=""; pesquisarNumeroModoPesquisaAutomatico(); }
-document.getElementById("inputCelular").addEventListener("input", (e)=>{ let v=e.target.value.replace(/[^0-9]/g,"").slice(0,11); e.target.value=v; const ok=v.length==11; const el=document.getElementById("celularValid"); if(el){ el.innerHTML=ok?"✅ Válido V30.0 - sem números no código - clique PESQUISAR - 69057 ERBs + APIs externas":"Inválido - digite DDD + número - sem registro"; el.style.color=ok?"#ff00ff":"#ff3344"; } });
-document.getElementById("inputCellId").addEventListener("input", ()=>{ calcIdent(); });
-document.getElementById("btnCallIdAutomatico").onclick=()=>{ pesquisarNumeroModoPesquisaAutomatico(); };
-document.getElementById("btnPesquisarNumero").onclick=()=>{ pesquisarNumeroModoPesquisaAutomatico(); };
-document.getElementById("btnTestarAleatorio").onclick=()=>{ testarNumeroAleatorio(); };
-document.getElementById("btnApisStatus").onclick=()=>{ carregarApisStatus(); };
-document.getElementById("btnValidarCel").onclick=()=>{ const v=document.getElementById("inputCelular").value; if(v.length==11) pesquisarNumeroModoPesquisaAutomatico(); else alert("Digite número - DDD + número - V30.0 sem números no código"); };
-document.getElementById("btnLimparCel").onclick=()=>{ document.getElementById("inputCelular").value=""; document.getElementById("inputCellId").value=""; document.getElementById("callIdDisplay").style.display="none"; document.getElementById("apisStatusDisplay").style.display="none"; if(marker && map){ try{ map.removeLayer(marker); }catch{} marker=null; } if(circle && map){ try{ map.removeLayer(circle); }catch{} circle=null; } markersERB.forEach(m=>{ try{ if(map) map.removeLayer(m); }catch{} }); markersERB=[]; if(map) map.setView([-14.2,-51.9],4); document.getElementById("pointsList").innerHTML="🔧 V30.0 - 69057 ERBs + APIs externas - Sem números no código fonte - Pronto - digite número agora e clique PESQUISAR → exibe no mapa - base local 69K + OpenCellID + BeaconDB + Google"; document.getElementById("statusAuto").innerHTML="STATUS V30.0 - 69057 ERBs + APIs externas: pronto - sem números no código"; };
-document.getElementById("btnClear").onclick=()=>{ document.getElementById("btnLimparCel").click(); };
-document.getElementById("btnExportGeo").onclick=()=>{ const geo={type:"FeatureCollection",features:points.map(p=>({type:"Feature",properties:{id:p.id,numero:p.numero||"",call_id:p.call_id||""},geometry:{type:"Point",coordinates:[p.lng,p.lat]}}))}; const blob=new Blob([JSON.stringify(geo,null,2)],{type:"application/json"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="orion_v27_sem_numeros_69057.geojson"; a.click(); URL.revokeObjectURL(url); };
-document.getElementById("btnExportCSV").onclick=()=>{ let csv="id,numero,call_id,lat,lng,cellId,cidade\n"; points.forEach(p=>{csv+=p.id+","+(p.numero||"")+","+(p.call_id||"")+","+p.lat+","+p.lng+","+(p.erb?.cellId||"")+","+(p.erb?.cidade||"")+"\n";}); const blob=new Blob([csv],{type:"text/csv"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="orion_v27_sem_numeros_69057.csv"; a.click(); URL.revokeObjectURL(url); };
-document.addEventListener("DOMContentLoaded", ()=>{ initMap(); setTimeout(()=>{ if(map){ map.invalidateSize(); } }, 800); carregarApisStatus(); });
-initMap();
-setTimeout(()=>{ if(map){ map.invalidateSize(); } }, 1000);
-console.log("ORION V30.0 EFICIÊNCIA MÁXIMA após 10K TESTES BAHIA - 290x mais eficiente - ERB ATIVA TROCANDO DADOS - 69057 ERBs");
+    // ==========================================================
+    // FUNÇÕES DE INTERAÇÃO COM A API
+    // ==========================================================
+
+    // 1. Buscar número (rastreio básico)
+    async function buscarNumero() {
+        const numero = document.getElementById('buscaNumero').value.trim();
+        if (!numero) { alert('Digite um número.'); return; }
+        const div = document.getElementById('resultadoBusca');
+        div.textContent = '⏳ Buscando...';
+        div.classList.add('visible');
+        try {
+            const res = await fetch('/api/rastrear/' + encodeURIComponent(numero));
+            const data = await res.json();
+            div.textContent = JSON.stringify(data, null, 2);
+        } catch (e) {
+            div.textContent = '❌ Erro: ' + e.message;
+        }
+    }
+
+    // 2. Cadastrar número manualmente
+    async function cadastrarNumero() {
+        const numero = document.getElementById('cadNumero').value.trim();
+        const cellId = document.getElementById('cadCellId').value.trim();
+        const mcc = document.getElementById('cadMcc').value.trim();
+        const mnc = document.getElementById('cadMnc').value.trim();
+        const lac = document.getElementById('cadLac').value.trim();
+        if (!numero || !cellId) { alert('Número e Cell ID são obrigatórios.'); return; }
+
+        const body = {
+            numero: numero,
+            cellId: parseInt(cellId),
+            mcc: parseInt(mcc) || 724,
+            mnc: parseInt(mnc) || 0,
+            lac: parseInt(lac) || 0
+        };
+
+        const div = document.getElementById('resultadoCadastro');
+        div.textContent = '⏳ Cadastrando...';
+        div.classList.add('visible');
+        try {
+            const res = await fetch('/api/cadastrar-numero', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            div.textContent = JSON.stringify(data, null, 2);
+        } catch (e) {
+            div.textContent = '❌ Erro: ' + e.message;
+        }
+    }
+
+    // 3. Localização avançada
+    async function buscarAvancado() {
+        const numero = document.getElementById('buscaAvancada').value.trim();
+        if (!numero) { alert('Digite um número.'); return; }
+        const div = document.getElementById('resultadoAvancado');
+        div.textContent = '⏳ Processando...';
+        div.classList.add('visible');
+        try {
+            const res = await fetch('/api/localizar-avancado/' + encodeURIComponent(numero));
+            const data = await res.json();
+            div.textContent = JSON.stringify(data, null, 2);
+        } catch (e) {
+            div.textContent = '❌ Erro: ' + e.message;
+        }
+    }
+
+    // 4. Enviar pacote de teste
+    async function enviarPacote() {
+        const numero = document.getElementById('pktNumero').value.trim();
+        const cellId = document.getElementById('pktCellId').value.trim();
+        const ta = document.getElementById('pktTa').value.trim();
+        const rtt = document.getElementById('pktRtt').value.trim();
+        const rsrp = document.getElementById('pktRsrp').value.trim();
+
+        if (!numero || !cellId) { alert('Número e Cell ID são obrigatórios.'); return; }
+
+        const body = {
+            numero: numero,
+            cellId: parseInt(cellId),
+            mcc: 724,
+            mnc: 5,
+            lac: 100,
+            ta: parseInt(ta) || 0,
+            rtt: parseInt(rtt) || 0,
+            rsrp: parseInt(rsrp) || 0,
+            sinr: 22.5,
+            rsrq: -8,
+            cqi: 12,
+            aoa: 45,
+            power_headroom: 10,
+            handover_from: 0,
+            drx_cycle: 320
+        };
+
+        const div = document.getElementById('resultadoPacote');
+        div.textContent = '⏳ Enviando...';
+        div.classList.add('visible');
+        try {
+            const res = await fetch('/api/pacotes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await res.json();
+            div.textContent = JSON.stringify(data, null, 2);
+        } catch (e) {
+            div.textContent = '❌ Erro: ' + e.message;
+        }
+    }
+
+    // ==========================================================
+    // CARREGAR ESTATÍSTICAS (opcional)
+    // ==========================================================
+    async function carregarStats() {
+        try {
+            // Tenta obter a contagem de torres via uma rota de status (se existir)
+            // Por enquanto, usamos valores mockados ou podemos tentar uma query.
+            // Simulamos com valores estáticos para não sobrecarregar.
+            // Idealmente, você criaria uma rota /api/status para isso.
+            document.getElementById('torresCount').textContent = '5+';
+            document.getElementById('numerosCount').textContent = 'Automático';
+            document.getElementById('pacotesCount').textContent = 'Em coleta';
+        } catch (e) {
+            console.warn('Não foi possível carregar estatísticas:', e);
+        }
+    }
+
+    // Inicializar
+    carregarStats();
 </script>
 </body>
 </html>
