@@ -7,17 +7,13 @@ const csv = require('csv-parser');
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Middleware
 app.use(express.json());
 app.use(express.static('public'));
 
-// Banco de dados SQLite
 const dbPath = path.join(__dirname, 'orion.db');
 const db = new sqlite3.Database(dbPath);
 
-// ============================================================
-// 1. INICIALIZAÇÃO DO BANCO DE DADOS
-// ============================================================
+// Inicialização do Banco de Dados
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS estacoes (
     id_estacao TEXT PRIMARY KEY,
@@ -63,10 +59,15 @@ db.serialize(() => {
 });
 
 // ============================================================
-// 2. FUNÇÃO PARA IMPORTAR OS ARQUIVOS ERB
+// FUNÇÃO ROBUSTA PARA IMPORTAR OS ARQUIVOS ERB
 // ============================================================
 async function importarERBs() {
   const dataDir = path.join(__dirname, 'data');
+  if (!fs.existsSync(dataDir)) {
+    console.log('⚠️ Pasta /data não encontrada.');
+    return;
+  }
+
   const arquivos = fs.readdirSync(dataDir).filter(f => f.startsWith('Estacoes_Licenciadas_SMP_part') && f.endsWith('.csv'));
 
   if (arquivos.length === 0) {
@@ -83,25 +84,45 @@ async function importarERBs() {
     const caminho = path.join(dataDir, arquivo);
     const estacoes = {};
 
+    // Função para normalizar strings
+    const normalizar = (str) => str.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').trim();
+
     await new Promise((resolve, reject) => {
+      // Detecta o separador lendo a primeira linha
+      let separador = ',';
+      const primeiraLinha = fs.readFileSync(caminho, 'utf8').split('\n')[0];
+      if (primeiraLinha.includes(';')) separador = ';';
+
+      console.log(`🔍 Lendo ${arquivo} com separador '${separador}'`);
+
+      let primeiro = true;
       fs.createReadStream(caminho)
-        .pipe(csv({ separator: ',' }))
+        .pipe(csv({
+          separator: separador,
+          mapHeaders: ({ header }) => normalizar(header || '').toLowerCase().replace(/[^a-z0-9]/g, '_')
+        }))
         .on('data', (row) => {
+          if (primeiro) {
+            console.log(`📋 Colunas identificadas: ${Object.keys(row).join(', ')}`);
+            primeiro = false;
+          }
           totalLidos++;
-          const id = row['Número da Estação'] || row['id_estacao'] || row['Número da Estação']?.trim();
+
+          // Mapeamento flexível das colunas
+          const id = row['numero_da_estacao'] || row['id_estacao'] || row['numero_da_estação'] || row['id'] || '';
           if (!id) return;
 
           if (!estacoes[id]) {
             estacoes[id] = {
               id_estacao: id,
-              operadora: row['Prestadora'] || row['operadora'] || '',
-              uf: row['UF'] || row['uf'] || '',
-              municipio: row['Município'] || row['municipio'] || '',
-              bairro: row['Bairro'] || row['bairro'] || '',
-              endereco: row['Logradouro'] || row['endereco'] || '',
-              codigo_municipio_ibge: row['Código do Município'] || row['codigo_municipio_ibge'] || '',
-              latitude: parseFloat(row['Latitude'] || row['latitude'] || 0),
-              longitude: parseFloat(row['Longitude'] || row['longitude'] || 0),
+              operadora: row['prestadora'] || row['operadora'] || '',
+              uf: row['uf'] || row['codigo_da_uf'] || '',
+              municipio: row['municipio'] || row['município'] || '',
+              bairro: row['bairro'] || '',
+              endereco: row['logradouro'] || row['endereco'] || '',
+              codigo_municipio_ibge: row['codigo_do_municipio'] || row['codigo_municipio_ibge'] || '',
+              latitude: parseFloat(row['latitude'] || 0),
+              longitude: parseFloat(row['longitude'] || 0),
               frequencias: [],
               azimutes: [],
               emissoes: [],
@@ -111,24 +132,26 @@ async function importarERBs() {
           }
 
           // Adiciona frequências e azimutes
-          const freqIni = row['Frequência Inicial (MHz)'] || row['frequencia_inicial'] || '';
-          const freqFim = row['Frequência Final (MHz)'] || row['frequencia_final'] || '';
+          const freqIni = row['frequencia_inicial_mhz'] || row['frequência_inicial_mhz'] || row['frequencia_inicial'] || '';
+          const freqFim = row['frequencia_final_mhz'] || row['frequência_final_mhz'] || row['frequencia_final'] || '';
           if (freqIni && freqFim) {
             estacoes[id].frequencias.push(`${freqIni}-${freqFim}`);
           }
 
-          const azimute = row['Azimute'] || '';
+          const azimute = row['azimute'] || '';
           if (azimute) {
             estacoes[id].azimutes.push(azimute);
           }
 
-          const emissao = row['Emissão'] || row['emissao'] || '';
+          const emissao = row['emissao'] || row['emissão'] || '';
           if (emissao) {
             estacoes[id].emissoes.push(emissao);
           }
         })
         .on('end', () => {
-          console.log(`✅ Lidos ${Object.keys(estacoes).length} estações únicas de ${arquivo}`);
+          const qtdEstacoes = Object.keys(estacoes).length;
+          console.log(`✅ ${arquivo}: ${qtdEstacoes} estações únicas identificadas.`);
+
           // Insere no banco
           const stmt = db.prepare(`
             INSERT OR REPLACE INTO estacoes (
@@ -166,7 +189,7 @@ async function importarERBs() {
             INSERT INTO importacao_log (arquivo, registros_lidos, registros_importados)
             VALUES (?, ?, ?)
           `);
-          logStmt.run(arquivo, Object.keys(estacoes).length, Object.keys(estacoes).length);
+          logStmt.run(arquivo, totalLidos, qtdEstacoes);
           logStmt.finalize();
 
           resolve();
@@ -182,10 +205,9 @@ async function importarERBs() {
 }
 
 // ============================================================
-// 3. ROTAS DA API
+// ROTAS DA API
 // ============================================================
 
-// Rota para listar estações próximas a um ponto
 app.get('/api/estacoes/proximas', (req, res) => {
   const { lat, lon, raio } = req.query;
   if (!lat || !lon) {
@@ -193,8 +215,6 @@ app.get('/api/estacoes/proximas', (req, res) => {
   }
 
   const raioKm = parseFloat(raio) || 10;
-
-  // Fórmula de Haversine aproximada
   const sql = `
     SELECT *,
       (6371 * acos( cos(radians(?)) * cos(radians(latitude)) *
@@ -215,7 +235,6 @@ app.get('/api/estacoes/proximas', (req, res) => {
   });
 });
 
-// Rota para cadastrar número
 app.post('/api/numeros', (req, res) => {
   const { numero, operadora, uf, municipio } = req.body;
   if (!numero) {
@@ -235,7 +254,6 @@ app.post('/api/numeros', (req, res) => {
   });
 });
 
-// Rota para listar números cadastrados
 app.get('/api/numeros', (req, res) => {
   db.all('SELECT * FROM numeros ORDER BY data_cadastro DESC', (err, rows) => {
     if (err) {
@@ -245,7 +263,6 @@ app.get('/api/numeros', (req, res) => {
   });
 });
 
-// Rota para consultar histórico
 app.get('/api/historico', (req, res) => {
   db.all(`
     SELECT h.*, e.operadora, e.municipio, e.uf
@@ -262,10 +279,9 @@ app.get('/api/historico', (req, res) => {
 });
 
 // ============================================================
-// 4. INICIALIZAÇÃO DO SERVIDOR
+// INICIALIZAÇÃO DO SERVIDOR
 // ============================================================
 
-// Importa os ERBs ao iniciar
 (async () => {
   await importarERBs();
   console.log('✅ ORION pronto para uso.');
@@ -275,7 +291,6 @@ app.listen(port, () => {
   console.log(`🚀 ORION rodando na porta ${port}`);
 });
 
-// Tratamento de encerramento
 process.on('SIGINT', () => {
   db.close();
   console.log('👋 ORION encerrado.');
