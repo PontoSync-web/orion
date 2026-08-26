@@ -1,30 +1,26 @@
 {
   "name": "orion",
-  "version": "1.0.0",
-  "description": "ORION — Sistema de Inteligência e Geocalização",
+  "version": "2.0.0",
+  "description": "Sistema ORION para geolocalização de ERBs",
   "main": "orion.js",
   "scripts": {
     "start": "node orion.js",
-    "dev": "nodemon orion.js",
-    "test": "echo \"No tests specified\" && exit 0"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "argon2": "^0.41.1",
-    "cookie-parser": "^1.4.7",
-    "cors": "^2.8.5",
-    "csurf": "^1.11.0",
-    "dotenv": "^16.4.7",
-    "express": "^4.21.2",
-    "express-fileupload": "^1.5.1",
-    "express-rate-limit": "^7.5.0",
-    "helmet": "^8.0.0",
-    "jsonwebtoken": "^9.0.2",
-    "node-fetch": "^2.7.0",
-    "sqlite3": "^5.1.7",
-    "uuid": "^11.1.0",
-    "ws": "^8.18.0"
+    "express": "^4.18.2",
+    "sqlite3": "^5.1.6",
+    "csv-parser": "^3.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "keywords": [
+    "orion",
+    "erb",
+    "anatel",
+    "geolocalizacao"
+  ],
+  "author": "Comandante ORION",
+  "license": "MIT"
 }
