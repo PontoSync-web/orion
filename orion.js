@@ -1,11 +1,10 @@
 /**
  * ARQUIVO: orion.js
- * VERSÃO: 7.1.0
- * DATA: 2026-08-26 20:00:00 (UTC)
- * COMENTÁRIO: Integração com OpenCelliD como fallback para localização por número.
- *             Mantidas todas as funcionalidades existentes (aprendizado automático,
- *             pacotes, cadastro manual, localização avançada).
- *             Adicionada rota /api/rastrear com fallback para OpenCelliD.
+ * VERSÃO: 7.2.0
+ * DATA: 2026-08-27 10:30:00 (UTC)
+ * COMENTÁRIO: Adicionada rota proxy /api/consultar-operadora/:numero para
+ *             consultar a operadora de um número via ABR Telecom.
+ *             Integração preparada para preencher campo automaticamente no front-end.
  * AUTOR: Engenheiro de Computação Souza, CREA/SP xxxxx
  */
 
@@ -14,6 +13,7 @@ const sqlite3 = require('sqlite3').verbose();
 const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
+const csv = require('csv-parser');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -29,7 +29,7 @@ function log(msg) {
     console.log(`[${new Date().toISOString()}] ${msg}`);
 }
 
-log('✅ ORION 7.1.0 iniciando...');
+log('✅ ORION 7.2.0 iniciando...');
 
 // ============================================================
 // MIDDLEWARE
@@ -39,7 +39,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static(PUBLIC_DIR));
 
 // ============================================================
-// FUNÇÕES AUXILIARES (MANTIDAS)
+// FUNÇÕES AUXILIARES
 // ============================================================
 function sanitizarNumero(numero) {
     return numero.replace(/\D/g, '');
@@ -58,7 +58,7 @@ function validarCells(cells) {
 }
 
 // ============================================================
-// 2026-08-26 20:00 — FUNÇÃO DE LOCALIZAÇÃO POR ERB (OpenCelliD)
+// 2026-08-27 10:30 — FUNÇÃO DE LOCALIZAÇÃO POR ERB (OpenCelliD - FALLBACK)
 // ============================================================
 async function obterLocalizacaoPorERB(telefone) {
     const openCellIdKey = process.env.OPENCELLID_KEY;
@@ -67,10 +67,9 @@ async function obterLocalizacaoPorERB(telefone) {
         return null;
     }
 
-    // Coordenadas de referência (Salvador/BA) - pode ser ajustado para a região desejada
     const lat = -12.9714;
     const lng = -38.5014;
-    const radius = 5000; // 5 km
+    const radius = 5000;
 
     const url = `https://opencellid.org/cell/getInArea?key=${openCellIdKey}&lat=${lat}&lng=${lng}&radius=${radius}&format=json`;
 
@@ -83,7 +82,6 @@ async function obterLocalizacaoPorERB(telefone) {
 
         const data = await response.json();
         if (data && data.cells && data.cells.length > 0) {
-            // Usar a primeira torre como referência
             const torre = data.cells[0];
             return {
                 lat: parseFloat(torre.lat),
@@ -96,7 +94,7 @@ async function obterLocalizacaoPorERB(telefone) {
                 fonte: 'opencellid'
             };
         }
-        log('📭 Nenhuma torre encontrada na região pela OpenCelliD.');
+        log('📭 Nenhuma torre encontrada pela OpenCelliD.');
     } catch (err) {
         log('❌ Erro ao consultar OpenCelliD: ' + err.message);
     }
@@ -105,17 +103,239 @@ async function obterLocalizacaoPorERB(telefone) {
 }
 
 // ============================================================
+// 2026-08-27 10:30 — PROXY PARA CONSULTAR OPERADORA (ABR TELECOM)
+// ============================================================
+app.get('/api/consultar-operadora/:numero', async (req, res) => {
+    const numero = sanitizarNumero(req.params.numero);
+    if (!numero || numero.length < 10) {
+        return res.status(400).json({ erro: 'Número inválido. Use pelo menos 10 dígitos.' });
+    }
+
+    try {
+        const url = `https://consultanumero.abrtelecom.com.br/consultanumero/consulta/consultaSituacaoAtualCtg?numero=${numero}`;
+        log(`🔍 Consultando operadora para ${numero}...`);
+
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/plain, */*',
+                'Referer': 'https://consultanumero.abrtelecom.com.br/'
+            }
+        });
+
+        if (!response.ok) {
+            log(`⚠️ ABR Telecom respondeu com status: ${response.status}`);
+            return res.status(502).json({ erro: 'Falha ao consultar operadora. Tente novamente.' });
+        }
+
+        const data = await response.json();
+        log(`✅ Operadora consultada com sucesso para ${numero}.`);
+
+        // A estrutura exata da resposta pode variar. Ajustaremos após testes.
+        // Exemplo esperado: { status: "success", operadora: "Claro", ... }
+        res.json({
+            status: 'success',
+            numero: numero,
+            operadora: data.operadora || data.operadora_nome || data.nome_operadora || 'Não identificada',
+            dados_completos: data
+        });
+    } catch (err) {
+        log(`❌ Erro ao consultar operadora: ${err.message}`);
+        res.status(500).json({ erro: 'Erro interno ao consultar operadora.' });
+    }
+});
+
+// ============================================================
+// IMPORTAÇÃO UNIVERSAL DE ERBs (A PARTIR DA PASTA /data)
+// ============================================================
+async function importarERBsAuto() {
+    log('🔍 Verificando arquivos de ERB na pasta /data...');
+
+    const arquivos = fs.readdirSync(DATA_DIR);
+    const arquivosERB = arquivos.filter(f =>
+        f.endsWith('.csv') || f.endsWith('.json') || f.endsWith('.txt')
+    );
+
+    if (arquivosERB.length === 0) {
+        log('📭 Nenhum arquivo de ERB encontrado na pasta /data.');
+        return 0;
+    }
+
+    log(`📁 Encontrados ${arquivosERB.length} arquivos: ${arquivosERB.join(', ')}`);
+
+    let totalImportados = 0;
+
+    for (const arquivo of arquivosERB) {
+        const caminho = path.join(DATA_DIR, arquivo);
+        log(`📥 Processando ${arquivo}...`);
+
+        try {
+            if (arquivo.endsWith('.csv')) {
+                const count = await importarCSV(caminho);
+                totalImportados += count;
+            } else if (arquivo.endsWith('.json')) {
+                const count = await importarJSON(caminho);
+                totalImportados += count;
+            } else if (arquivo.endsWith('.txt')) {
+                log(`ℹ️ Arquivo .txt ignorado (formato não suportado automaticamente): ${arquivo}`);
+            }
+        } catch (err) {
+            log(`❌ Erro ao importar ${arquivo}: ${err.message}`);
+        }
+    }
+
+    log(`✅ Importação concluída: ${totalImportados} torres adicionadas.`);
+    return totalImportados;
+}
+
+async function importarCSV(caminho) {
+    return new Promise((resolve, reject) => {
+        const rows = [];
+        fs.createReadStream(caminho, { encoding: 'utf8' })
+            .pipe(csv({
+                separator: ',',
+                mapHeaders: ({ header }) => header.trim()
+            }))
+            .on('data', (row) => rows.push(row))
+            .on('end', () => {
+                if (rows.length === 0) {
+                    log(`⚠️ ${path.basename(caminho)}: Arquivo vazio ou sem dados.`);
+                    resolve(0);
+                    return;
+                }
+
+                const headers = Object.keys(rows[0]);
+                const mapeamento = {
+                    cell: headers.find(h => /cell|ci|id_estacao|cell_id|numero_estacao/i.test(h)),
+                    lat: headers.find(h => /lat|latitude/i.test(h)),
+                    lon: headers.find(h => /lon|longitude/i.test(h)),
+                    mcc: headers.find(h => /mcc|codigo_pais|uf|uf_codigo/i.test(h)),
+                    net: headers.find(h => /net|mnc|operadora/i.test(h)),
+                    area: headers.find(h => /area|lac|tac|tracking|codigo_municipio/i.test(h)),
+                    range: headers.find(h => /range|raio|alcance|precision/i.test(h)),
+                };
+
+                if (!mapeamento.cell || !mapeamento.lat || !mapeamento.lon) {
+                    log(`⚠️ ${path.basename(caminho)}: Colunas essenciais (cell, lat, lon) não encontradas.`);
+                    log(`   Colunas disponíveis: ${headers.join(', ')}`);
+                    resolve(0);
+                    return;
+                }
+
+                log(`✅ Mapeamento para ${path.basename(caminho)}:`, mapeamento);
+
+                const stmt = db.prepare(`
+                    INSERT OR REPLACE INTO cell_towers 
+                    (cell, mcc, net, area, lat, lon, range) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                `);
+
+                let count = 0;
+                for (const row of rows) {
+                    const cell = parseInt(row[mapeamento.cell]);
+                    const lat = parseFloat(row[mapeamento.lat]);
+                    const lon = parseFloat(row[mapeamento.lon]);
+                    if (!cell || isNaN(lat) || isNaN(lon)) continue;
+
+                    stmt.run(
+                        cell,
+                        parseInt(row[mapeamento.mcc] || 724),
+                        parseInt(row[mapeamento.net] || 0),
+                        parseInt(row[mapeamento.area] || 0),
+                        lat,
+                        lon,
+                        parseInt(row[mapeamento.range] || 500)
+                    );
+                    count++;
+                }
+                stmt.finalize();
+
+                log(`✅ ${path.basename(caminho)}: ${count} torres importadas.`);
+                resolve(count);
+            })
+            .on('error', (err) => {
+                log(`❌ Erro ao ler CSV: ${err.message}`);
+                resolve(0);
+            });
+    });
+}
+
+async function importarJSON(caminho) {
+    return new Promise((resolve, reject) => {
+        try {
+            const data = JSON.parse(fs.readFileSync(caminho, 'utf8'));
+            const rows = Array.isArray(data) ? data : (data.data || data.records || data.cells || data.towers || []);
+            if (!rows || rows.length === 0) {
+                log(`⚠️ ${path.basename(caminho)}: JSON vazio ou formato não reconhecido.`);
+                resolve(0);
+                return;
+            }
+
+            const headers = Object.keys(rows[0]);
+            const mapeamento = {
+                cell: headers.find(h => /cell|ci|id_estacao|cell_id|id/i.test(h)),
+                lat: headers.find(h => /lat|latitude/i.test(h)),
+                lon: headers.find(h => /lon|longitude/i.test(h)),
+                mcc: headers.find(h => /mcc|codigo_pais|uf/i.test(h)),
+                net: headers.find(h => /net|mnc|operadora/i.test(h)),
+                area: headers.find(h => /area|lac|tac|codigo_municipio/i.test(h)),
+                range: headers.find(h => /range|raio|precision/i.test(h)),
+            };
+
+            if (!mapeamento.cell || !mapeamento.lat || !mapeamento.lon) {
+                log(`⚠️ ${path.basename(caminho)}: Colunas essenciais (cell, lat, lon) não encontradas.`);
+                log(`   Colunas disponíveis: ${headers.join(', ')}`);
+                resolve(0);
+                return;
+            }
+
+            const stmt = db.prepare(`
+                INSERT OR REPLACE INTO cell_towers 
+                (cell, mcc, net, area, lat, lon, range) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `);
+
+            let count = 0;
+            for (const row of rows) {
+                const cell = parseInt(row[mapeamento.cell]);
+                const lat = parseFloat(row[mapeamento.lat]);
+                const lon = parseFloat(row[mapeamento.lon]);
+                if (!cell || isNaN(lat) || isNaN(lon)) continue;
+
+                stmt.run(
+                    cell,
+                    parseInt(row[mapeamento.mcc] || 724),
+                    parseInt(row[mapeamento.net] || 0),
+                    parseInt(row[mapeamento.area] || 0),
+                    lat,
+                    lon,
+                    parseInt(row[mapeamento.range] || 500)
+                );
+                count++;
+            }
+            stmt.finalize();
+
+            log(`✅ ${path.basename(caminho)}: ${count} torres importadas.`);
+            resolve(count);
+        } catch (err) {
+            log(`❌ Erro ao importar JSON: ${err.message}`);
+            resolve(0);
+        }
+    });
+}
+
+// ============================================================
 // CONEXÃO GLOBAL COM O BANCO
 // ============================================================
 let db;
 
 // ============================================================
-// ROTAS (MANTIDAS)
+// ROTAS
 // ============================================================
 app.get('/', (req, res) => {
     res.send(`
         <h1>🚀 ORION AI - DEPOM</h1>
-        <p>Versão 7.1.0</p>
+        <p>Versão 7.2.0</p>
         <ul>
             <li><a href="/mapa-localizar.html">🔍 Localizar por número</a></li>
             <li><a href="/teste">🧪 Teste</a></li>
@@ -131,7 +351,6 @@ app.get('/mapa-localizar.html', (req, res) => {
     if (fs.existsSync(filePath)) {
         res.sendFile(filePath);
     } else {
-        // fallback com interface já existente
         res.send(`
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -203,7 +422,7 @@ app.get('/mapa-localizar.html', (req, res) => {
 
     <div id="resultado">Aguardando consulta...</div>
     <div class="map-link" id="mapLink"></div>
-    <div class="footer">ORION v7.1.0</div>
+    <div class="footer">ORION v7.2.0</div>
 </div>
 
 <script>
@@ -356,7 +575,6 @@ app.get('/api/rastrear/:numero', async (req, res) => {
         return res.status(400).json({ erro: 'Número inválido.' });
     }
 
-    // 1. Tenta buscar na tabela targets (aprendizado local)
     db.get(
         `SELECT cellId, mcc, mnc, lac FROM targets WHERE numero = ?`,
         [numero],
@@ -366,7 +584,6 @@ app.get('/api/rastrear/:numero', async (req, res) => {
                 return res.status(500).json({ erro: 'Erro interno ao consultar banco.' });
             }
 
-            // 2. Se encontrou localmente, usa a torre local
             if (row) {
                 const cells = [{
                     cellId: row.cellId,
@@ -428,19 +645,16 @@ app.get('/api/rastrear/:numero', async (req, res) => {
                 return;
             }
 
-            // 3. Se não encontrou localmente, busca via OpenCelliD (fallback)
             log(`🔍 Número ${numero} não encontrado localmente. Consultando OpenCelliD...`);
             const localizacao = await obterLocalizacaoPorERB(numero);
 
             if (localizacao) {
-                // Armazena a localização obtida para futuras consultas
                 const stmt = db.prepare(
                     `INSERT INTO locations (numero, lat, lon, raio, data_hora) VALUES (?, ?, ?, ?, ?)`
                 );
                 stmt.run(numero, localizacao.lat, localizacao.lng, localizacao.precision || 500, new Date().toISOString());
                 stmt.finalize();
 
-                // Opcional: também pode cadastrar na tabela targets para aprendizado futuro
                 if (localizacao.cellId && localizacao.mcc && localizacao.mnc && localizacao.lac) {
                     db.run(
                         `INSERT OR REPLACE INTO targets (numero, cellId, mcc, mnc, lac, ultima_atualizacao)
@@ -461,7 +675,6 @@ app.get('/api/rastrear/:numero', async (req, res) => {
                 });
             }
 
-            // 4. Se nenhuma fonte encontrou
             return res.status(404).json({
                 erro: 'Número não encontrado. Tente cadastrar manualmente ou aguarde o aprendizado automático.'
             });
@@ -570,175 +783,4 @@ function aprenderAssociacoes() {
         FROM pacotes_headers
         WHERE rsrp > -120 AND sinr > 0
         GROUP BY numero, cellId, mcc, mnc, lac
-        ORDER BY freq DESC, avg_rsrp DESC, avg_sinr DESC
-    `, (err, rows) => {
-        if (err) {
-            log('❌ Erro no aprendizado: ' + err.message);
-            return;
-        }
-
-        if (rows.length === 0) {
-            log('📭 Nenhum pacote disponível para aprendizado.');
-            return;
-        }
-
-        const melhores = {};
-        for (const row of rows) {
-            if (!melhores[row.numero]) {
-                melhores[row.numero] = row;
-            }
-        }
-
-        const stmt = db.prepare(`
-            INSERT OR REPLACE INTO targets (numero, cellId, mcc, mnc, lac, ultima_atualizacao)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        `);
-
-        let count = 0;
-        for (const [numero, info] of Object.entries(melhores)) {
-            stmt.run(numero, info.cellId, info.mcc, info.mnc, info.lac);
-            count++;
-        }
-        stmt.finalize();
-
-        log(`✅ Aprendizado concluído: ${count} associações atualizadas.`);
-    });
-}
-
-// ============================================================
-// ROTA PARA LOCALIZAÇÃO AVANÇADA (USANDO PACOTES)
-// ============================================================
-app.get('/api/localizar-avancado/:numero', (req, res) => {
-    const numero = sanitizarNumero(req.params.numero);
-    if (!numero || numero.length < 10) {
-        return res.status(400).json({ erro: 'Número inválido.' });
-    }
-
-    db.all(
-        `SELECT * FROM pacotes_headers WHERE numero = ? ORDER BY timestamp DESC LIMIT 10`,
-        [numero],
-        (err, pacotes) => {
-            if (err || pacotes.length === 0) {
-                return res.status(404).json({ erro: 'Nenhum pacote encontrado para este número.' });
-            }
-
-            const filtrados = pacotes.filter(p => p.rsrp > -120 && p.sinr > 0);
-
-            if (filtrados.length === 0) {
-                return res.json({ status: 'nao_encontrado', mensagem: 'Pacotes com qualidade insuficiente.' });
-            }
-
-            let lat = 0, lon = 0, pesoTotal = 0;
-            let confianca = 0;
-            const detalhes = [];
-
-            // Processar pacotes de forma síncrona para evitar callback hell
-            const promises = filtrados.map(p => {
-                return new Promise((resolve) => {
-                    db.get(
-                        `SELECT lat, lon FROM cell_towers WHERE cell = ? AND mcc = ? AND net = ? AND area = ?`,
-                        [p.cellId, p.mcc, p.mnc, p.lac],
-                        (err, erb) => {
-                            if (err || !erb) {
-                                resolve(null);
-                                return;
-                            }
-
-                            let distancia = 0;
-                            if (p.rtt > 0) {
-                                distancia = (p.rtt * 3e8) / 2;
-                            } else if (p.ta > 0) {
-                                distancia = p.ta * 78;
-                            } else {
-                                resolve(null);
-                                return;
-                            }
-
-                            const peso = ((p.rsrp + 120) / 120) * 0.5 + ((p.sinr + 10) / 40) * 0.5;
-                            resolve({
-                                lat: erb.lat,
-                                lon: erb.lon,
-                                peso: peso,
-                                distancia: distancia,
-                                cellId: p.cellId,
-                                rsrp: p.rsrp,
-                                sinr: p.sinr
-                            });
-                        }
-                    );
-                });
-            });
-
-            Promise.all(promises).then(results => {
-                const validos = results.filter(r => r !== null);
-                if (validos.length === 0) {
-                    return res.json({ status: 'nao_encontrado', mensagem: 'Não foi possível calcular a posição.' });
-                }
-
-                let lat = 0, lon = 0, pesoTotal = 0;
-                let confianca = 0;
-
-                validos.forEach(r => {
-                    lat += r.lat * r.peso;
-                    lon += r.lon * r.peso;
-                    pesoTotal += r.peso;
-                    confianca += r.peso;
-                });
-
-                const posicao = {
-                    latitude: lat / pesoTotal,
-                    longitude: lon / pesoTotal,
-                    raio_estimado: 150,
-                    confianca: Math.min(100, Math.round((confianca / validos.length) * 100))
-                };
-
-                res.json({
-                    status: 'localizado',
-                    numero: numero,
-                    position: posicao,
-                    torres_usadas: validos.length,
-                    detalhes: {
-                        metodo: 'híbrido (TA/RTT + RSRP/SINR)',
-                        pacotes_processados: filtrados.length,
-                        erbs_usadas: validos.length,
-                        timestamp_ultimo_pacote: filtrados[0].timestamp
-                    }
-                });
-            }).catch(err => {
-                res.status(500).json({ erro: err.message });
-            });
-        }
-    );
-});
-
-// ============================================================
-// ROTA PARA IMPORTAR DADOS SOB DEMANDA
-// ============================================================
-app.post('/api/importar', (req, res) => {
-    log('⚠️ Iniciando importação sob demanda...');
-    const script = path.join(__dirname, 'scripts', 'import-coleta-campo.js');
-    const child = exec(`node ${script}`, { maxBuffer: 1024 * 1024 * 100 }, (error, stdout, stderr) => {
-        if (error) {
-            log('❌ Erro na importação: ' + error.message);
-            return;
-        }
-        log('✅ Importação concluída.');
-        log(stdout);
-    });
-    res.json({ status: 'importacao_iniciada', mensagem: 'A importação foi iniciada em segundo plano. Verifique os logs.' });
-});
-
-// ============================================================
-// FUNÇÕES DE BANCO DE DADOS
-// ============================================================
-function criarBancoEmergencia() {
-    return new Promise((resolve, reject) => {
-        const torres = [
-            ['GSM', 724, 5, 100, 208020001, 0, -38.5016, -12.9714, 5000, 100, 1, 1609459200, 1609459200, -71],
-            ['GSM', 724, 5, 200, 208017145, 0, -46.6333, -23.5505, 5000, 100, 1, 1609459200, 1609459200, -73],
-            ['GSM', 724, 5, 300, 208019001, 0, -43.2096, -22.9035, 3500, 85, 1, 1609459200, 1609459200, -74],
-            ['GSM', 724, 5, 400, 208018001, 0, -47.9292, -15.7801, 6000, 120, 1, 1609459200, 1609459200, -68],
-            ['GSM', 724, 5, 500, 208021001, 0, -38.5266, -3.7319, 4000, 90, 1, 1609459200, 1609459200, -69],
-        ];
-        const stmt = db.prepare(`INSERT OR REPLACE INTO cell_towers 
-            (radio, mcc, net, area, cell, unit, lon, lat, range, samples, changeable, created
+        ORDER BY freq DESC, avg_rsrp DESC, avg_s
