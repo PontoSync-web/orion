@@ -1,19 +1,25 @@
 {
-  "name": "orion",
-  "version": "6.8.0",
-  "description": "AI-DEPOM Orion - Geolocalização por torres de celular",
-  "main": "orion.js",
+  "name": "orion-core",
+  "version": "1.0.0",
+  "description": "ORION - Sistema de Inteligência e Geocalização",
+  "main": "server.js",
   "scripts": {
-    "start": "node orion.js"
+    "start": "node server.js",
+    "dev": "nodemon server.js"
   },
   "dependencies": {
-    "csv-parser": "^3.0.0",
-    "express": "^4.18.2",
-    "sqlite3": "^5.1.6"
-  },
-  "engines": {
-    "node": ">=18.0.0"
-  },
-  "author": "Equipe ORION",
-  "license": "MIT"
+    "argon2": "^0.41.1",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "csurf": "^1.11.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "uuid": "^11.1.0",
+    "ws": "^8.18.0",
+    "node-fetch": "^2.7.0",
+    "express-fileupload": "^1.5.1"
+  }
 }
