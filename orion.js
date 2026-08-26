@@ -59,7 +59,128 @@ db.serialize(() => {
 });
 
 // ============================================================
-// FUNÇÃO ROBUSTA PARA IMPORTAR OS ARQUIVOS ERB
+// FUNÇÃO PARA NORMALIZAR CABEÇALHOS
+// ============================================================
+function normalizarHeader(str) {
+  return str.normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '') // Remove acentos
+    .replace(/[^a-zA-Z0-9]/g, '_')   // Substitui caracteres especiais por _
+    .toLowerCase()
+    .replace(/_+/g, '_')              // Remove underscores duplicados
+    .replace(/^_|_$/g, '');           // Remove underscores no início e fim
+}
+
+// ============================================================
+// FUNÇÃO PARA DETECTAR SEPARADOR
+// ============================================================
+function detectarSeparador(caminho) {
+  const primeiraLinha = fs.readFileSync(caminho, 'utf8').split('\n')[0];
+  if (primeiraLinha.includes(';')) return ';';
+  if (primeiraLinha.includes('\t')) return '\t';
+  return ',';
+}
+
+// ============================================================
+// FUNÇÃO PARA LER ARQUIVO COM HEADER PADRÃO (FORMATO ANATEL)
+// ============================================================
+function lerArquivoAnatel(caminho, separador) {
+  return new Promise((resolve, reject) => {
+    const estacoes = {};
+    let colunasIdentificadas = {};
+
+    fs.createReadStream(caminho, { encoding: 'utf8' })
+      .pipe(csv({
+        separator: separador,
+        mapHeaders: ({ header }) => normalizarHeader(header)
+      }))
+      .on('headers', (headers) => {
+        // Mapeamento flexível de colunas
+        const map = {
+          id: ['numero_da_estacao', 'n_mero_da_esta_o', 'id_estacao', 'id', 'estacao_id'],
+          operadora: ['prestadora', 'operadora', 'operadora_nome', 'prestador'],
+          uf: ['uf', 'estado', 'sigla_uf', 'c_digo_da_uf'],
+          municipio: ['municipio', 'munic_pio', 'cidade', 'localidade'],
+          bairro: ['bairro', 'distrito'],
+          endereco: ['logradouro', 'endereco', 'rua', 'av', 'avenida'],
+          codigo_municipio: ['codigo_do_municipio', 'c_digo_do_munic_pio', 'codigo_ibge', 'ibge'],
+          latitude: ['latitude', 'lat'],
+          longitude: ['longitude', 'lon', 'long'],
+          frequencia_inicial: ['frequencia_inicial_mhz', 'frequ_ncia_inicial_mhz', 'frequencia_inicial', 'freq_ini'],
+          frequencia_final: ['frequencia_final_mhz', 'frequ_ncia_final_mhz', 'frequencia_final', 'freq_fim'],
+          azimute: ['azimute', 'azimuth', 'az'],
+          emissao: ['emissao', 'emiss_o', 'tipo_emissao']
+        };
+
+        colunasIdentificadas = {};
+        for (const [chave, possibilidades] of Object.entries(map)) {
+          const encontrada = headers.find(h => possibilidades.includes(h));
+          if (encontrada) colunasIdentificadas[chave] = encontrada;
+        }
+
+        console.log(`🔍 Mapeamento:`, colunasIdentificadas);
+      })
+      .on('data', (row) => {
+        // Pula linhas vazias
+        if (Object.keys(row).length === 0) return;
+
+        const id = row[colunasIdentificadas.id] || '';
+        if (!id) return;
+
+        if (!estacoes[id]) {
+          const lat = parseFloat(row[colunasIdentificadas.latitude] || 0);
+          const lon = parseFloat(row[colunasIdentificadas.longitude] || 0);
+          
+          // Valida coordenadas (Brasil)
+          if (lat < -34 || lat > 6 || lon < -75 || lon > -33) {
+            return; // Descarta coordenadas inválidas
+          }
+
+          estacoes[id] = {
+            id_estacao: id,
+            operadora: row[colunasIdentificadas.operadora] || '',
+            uf: row[colunasIdentificadas.uf] || '',
+            municipio: row[colunasIdentificadas.municipio] || '',
+            bairro: row[colunasIdentificadas.bairro] || '',
+            endereco: row[colunasIdentificadas.endereco] || '',
+            codigo_municipio_ibge: row[colunasIdentificadas.codigo_municipio] || '',
+            latitude: lat,
+            longitude: lon,
+            frequencias: [],
+            azimutes: [],
+            emissoes: [],
+            fonte: 'Anatel',
+            tecnologias: ''
+          };
+        }
+
+        // Adiciona frequências e azimutes
+        const freqIni = row[colunasIdentificadas.frequencia_inicial] || '';
+        const freqFim = row[colunasIdentificadas.frequencia_final] || '';
+        if (freqIni && freqFim) {
+          estacoes[id].frequencias.push(`${freqIni}-${freqFim}`);
+        }
+
+        const azimute = row[colunasIdentificadas.azimute] || '';
+        if (azimute) {
+          estacoes[id].azimutes.push(azimute);
+        }
+
+        const emissao = row[colunasIdentificadas.emissao] || '';
+        if (emissao) {
+          estacoes[id].emissoes.push(emissao);
+        }
+      })
+      .on('end', () => {
+        resolve(estacoes);
+      })
+      .on('error', (err) => {
+        reject(err);
+      });
+  });
+}
+
+// ============================================================
+// FUNÇÃO PARA IMPORTAR OS ARQUIVOS ERB
 // ============================================================
 async function importarERBs() {
   const dataDir = path.join(__dirname, 'data');
@@ -82,123 +203,58 @@ async function importarERBs() {
 
   for (const arquivo of arquivos.sort()) {
     const caminho = path.join(dataDir, arquivo);
-    const estacoes = {};
+    const separador = detectarSeparador(caminho);
+    
+    console.log(`🔍 Lendo ${arquivo} com separador '${separador}'`);
 
-    // Função para normalizar strings
-    const normalizar = (str) => str.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').trim();
+    try {
+      const estacoes = await lerArquivoAnatel(caminho, separador);
+      const qtdEstacoes = Object.keys(estacoes).length;
+      console.log(`✅ ${arquivo}: ${qtdEstacoes} estações únicas identificadas.`);
 
-    await new Promise((resolve, reject) => {
-      // Detecta o separador lendo a primeira linha
-      let separador = ',';
-      const primeiraLinha = fs.readFileSync(caminho, 'utf8').split('\n')[0];
-      if (primeiraLinha.includes(';')) separador = ';';
+      // Insere no banco
+      const stmt = db.prepare(`
+        INSERT OR REPLACE INTO estacoes (
+          id_estacao, operadora, uf, municipio, bairro, endereco,
+          codigo_municipio_ibge, latitude, longitude, tecnologias,
+          frequencias, azimutes, emissoes, fonte
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
 
-      console.log(`🔍 Lendo ${arquivo} com separador '${separador}'`);
+      for (const id in estacoes) {
+        const e = estacoes[id];
+        stmt.run(
+          e.id_estacao,
+          e.operadora,
+          e.uf,
+          e.municipio,
+          e.bairro,
+          e.endereco,
+          e.codigo_municipio_ibge,
+          e.latitude,
+          e.longitude,
+          e.tecnologias || '',
+          e.frequencias.join('; '),
+          e.azimutes.join('; '),
+          e.emissoes.join('; '),
+          e.fonte
+        );
+        totalImportados++;
+      }
 
-      let primeiro = true;
-      fs.createReadStream(caminho)
-        .pipe(csv({
-          separator: separador,
-          mapHeaders: ({ header }) => normalizar(header || '').toLowerCase().replace(/[^a-z0-9]/g, '_')
-        }))
-        .on('data', (row) => {
-          if (primeiro) {
-            console.log(`📋 Colunas identificadas: ${Object.keys(row).join(', ')}`);
-            primeiro = false;
-          }
-          totalLidos++;
+      stmt.finalize();
 
-          // Mapeamento flexível das colunas
-          const id = row['numero_da_estacao'] || row['id_estacao'] || row['numero_da_estação'] || row['id'] || '';
-          if (!id) return;
+      // Log da importação
+      const logStmt = db.prepare(`
+        INSERT INTO importacao_log (arquivo, registros_lidos, registros_importados)
+        VALUES (?, ?, ?)
+      `);
+      logStmt.run(arquivo, Object.keys(estacoes).length, qtdEstacoes);
+      logStmt.finalize();
 
-          if (!estacoes[id]) {
-            estacoes[id] = {
-              id_estacao: id,
-              operadora: row['prestadora'] || row['operadora'] || '',
-              uf: row['uf'] || row['codigo_da_uf'] || '',
-              municipio: row['municipio'] || row['município'] || '',
-              bairro: row['bairro'] || '',
-              endereco: row['logradouro'] || row['endereco'] || '',
-              codigo_municipio_ibge: row['codigo_do_municipio'] || row['codigo_municipio_ibge'] || '',
-              latitude: parseFloat(row['latitude'] || 0),
-              longitude: parseFloat(row['longitude'] || 0),
-              frequencias: [],
-              azimutes: [],
-              emissoes: [],
-              fonte: 'Anatel',
-              tecnologias: row['tecnologias'] || ''
-            };
-          }
-
-          // Adiciona frequências e azimutes
-          const freqIni = row['frequencia_inicial_mhz'] || row['frequência_inicial_mhz'] || row['frequencia_inicial'] || '';
-          const freqFim = row['frequencia_final_mhz'] || row['frequência_final_mhz'] || row['frequencia_final'] || '';
-          if (freqIni && freqFim) {
-            estacoes[id].frequencias.push(`${freqIni}-${freqFim}`);
-          }
-
-          const azimute = row['azimute'] || '';
-          if (azimute) {
-            estacoes[id].azimutes.push(azimute);
-          }
-
-          const emissao = row['emissao'] || row['emissão'] || '';
-          if (emissao) {
-            estacoes[id].emissoes.push(emissao);
-          }
-        })
-        .on('end', () => {
-          const qtdEstacoes = Object.keys(estacoes).length;
-          console.log(`✅ ${arquivo}: ${qtdEstacoes} estações únicas identificadas.`);
-
-          // Insere no banco
-          const stmt = db.prepare(`
-            INSERT OR REPLACE INTO estacoes (
-              id_estacao, operadora, uf, municipio, bairro, endereco,
-              codigo_municipio_ibge, latitude, longitude, tecnologias,
-              frequencias, azimutes, emissoes, fonte
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `);
-
-          for (const id in estacoes) {
-            const e = estacoes[id];
-            stmt.run(
-              e.id_estacao,
-              e.operadora,
-              e.uf,
-              e.municipio,
-              e.bairro,
-              e.endereco,
-              e.codigo_municipio_ibge,
-              e.latitude,
-              e.longitude,
-              e.tecnologias || '',
-              e.frequencias.join('; '),
-              e.azimutes.join('; '),
-              e.emissoes.join('; '),
-              e.fonte
-            );
-            totalImportados++;
-          }
-
-          stmt.finalize();
-
-          // Log da importação
-          const logStmt = db.prepare(`
-            INSERT INTO importacao_log (arquivo, registros_lidos, registros_importados)
-            VALUES (?, ?, ?)
-          `);
-          logStmt.run(arquivo, totalLidos, qtdEstacoes);
-          logStmt.finalize();
-
-          resolve();
-        })
-        .on('error', (err) => {
-          console.error(`❌ Erro ao ler ${arquivo}:`, err);
-          reject(err);
-        });
-    });
+    } catch (err) {
+      console.error(`❌ Erro ao ler ${arquivo}:`, err);
+    }
   }
 
   console.log(`📊 Total: ${totalLidos} linhas lidas, ${totalImportados} estações importadas.`);
@@ -228,6 +284,39 @@ app.get('/api/estacoes/proximas', (req, res) => {
   `;
 
   db.all(sql, [lat, lon, lat, raioKm], (err, rows) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    res.json(rows);
+  });
+});
+
+app.get('/api/estacoes/:id', (req, res) => {
+  const { id } = req.params;
+  db.get('SELECT * FROM estacoes WHERE id_estacao = ?', [id], (err, row) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    if (!row) {
+      return res.status(404).json({ error: 'Estação não encontrada' });
+    }
+    res.json(row);
+  });
+});
+
+app.get('/api/estacoes/uf/:uf', (req, res) => {
+  const { uf } = req.params;
+  db.all('SELECT * FROM estacoes WHERE uf = ? ORDER BY municipio', [uf.toUpperCase()], (err, rows) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    res.json(rows);
+  });
+});
+
+app.get('/api/estacoes/operadora/:operadora', (req, res) => {
+  const { operadora } = req.params;
+  db.all('SELECT * FROM estacoes WHERE operadora LIKE ? ORDER BY uf, municipio', [`%${operadora}%`], (err, rows) => {
     if (err) {
       return res.status(500).json({ error: err.message });
     }
