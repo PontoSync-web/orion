@@ -839,4 +839,19 @@ app.delete('/api/filtros/:id', (req, res) => {
     const { id } = req.params;
     db.run('DELETE FROM filtros WHERE id = ?', [id], function(err) {
         if (err) {
-           
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ success: true, deleted: this.changes });
+    });
+});
+
+// ============================================================
+// ROTAS PARA HISTÓRICO
+// ============================================================
+
+app.get('/api/historico', (req, res) => {
+    db.all(`
+        SELECT h.*, e.\`operadora\`, e.\`municipio\`, e.\`uf\`
+        FROM historico h
+        LEFT JOIN estacoes e ON h.\`estacao_id\` = e.\`id_estacao\`
+        ORDER BY
