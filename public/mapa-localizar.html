@@ -7,148 +7,34 @@
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #0a0a1a;
-            color: #00ff88;
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-        }
-        #header {
-            background: #1a1a2e;
-            padding: 15px 20px;
-            border-bottom: 1px solid #00ff88;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 10px;
-            z-index: 1000;
-        }
-        #header h1 {
-            font-size: 1.5em;
-            color: #00ff88;
-        }
-        #header .status {
-            font-size: 0.9em;
-            color: #88ffbb;
-        }
-        #controls {
-            background: #1a1a2e;
-            padding: 15px 20px;
-            border-bottom: 1px solid #00ff88;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 15px;
-            align-items: flex-end;
-            z-index: 1000;
-        }
-        .control-group {
-            display: flex;
-            flex-direction: column;
-            gap: 5px;
-        }
-        .control-group label {
-            font-size: 0.8em;
-            color: #88ffbb;
-        }
-        .control-group input,
-        .control-group select {
-            padding: 8px 12px;
-            background: #0a0a1a;
-            color: #00ff88;
-            border: 1px solid #00ff88;
-            border-radius: 4px;
-            font-size: 0.9em;
-            min-width: 150px;
-        }
-        .control-group input::placeholder {
-            color: #446655;
-        }
-        .btn {
-            padding: 8px 20px;
-            background: #00ff88;
-            color: #0a0a1a;
-            border: none;
-            border-radius: 4px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: background 0.2s;
-            font-size: 0.9em;
-        }
-        .btn:hover {
-            background: #88ffbb;
-        }
-        .btn-secondary {
-            background: #1a1a2e;
-            color: #00ff88;
-            border: 1px solid #00ff88;
-        }
-        .btn-secondary:hover {
-            background: #2a2a4e;
-        }
-        #map {
-            flex: 1;
-            width: 100%;
-            z-index: 1;
-        }
-        #resultado {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            background: #1a1a2e;
-            border: 1px solid #00ff88;
-            border-radius: 8px;
-            padding: 15px;
-            max-width: 400px;
-            max-height: 300px;
-            overflow-y: auto;
-            z-index: 1000;
-            font-size: 0.8em;
-            color: #88ffbb;
-            display: none;
-        }
-        #resultado.show {
-            display: block;
-        }
-        #resultado .close {
-            float: right;
-            cursor: pointer;
-            color: #ff6666;
-            font-weight: bold;
-        }
-        .leaflet-popup-content {
-            color: #0a0a1a;
-        }
-        /* Responsividade */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0a0a1a; color: #00ff88; display: flex; flex-direction: column; height: 100vh; }
+        #header { background: #1a1a2e; padding: 15px 20px; border-bottom: 1px solid #00ff88; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; z-index: 1000; }
+        #header h1 { font-size: 1.5em; color: #00ff88; }
+        #header .status { font-size: 0.9em; color: #88ffbb; }
+        #controls { background: #1a1a2e; padding: 15px 20px; border-bottom: 1px solid #00ff88; display: flex; flex-wrap: wrap; gap: 15px; align-items: flex-end; z-index: 1000; }
+        .control-group { display: flex; flex-direction: column; gap: 5px; }
+        .control-group label { font-size: 0.8em; color: #88ffbb; }
+        .control-group input, .control-group select { padding: 8px 12px; background: #0a0a1a; color: #00ff88; border: 1px solid #00ff88; border-radius: 4px; font-size: 0.9em; min-width: 150px; }
+        .control-group input::placeholder { color: #446655; }
+        .btn { padding: 8px 20px; background: #00ff88; color: #0a0a1a; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; transition: background 0.2s; font-size: 0.9em; }
+        .btn:hover { background: #88ffbb; }
+        .btn-secondary { background: #1a1a2e; color: #00ff88; border: 1px solid #00ff88; }
+        .btn-secondary:hover { background: #2a2a4e; }
+        #map { flex: 1; width: 100%; z-index: 1; }
+        #resultado { position: fixed; bottom: 20px; right: 20px; background: #1a1a2e; border: 1px solid #00ff88; border-radius: 8px; padding: 15px; max-width: 400px; max-height: 300px; overflow-y: auto; z-index: 1000; font-size: 0.8em; color: #88ffbb; display: none; }
+        #resultado.show { display: block; }
+        #resultado .close { float: right; cursor: pointer; color: #ff6666; font-weight: bold; }
+        .leaflet-popup-content { color: #0a0a1a; }
+        .btn-geo { background: #ffaa00; color: #0a0a1a; }
+        .btn-geo:hover { background: #ffcc44; }
+        .status-location { font-size: 0.8em; margin-left: 10px; color: #88ffbb; }
         @media (max-width: 768px) {
-            #header {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-            #controls {
-                flex-direction: column;
-                align-items: stretch;
-            }
-            .control-group {
-                width: 100%;
-            }
-            .control-group input,
-            .control-group select {
-                width: 100%;
-                min-width: unset;
-            }
-            #resultado {
-                max-width: 90vw;
-                right: 5vw;
-                bottom: 10px;
-            }
+            #header { flex-direction: column; align-items: flex-start; }
+            #controls { flex-direction: column; align-items: stretch; }
+            .control-group { width: 100%; }
+            .control-group input, .control-group select { width: 100%; min-width: unset; }
+            #resultado { max-width: 90vw; right: 5vw; bottom: 10px; }
         }
     </style>
 </head>
@@ -156,7 +42,10 @@
 
     <div id="header">
         <h1>📍 ORION AI-DEPOM</h1>
-        <span class="status" id="status">🟢 Conectado</span>
+        <div>
+            <span class="status" id="status">🟢 Conectado</span>
+            <span class="status-location" id="statusLocation">📍 Localização: Aguardando...</span>
+        </div>
     </div>
 
     <div id="controls">
@@ -180,6 +69,7 @@
         </div>
         <button class="btn" id="btnCadastrar">💾 Cadastrar</button>
         <button class="btn btn-secondary" id="btnLocalizar">🔍 Localizar por número</button>
+        <button class="btn btn-geo" id="btnMinhaLocalizacao">📍 Minha Localização</button>
     </div>
 
     <div id="map"></div>
@@ -189,7 +79,6 @@
         <pre id="resultadoConteudo">Aguardando...</pre>
     </div>
 
-    <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
     <script>
@@ -225,17 +114,21 @@
         // ============================================================
         // INICIALIZAÇÃO DO MAPA
         // ============================================================
+        // Definir centro inicial em Brasília (fallback)
         const map = L.map('map').setView([-15.8, -47.9], 4);
-
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         }).addTo(map);
 
         let markerLayer = L.layerGroup().addTo(map);
         let markers = {};
+        let minhaLocalizacaoMarker = null;
+        let usuarioLat = null;
+        let usuarioLon = null;
+        let localizacaoObtida = false;
 
         // ============================================================
-        // FUNÇÃO PARA ADICIONAR MARCADORES
+        // FUNÇÕES DE MAPA
         // ============================================================
         function adicionarMarcadores(estacoes) {
             markerLayer.clearLayers();
@@ -270,13 +163,67 @@
                 markers[estacao.id_estacao] = marker;
             });
 
-            // Ajusta o zoom para mostrar todos os marcadores
             if (estacoes.length > 0) {
                 const group = L.featureGroup(Object.values(markers));
                 map.fitBounds(group.getBounds(), { padding: [50, 50] });
             }
 
             mostrarResultado(`${estacoes.length} estações encontradas.`);
+        }
+
+        function adicionarMinhaLocalizacao(lat, lon) {
+            if (minhaLocalizacaoMarker) {
+                map.removeLayer(minhaLocalizacaoMarker);
+            }
+            const icon = L.divIcon({
+                className: 'custom-div-icon',
+                html: '<div style="background-color:#ff4444; width: 16px; height: 16px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 10px rgba(255,68,68,0.8);"></div>',
+                iconSize: [20, 20],
+                iconAnchor: [10, 10]
+            });
+            minhaLocalizacaoMarker = L.marker([lat, lon], { icon }).addTo(map);
+            minhaLocalizacaoMarker.bindPopup('📍 Sua localização atual');
+
+            usuarioLat = lat;
+            usuarioLon = lon;
+            localizacaoObtida = true;
+            map.setView([lat, lon], 12);
+            document.getElementById('statusLocation').textContent = `📍 Localização: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+            mostrarResultado(`📍 Localização atual: ${lat.toFixed(4)}, ${lon.toFixed(4)}`);
+        }
+
+        // ============================================================
+        // FUNÇÃO DE LOCALIZAÇÃO (Prioridade Máxima)
+        // ============================================================
+        function obterLocalizacao() {
+            return new Promise((resolve) => {
+                if (!navigator.geolocation) {
+                    document.getElementById('statusLocation').textContent = '❌ Geolocalização não suportada';
+                    resolve(null);
+                    return;
+                }
+
+                document.getElementById('statusLocation').textContent = '⏳ Obtendo localização...';
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        const { latitude, longitude } = position.coords;
+                        document.getElementById('statusLocation').textContent = `✅ Localização obtida!`;
+                        resolve({ lat: latitude, lon: longitude });
+                    },
+                    (error) => {
+                        let msg = '';
+                        switch (error.code) {
+                            case error.PERMISSION_DENIED: msg = 'Permissão negada pelo usuário.'; break;
+                            case error.POSITION_UNAVAILABLE: msg = 'Localização indisponível.'; break;
+                            case error.TIMEOUT: msg = 'Tempo limite excedido.'; break;
+                            default: msg = error.message;
+                        }
+                        document.getElementById('statusLocation').textContent = `❌ Erro: ${msg}`;
+                        resolve(null);
+                    },
+                    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+                );
+            });
         }
 
         // ============================================================
@@ -291,6 +238,18 @@
 
         document.getElementById('closeResultado').addEventListener('click', () => {
             document.getElementById('resultado').classList.remove('show');
+        });
+
+        // ============================================================
+        // EVENTO: MINHA LOCALIZAÇÃO (Forçado)
+        // ============================================================
+        document.getElementById('btnMinhaLocalizacao').addEventListener('click', async () => {
+            const pos = await obterLocalizacao();
+            if (pos) {
+                adicionarMinhaLocalizacao(pos.lat, pos.lon);
+            } else {
+                mostrarResultado('❌ Não foi possível obter sua localização. Verifique as permissões do navegador.');
+            }
         });
 
         // ============================================================
@@ -320,7 +279,7 @@
         });
 
         // ============================================================
-        // EVENTO: LOCALIZAR POR NÚMERO
+        // EVENTO: LOCALIZAR POR NÚMERO (USA LOCALIZAÇÃO REAL)
         // ============================================================
         document.getElementById('btnLocalizar').addEventListener('click', async () => {
             const numero = document.getElementById('numero').value.trim();
@@ -330,10 +289,21 @@
                 return;
             }
 
-            // Por simplicidade, vamos buscar estações próximas a uma localização fixa (Brasília)
-            // Em um cenário real, você teria uma lógica para associar o número a uma localização.
-            const lat = -15.8;
-            const lon = -47.9;
+            // Se não tiver localização, tenta obter automaticamente
+            if (!localizacaoObtida) {
+                mostrarResultado('⏳ Obtendo sua localização...');
+                const pos = await obterLocalizacao();
+                if (pos) {
+                    adicionarMinhaLocalizacao(pos.lat, pos.lon);
+                } else {
+                    mostrarResultado('❌ Não foi possível obter sua localização. Clique em "Minha Localização" primeiro.');
+                    return;
+                }
+            }
+
+            // Usa a localização do usuário (Bahia, de preferência!)
+            const lat = usuarioLat || -15.8;
+            const lon = usuarioLon || -47.9;
             const raio = 50;
 
             try {
@@ -348,9 +318,10 @@
         });
 
         // ============================================================
-        // VERIFICAÇÃO INICIAL DE CONEXÃO
+        // INICIALIZAÇÃO: OBTER LOCALIZAÇÃO AO CARREGAR A PÁGINA
         // ============================================================
-        async function verificarConexao() {
+        (async function init() {
+            // Verifica conexão com a API
             try {
                 const data = await apiRequest('/api/estatisticas');
                 document.getElementById('status').textContent = '🟢 Conectado';
@@ -359,10 +330,17 @@
                 document.getElementById('status').textContent = '🔴 Erro de conexão';
                 mostrarResultado(`❌ Erro de conexão com o servidor: ${error.message}`);
             }
-        }
 
-        // Inicializa
-        verificarConexao();
+            // Tenta obter localização automaticamente
+            const pos = await obterLocalizacao();
+            if (pos) {
+                adicionarMinhaLocalizacao(pos.lat, pos.lon);
+            } else {
+                // Fallback para Brasília, mas com aviso claro
+                document.getElementById('statusLocation').textContent = '⚠️ Fallback: Brasília (DF)';
+                mostrarResultado('⚠️ Localização não obtida. Use o botão "Minha Localização" para atualizar.');
+            }
+        })();
     </script>
 </body>
 </html>
