@@ -6,132 +6,172 @@
 // 2. API REST para consulta de estações próximas
 // 3. Cadastro e gerenciamento de números de telefone
 // 4. Histórico de consultas
+// 5. Gestão de alvos (números de interesse)
+// 6. Gestão de bases (setores/instalações)
+// 7. Gestão de recursos (números associados a bases)
 // ============================================================
 
 // ============================================================
 // IMPORTAÇÃO DE MÓDULOS
 // ============================================================
 
-const express = require('express');        // Framework web para criar a API
-const sqlite3 = require('sqlite3').verbose(); // Banco de dados SQLite
-const path = require('path');              // Manipulação de caminhos de arquivos
-const fs = require('fs');                  // Sistema de arquivos
-const readline = require('readline');      // Leitura de arquivos linha a linha
+const express = require('express');
+const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
+const fs = require('fs');
+const readline = require('readline');
+
+const app = express();
+const port = process.env.PORT || 3000;
 
 // ============================================================
 // CONFIGURAÇÕES INICIAIS
 // ============================================================
 
-const app = express();
-const port = process.env.PORT || 3000;     // Porta definida pelo Render ou padrão 3000
-
-// Diretórios importantes
-const DATA_DIR = path.join(__dirname, 'data');    // Onde estão os CSVs
-const DB_PATH = path.join(__dirname, 'orion.db'); // Banco de dados SQLite
+const DATA_DIR = path.join(__dirname, 'data');
+const DB_PATH = path.join(__dirname, 'orion.db');
 
 // ============================================================
 // MIDDLEWARE
 // ============================================================
 
-// Permite que o servidor entenda JSON no corpo das requisições
 app.use(express.json());
-
-// Serve arquivos estáticos da pasta 'public'
 app.use(express.static('public'));
-
-// Configuração CORS para permitir requisições de qualquer origem
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
-  next();
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+    next();
 });
 
 // ============================================================
 // BANCO DE DADOS (COM CRASES PARA ESCAPAR NOMES DE COLUNAS)
 // ============================================================
 
-// Cria uma instância do banco de dados SQLite
 const db = new sqlite3.Database(DB_PATH);
 
-// Inicializa as tabelas do banco de dados (se não existirem)
 db.serialize(() => {
-  // Tabela principal: armazena todas as estações (ERBs)
-  db.run(`CREATE TABLE IF NOT EXISTS estacoes (
-    \`id_estacao\` TEXT PRIMARY KEY,
-    \`operadora\` TEXT,
-    \`uf\` TEXT,
-    \`municipio\` TEXT,
-    \`bairro\` TEXT,
-    \`endereco\` TEXT,
-    \`codigo_municipio_ibge\` TEXT,
-    \`latitude\` REAL,
-    \`longitude\` REAL,
-    \`tecnologias\` TEXT,
-    \`frequencias\` TEXT,
-    \`azimutes\` TEXT,
-    \`emissoes\` TEXT,
-    \`fonte\` TEXT,
-    \`opencellid_radio\` TEXT,
-    \`opencellid_cell\` TEXT,
-    \`opencellid_correspondencia\` TEXT,
-    \`anatel_correspondencia\` TEXT,
-    \`data_importacao\` DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`, (err) => {
-    if (err) {
-      console.error('❌ Erro ao criar tabela estacoes:', err.message);
-    } else {
-      console.log('✅ Tabela estacoes criada/verificada com sucesso.');
-    }
-  });
+    // Tabela estacoes
+    db.run(`CREATE TABLE IF NOT EXISTS estacoes (
+        \`id_estacao\` TEXT PRIMARY KEY,
+        \`operadora\` TEXT,
+        \`uf\` TEXT,
+        \`municipio\` TEXT,
+        \`bairro\` TEXT,
+        \`endereco\` TEXT,
+        \`codigo_municipio_ibge\` TEXT,
+        \`latitude\` REAL,
+        \`longitude\` REAL,
+        \`tecnologias\` TEXT,
+        \`frequencias\` TEXT,
+        \`azimutes\` TEXT,
+        \`emissoes\` TEXT,
+        \`fonte\` TEXT,
+        \`opencellid_radio\` TEXT,
+        \`opencellid_cell\` TEXT,
+        \`opencellid_correspondencia\` TEXT,
+        \`anatel_correspondencia\` TEXT,
+        \`data_importacao\` DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`, (err) => {
+        if (err) console.error('❌ Erro ao criar tabela estacoes:', err.message);
+        else console.log('✅ Tabela estacoes criada/verificada com sucesso.');
+    });
 
-  // Tabela para armazenar números de telefone cadastrados
-  db.run(`CREATE TABLE IF NOT EXISTS numeros (
-    \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
-    \`numero\` TEXT UNIQUE,
-    \`operadora\` TEXT,
-    \`uf\` TEXT,
-    \`municipio\` TEXT,
-    \`data_cadastro\` DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`, (err) => {
-    if (err) console.error('❌ Erro ao criar tabela numeros:', err.message);
-  });
+    // Tabela numeros
+    db.run(`CREATE TABLE IF NOT EXISTS numeros (
+        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
+        \`numero\` TEXT UNIQUE,
+        \`operadora\` TEXT,
+        \`uf\` TEXT,
+        \`municipio\` TEXT,
+        \`latitude\` REAL,
+        \`longitude\` REAL,
+        \`data_cadastro\` DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`, (err) => {
+        if (err) console.error('❌ Erro ao criar tabela numeros:', err.message);
+    });
 
-  // Tabela para registrar o histórico de consultas
-  db.run(`CREATE TABLE IF NOT EXISTS historico (
-    \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
-    \`numero\` TEXT,
-    \`estacao_id\` TEXT,
-    \`distancia\` REAL,
-    \`data_consulta\` DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`, (err) => {
-    if (err) console.error('❌ Erro ao criar tabela historico:', err.message);
-  });
+    // Tabela historico
+    db.run(`CREATE TABLE IF NOT EXISTS historico (
+        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
+        \`numero\` TEXT,
+        \`estacao_id\` TEXT,
+        \`distancia\` REAL,
+        \`data_consulta\` DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`, (err) => {
+        if (err) console.error('❌ Erro ao criar tabela historico:', err.message);
+    });
 
-  // Tabela para registrar logs das importações
-  db.run(`CREATE TABLE IF NOT EXISTS importacao_log (
-    \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
-    \`arquivo\` TEXT,
-    \`registros_lidos\` INTEGER,
-    \`registros_importados\` INTEGER,
-    \`data_importacao\` DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`, (err) => {
-    if (err) console.error('❌ Erro ao criar tabela importacao_log:', err.message);
-  });
+    // Tabela importacao_log
+    db.run(`CREATE TABLE IF NOT EXISTS importacao_log (
+        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
+        \`arquivo\` TEXT,
+        \`registros_lidos\` INTEGER,
+        \`registros_importados\` INTEGER,
+        \`data_importacao\` DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`, (err) => {
+        if (err) console.error('❌ Erro ao criar tabela importacao_log:', err.message);
+    });
+
+    // Tabela alvos
+    db.run(`CREATE TABLE IF NOT EXISTS alvos (
+        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
+        \`numero\` TEXT UNIQUE,
+        \`operadora\` TEXT,
+        \`uf\` TEXT,
+        \`municipio\` TEXT,
+        \`tag\` TEXT,
+        \`nome\` TEXT,
+        \`data_cadastro\` DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`, (err) => {
+        if (err) console.error('❌ Erro ao criar tabela alvos:', err.message);
+    });
+
+    // Tabela bases
+    db.run(`CREATE TABLE IF NOT EXISTS bases (
+        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
+        \`nome\` TEXT NOT NULL,
+        \`uf\` TEXT,
+        \`municipio\` TEXT,
+        \`latitude\` REAL,
+        \`longitude\` REAL,
+        \`descricao\` TEXT
+    )`, (err) => {
+        if (err) console.error('❌ Erro ao criar tabela bases:', err.message);
+    });
+
+    // Tabela recursos
+    db.run(`CREATE TABLE IF NOT EXISTS recursos (
+        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
+        \`numero\` TEXT UNIQUE,
+        \`operadora\` TEXT,
+        \`nome\` TEXT,
+        \`base_id\` INTEGER,
+        \`status\` TEXT DEFAULT 'desconhecido',
+        FOREIGN KEY (\`base_id\`) REFERENCES \`bases\`(\`id\`)
+    )`, (err) => {
+        if (err) console.error('❌ Erro ao criar tabela recursos:', err.message);
+    });
+
+    // Tabela alocacoes (histórico de movimentações)
+    db.run(`CREATE TABLE IF NOT EXISTS alocacoes (
+        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
+        \`recurso_id\` INTEGER,
+        \`base_id\` INTEGER,
+        \`data_inicio\` DATETIME DEFAULT CURRENT_TIMESTAMP,
+        \`data_fim\` DATETIME,
+        FOREIGN KEY (\`recurso_id\`) REFERENCES \`recursos\`(\`id\`),
+        FOREIGN KEY (\`base_id\`) REFERENCES \`bases\`(\`id\`)
+    )`, (err) => {
+        if (err) console.error('❌ Erro ao criar tabela alocacoes:', err.message);
+    });
 });
 
 // ============================================================
-// FUNÇÃO PARA PARSEAR LINHA CSV (VERSÃO ROBUSTA)
-// ============================================================
-// Esta função é especializada para o formato das suas linhas CSV.
-// Cada linha começa e termina com aspas duplas (").
-// Campos com vírgulas são escapados com aspas duplas ("").
+// FUNÇÃO PARA PARSEAR LINHA CSV
 // ============================================================
 
 function parseCSVLine(line, linhaNumero) {
-    // Remove espaços e tabs no final
     line = line.trimEnd();
-
-    // Remove as aspas externas se existirem
     if (line.startsWith('"') && line.endsWith('"')) {
         line = line.substring(1, line.length - 1);
     }
@@ -143,18 +183,14 @@ function parseCSVLine(line, linhaNumero) {
 
     while (i < line.length) {
         const char = line[i];
-
         if (char === '"') {
-            // Verifica se é aspas dupla escapada
             if (i + 1 < line.length && line[i + 1] === '"') {
                 campoAtual += '"';
                 i += 2;
                 continue;
             }
-            // Inverte o estado "dentro de aspas"
             dentroAspas = !dentroAspas;
         } else if (char === ',' && !dentroAspas) {
-            // Fim do campo
             valores.push(campoAtual);
             campoAtual = '';
         } else {
@@ -162,10 +198,8 @@ function parseCSVLine(line, linhaNumero) {
         }
         i++;
     }
-    // Adiciona o último campo
     valores.push(campoAtual);
 
-    // LOG DE DEPURAÇÃO: Mostra os detalhes das primeiras 3 linhas
     if (linhaNumero <= 3) {
         console.log(`   🔎 Linha ${linhaNumero} (campos): ${valores.length} campos encontrados.`);
         console.log(`   🔎 ID (campo 0): "${valores[0] || 'VAZIO'}"`);
@@ -177,25 +211,19 @@ function parseCSVLine(line, linhaNumero) {
 }
 
 // ============================================================
-// FUNÇÃO PARA IMPORTAR ERBs (VERSÃO OTIMIZADA)
-// ============================================================
-// Esta função lê os arquivos CSV e importa os dados em lote
-// para o banco de dados SQLite, com logs de progresso.
+// FUNÇÃO PARA IMPORTAR ERBs
 // ============================================================
 
 async function importarERBs() {
-    // Verifica se a pasta /data existe
     if (!fs.existsSync(DATA_DIR)) {
         console.log('⚠️ Pasta /data não encontrada.');
         return;
     }
 
-    // Lista todos os arquivos que começam com 'erb_consolidado_final_part' e terminam com .csv
     const arquivos = fs.readdirSync(DATA_DIR).filter(f =>
         f.startsWith('erb_consolidado_final_part') && f.endsWith('.csv')
     );
 
-    // Se não encontrar nenhum arquivo, encerra a função
     if (arquivos.length === 0) {
         console.log('⚠️ Nenhum arquivo ERB encontrado.');
         return;
@@ -203,68 +231,37 @@ async function importarERBs() {
 
     console.log(`📂 Encontrados ${arquivos.length} arquivos.`);
 
-    // Processa cada arquivo encontrado
     for (const arquivo of arquivos.sort()) {
         const caminho = path.join(DATA_DIR, arquivo);
         console.log(`🔍 Lendo ${arquivo}...`);
 
-        // Objeto para armazenar estações únicas (evita duplicatas)
         let estacoes = {};
         let linhaAtual = 0;
         let erros = 0;
         let ignorados = 0;
 
-        // Promise para processar o arquivo de forma assíncrona
         await new Promise((resolve, reject) => {
-            // Cria uma interface de leitura linha a linha
             const rl = readline.createInterface({
                 input: fs.createReadStream(caminho, { encoding: 'utf8' }),
-                crlfDelay: Infinity // Trata corretamente quebras de linha CRLF
+                crlfDelay: Infinity
             });
 
-            // Evento disparado para cada linha lida
             rl.on('line', (line) => {
                 linhaAtual++;
-
-                // Pula linhas vazias
-                if (!line.trim()) {
-                    ignorados++;
-                    return;
-                }
-                // Pula linhas que parecem ser cabeçalho (caso existam)
-                if (line.toLowerCase().includes('id_estacao')) {
-                    ignorados++;
-                    return;
-                }
+                if (!line.trim()) { ignorados++; return; }
+                if (line.toLowerCase().includes('id_estacao')) { ignorados++; return; }
 
                 try {
-                    // Tenta parsear a linha usando a função especializada
                     const valores = parseCSVLine(line, linhaAtual);
+                    if (valores.length < 10) { erros++; return; }
 
-                    // Verifica se a linha tem pelo menos 10 campos (mínimo esperado)
-                    if (valores.length < 10) {
-                        erros++;
-                        return;
-                    }
-
-                    // Extrai o ID da estação (primeiro campo)
                     const id = valores[0] || '';
-                    if (!id) {
-                        erros++;
-                        return;
-                    }
+                    if (!id) { erros++; return; }
 
-                    // Extrai coordenadas (campos 12 e 13 - corrigido)
                     const lat = parseFloat(valores[12] || 0);
                     const lon = parseFloat(valores[13] || 0);
+                    if (isNaN(lat) || isNaN(lon)) { erros++; return; }
 
-                    // Verifica se as coordenadas são números válidos
-                    if (isNaN(lat) || isNaN(lon)) {
-                        erros++;
-                        return;
-                    }
-
-                    // Se o ID ainda não foi registrado, cria um novo registro
                     if (!estacoes[id]) {
                         estacoes[id] = {
                             id_estacao: id,
@@ -288,13 +285,11 @@ async function importarERBs() {
                         };
                     }
 
-                    // Log de progresso a cada 5000 linhas
                     if (linhaAtual % 5000 === 0) {
                         console.log(`   ⏳ Processadas ${linhaAtual} linhas...`);
                     }
 
                 } catch (err) {
-                    // Captura qualquer erro inesperado durante o processamento
                     erros++;
                     if (erros <= 5) {
                         console.log(`   ❌ Erro crítico na linha ${linhaAtual}: ${err.message}`);
@@ -302,15 +297,12 @@ async function importarERBs() {
                 }
             });
 
-            // Evento disparado quando a leitura do arquivo é concluída
             rl.on('close', () => {
                 const qtd = Object.keys(estacoes).length;
                 console.log(`✅ ${arquivo}: ${linhaAtual} linhas lidas, ${qtd} estações importadas.`);
                 console.log(`   ⚠️ ${ignorados} linhas ignoradas, ${erros} erros.`);
 
-                // Se houver estações para importar, insere no banco de dados
                 if (qtd > 0) {
-                    // INSERÇÃO EM LOTES (BATCH) COM TRANSAÇÃO
                     const stmt = db.prepare(`
                         INSERT OR REPLACE INTO estacoes (
                             \`id_estacao\`, \`operadora\`, \`uf\`, \`municipio\`, \`bairro\`, \`endereco\`,
@@ -320,7 +312,6 @@ async function importarERBs() {
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     `);
 
-                    // Inicia uma transação para inserção em lote
                     db.serialize(() => {
                         db.run('BEGIN TRANSACTION');
                         let count = 0;
@@ -336,7 +327,6 @@ async function importarERBs() {
                                     e.opencellid_radio, e.opencellid_cell, e.opencellid_correspondencia, e.anatel_correspondencia
                                 );
                                 count++;
-                                // Log de progresso da inserção a cada 5000 registros
                                 if (count % 5000 === 0) {
                                     console.log(`   ⏳ ${count} estações inseridas...`);
                                 }
@@ -349,7 +339,6 @@ async function importarERBs() {
                         }
                         stmt.finalize();
 
-                        // Finaliza a transação (COMMIT ou ROLLBACK em caso de erro crítico)
                         db.run('COMMIT', (err) => {
                             if (err) {
                                 console.error('❌ Erro no COMMIT da transação:', err.message);
@@ -364,7 +353,6 @@ async function importarERBs() {
                     });
                 }
 
-                // Registra o log da importação
                 const logStmt = db.prepare(`
                     INSERT INTO importacao_log (\`arquivo\`, \`registros_lidos\`, \`registros_importados\`)
                     VALUES (?, ?, ?)
@@ -372,13 +360,12 @@ async function importarERBs() {
                 logStmt.run(arquivo, linhaAtual, qtd);
                 logStmt.finalize();
 
-                resolve(); // Resolve a Promise
+                resolve();
             });
 
-            // Tratamento de erro na leitura do arquivo
             rl.on('error', (err) => {
                 console.error(`❌ Erro ao ler ${arquivo}:`, err);
-                reject(err); // Rejeita a Promise
+                reject(err);
             });
         });
     }
@@ -386,23 +373,20 @@ async function importarERBs() {
 }
 
 // ============================================================
-// ROTAS DA API (COM CRASES NAS CONSULTAS SQL)
+// ROTAS DA API
 // ============================================================
 
-// Rota para buscar estações próximas a uma localização
-// Parâmetros: lat (latitude), lon (longitude), raio (em km, opcional, padrão 10)
+// ============================================================
+// ROTAS PARA ESTAÇÕES (ERBs)
+// ============================================================
+
 app.get('/api/estacoes/proximas', (req, res) => {
     const { lat, lon, raio } = req.query;
-
-    // Validação dos parâmetros obrigatórios
     if (!lat || !lon) {
         return res.status(400).json({ error: 'Latitude e longitude são obrigatórias' });
     }
 
     const raioKm = parseFloat(raio) || 10;
-
-    // Consulta SQL com fórmula de Haversine para calcular distância
-    // Usando WHERE em vez de HAVING para evitar erro de sintaxe
     const sql = `
         SELECT *,
             (6371 * acos( cos(radians(?)) * cos(radians(\`latitude\`)) *
@@ -417,17 +401,14 @@ app.get('/api/estacoes/proximas', (req, res) => {
         LIMIT 50
     `;
 
-    // Executa a consulta com os parâmetros fornecidos
-    // Os placeholders são repetidos para cada ocorrência na query
     db.all(sql, [lat, lon, lat, lat, lon, lat, raioKm], (err, rows) => {
         if (err) {
             return res.status(500).json({ error: err.message });
         }
-        res.json(rows); // Retorna os resultados em JSON
+        res.json(rows);
     });
 });
 
-// Rota para buscar uma estação específica pelo ID
 app.get('/api/estacoes/:id', (req, res) => {
     const { id } = req.params;
     db.get('SELECT * FROM estacoes WHERE `id_estacao` = ?', [id], (err, row) => {
@@ -441,7 +422,6 @@ app.get('/api/estacoes/:id', (req, res) => {
     });
 });
 
-// Rota para listar todas as estações de um estado (UF)
 app.get('/api/estacoes/uf/:uf', (req, res) => {
     const { uf } = req.params;
     db.all('SELECT * FROM estacoes WHERE `uf` = ? ORDER BY `municipio`', [uf.toUpperCase()], (err, rows) => {
@@ -452,7 +432,6 @@ app.get('/api/estacoes/uf/:uf', (req, res) => {
     });
 });
 
-// Rota para listar todas as estações de uma operadora
 app.get('/api/estacoes/operadora/:operadora', (req, res) => {
     const { operadora } = req.params;
     db.all('SELECT * FROM estacoes WHERE `operadora` LIKE ? ORDER BY `uf`, `municipio`', [`%${operadora}%`], (err, rows) => {
@@ -463,14 +442,16 @@ app.get('/api/estacoes/operadora/:operadora', (req, res) => {
     });
 });
 
-// Rota para cadastrar um número de telefone para monitoramento
+// ============================================================
+// ROTAS PARA NÚMEROS
+// ============================================================
+
 app.post('/api/numeros', (req, res) => {
     const { numero, operadora, uf, municipio } = req.body;
     if (!numero) {
         return res.status(400).json({ error: 'Número é obrigatório' });
     }
 
-    // Insere ou substitui o número na tabela 'numeros'
     const stmt = db.prepare(`
         INSERT OR REPLACE INTO numeros (\`numero\`, \`operadora\`, \`uf\`, \`municipio\`)
         VALUES (?, ?, ?, ?)
@@ -484,7 +465,25 @@ app.post('/api/numeros', (req, res) => {
     });
 });
 
-// Rota para listar todos os números cadastrados
+app.post('/api/numeros/localizacao', (req, res) => {
+    const { numero, latitude, longitude, uf, municipio } = req.body;
+    if (!numero || latitude === undefined || longitude === undefined) {
+        return res.status(400).json({ error: 'Número, latitude e longitude são obrigatórios' });
+    }
+
+    const stmt = db.prepare(`
+        INSERT OR REPLACE INTO numeros (\`numero\`, \`uf\`, \`municipio\`, \`latitude\`, \`longitude\`)
+        VALUES (?, ?, ?, ?, ?)
+    `);
+    stmt.run(numero, uf || '', municipio || '', latitude, longitude, function(err) {
+        stmt.finalize();
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ success: true, message: `Localização do número ${numero} atualizada` });
+    });
+});
+
 app.get('/api/numeros', (req, res) => {
     db.all('SELECT * FROM numeros ORDER BY `data_cadastro` DESC', (err, rows) => {
         if (err) {
@@ -494,7 +493,215 @@ app.get('/api/numeros', (req, res) => {
     });
 });
 
-// Rota para buscar o histórico de consultas
+app.get('/api/numeros/:numero', (req, res) => {
+    const { numero } = req.params;
+    db.get('SELECT * FROM numeros WHERE `numero` = ?', [numero], (err, row) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        if (!row) {
+            return res.status(404).json({ error: 'Número não encontrado' });
+        }
+        res.json(row);
+    });
+});
+
+// ============================================================
+// ROTAS PARA ALVOS
+// ============================================================
+
+app.post('/api/alvos', (req, res) => {
+    const { numero, operadora, uf, municipio, tag, nome } = req.body;
+    if (!numero) {
+        return res.status(400).json({ error: 'Número é obrigatório' });
+    }
+
+    const stmt = db.prepare(`
+        INSERT OR REPLACE INTO alvos (\`numero\`, \`operadora\`, \`uf\`, \`municipio\`, \`tag\`, \`nome\`)
+        VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(numero, operadora || '', uf || '', municipio || '', tag || '', nome || '', function(err) {
+        stmt.finalize();
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ success: true, id: this.lastID });
+    });
+});
+
+app.get('/api/alvos', (req, res) => {
+    db.all('SELECT * FROM alvos ORDER BY data_cadastro DESC', (err, rows) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json(rows);
+    });
+});
+
+app.get('/api/alvos/tag/:tag', (req, res) => {
+    const { tag } = req.params;
+    db.all('SELECT * FROM alvos WHERE tag = ? ORDER BY data_cadastro DESC', [tag], (err, rows) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json(rows);
+    });
+});
+
+app.delete('/api/alvos/:id', (req, res) => {
+    const { id } = req.params;
+    db.run('DELETE FROM alvos WHERE id = ?', [id], function(err) {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ success: true, deleted: this.changes });
+    });
+});
+
+// ============================================================
+// ROTAS PARA BASES
+// ============================================================
+
+app.post('/api/bases', (req, res) => {
+    const { nome, uf, municipio, latitude, longitude, descricao } = req.body;
+    if (!nome || latitude === undefined || longitude === undefined) {
+        return res.status(400).json({ error: 'Nome, latitude e longitude são obrigatórios' });
+    }
+
+    const stmt = db.prepare(`
+        INSERT INTO bases (\`nome\`, \`uf\`, \`municipio\`, \`latitude\`, \`longitude\`, \`descricao\`)
+        VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(nome, uf || '', municipio || '', latitude, longitude, descricao || '', function(err) {
+        stmt.finalize();
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ success: true, id: this.lastID });
+    });
+});
+
+app.get('/api/bases', (req, res) => {
+    db.all('SELECT * FROM bases ORDER BY nome', (err, rows) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json(rows);
+    });
+});
+
+app.get('/api/bases/:id', (req, res) => {
+    const { id } = req.params;
+    db.get('SELECT * FROM bases WHERE id = ?', [id], (err, row) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        if (!row) {
+            return res.status(404).json({ error: 'Base não encontrada' });
+        }
+        res.json(row);
+    });
+});
+
+app.delete('/api/bases/:id', (req, res) => {
+    const { id } = req.params;
+    db.run('DELETE FROM bases WHERE id = ?', [id], function(err) {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ success: true, deleted: this.changes });
+    });
+});
+
+// ============================================================
+// ROTAS PARA RECURSOS
+// ============================================================
+
+app.post('/api/recursos', (req, res) => {
+    const { numero, operadora, nome, base_id, status } = req.body;
+    if (!numero) {
+        return res.status(400).json({ error: 'Número é obrigatório' });
+    }
+
+    const stmt = db.prepare(`
+        INSERT OR REPLACE INTO recursos (\`numero\`, \`operadora\`, \`nome\`, \`base_id\`, \`status\`)
+        VALUES (?, ?, ?, ?, ?)
+    `);
+    stmt.run(numero, operadora || '', nome || '', base_id || null, status || 'desconhecido', function(err) {
+        stmt.finalize();
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ success: true, id: this.lastID });
+    });
+});
+
+app.get('/api/recursos', (req, res) => {
+    db.all('SELECT * FROM recursos ORDER BY numero', (err, rows) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json(rows);
+    });
+});
+
+app.get('/api/recursos/:id', (req, res) => {
+    const { id } = req.params;
+    db.get('SELECT * FROM recursos WHERE id = ?', [id], (err, row) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        if (!row) {
+            return res.status(404).json({ error: 'Recurso não encontrado' });
+        }
+        res.json(row);
+    });
+});
+
+app.get('/api/recursos/numero/:numero', (req, res) => {
+    const { numero } = req.params;
+    db.get('SELECT * FROM recursos WHERE numero = ?', [numero], (err, row) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        if (!row) {
+            return res.status(404).json({ error: 'Recurso não encontrado' });
+        }
+        res.json(row);
+    });
+});
+
+app.put('/api/recursos/:id/mover', (req, res) => {
+    const { id } = req.params;
+    const { base_id } = req.body;
+    if (base_id === undefined) {
+        return res.status(400).json({ error: 'base_id é obrigatório' });
+    }
+
+    const stmt = db.prepare('UPDATE recursos SET base_id = ? WHERE id = ?');
+    stmt.run(base_id, id, function(err) {
+        stmt.finalize();
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ success: true, updated: this.changes });
+    });
+});
+
+app.delete('/api/recursos/:id', (req, res) => {
+    const { id } = req.params;
+    db.run('DELETE FROM recursos WHERE id = ?', [id], function(err) {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ success: true, deleted: this.changes });
+    });
+});
+
+// ============================================================
+// ROTAS PARA HISTÓRICO
+// ============================================================
+
 app.get('/api/historico', (req, res) => {
     db.all(`
         SELECT h.*, e.\`operadora\`, e.\`municipio\`, e.\`uf\`
@@ -510,14 +717,39 @@ app.get('/api/historico', (req, res) => {
     });
 });
 
-// Rota para obter estatísticas gerais do sistema
+app.post('/api/historico', (req, res) => {
+    const { numero, estacao_id, distancia } = req.body;
+    if (!numero || !estacao_id) {
+        return res.status(400).json({ error: 'Número e estacao_id são obrigatórios' });
+    }
+
+    const stmt = db.prepare(`
+        INSERT INTO historico (\`numero\`, \`estacao_id\`, \`distancia\`)
+        VALUES (?, ?, ?)
+    `);
+    stmt.run(numero, estacao_id, distancia || null, function(err) {
+        stmt.finalize();
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ success: true, id: this.lastID });
+    });
+});
+
+// ============================================================
+// ROTAS PARA ESTATÍSTICAS
+// ============================================================
+
 app.get('/api/estatisticas', (req, res) => {
     db.all(`
         SELECT 
             (SELECT COUNT(*) FROM estacoes) AS total_estacoes,
             (SELECT COUNT(DISTINCT \`operadora\`) FROM estacoes) AS total_operadoras,
             (SELECT COUNT(DISTINCT \`uf\`) FROM estacoes) AS total_ufs,
-            (SELECT COUNT(*) FROM numeros) AS total_numeros
+            (SELECT COUNT(*) FROM numeros) AS total_numeros,
+            (SELECT COUNT(*) FROM alvos) AS total_alvos,
+            (SELECT COUNT(*) FROM bases) AS total_bases,
+            (SELECT COUNT(*) FROM recursos) AS total_recursos
     `, (err, rows) => {
         if (err) {
             return res.status(500).json({ error: err.message });
@@ -530,22 +762,15 @@ app.get('/api/estatisticas', (req, res) => {
 // INICIALIZAÇÃO DO SERVIDOR
 // ============================================================
 
-// Função autoexecutável que inicia a importação e depois o servidor
 (async () => {
-    await importarERBs(); // Primeiro importa os dados
-    console.log('✅ ORION pronto para uso.'); // Depois confirma que está pronto
+    await importarERBs();
+    console.log('✅ ORION pronto para uso.');
 })();
 
-// Inicia o servidor HTTP na porta configurada
 app.listen(port, () => {
     console.log(`🚀 ORION rodando na porta ${port}`);
 });
 
-// ============================================================
-// TRATAMENTO DE ENCERRAMENTO
-// ============================================================
-
-// Garante que o banco de dados seja fechado corretamente ao encerrar o servidor
 process.on('SIGINT', () => {
     db.close(() => {
         console.log('👋 ORION encerrado.');
