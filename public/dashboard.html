@@ -1,0 +1,175 @@
+// ============================================================
+// ROTAS PARA INTELIGÊNCIA PREDITIVA (SON)
+// ============================================================
+
+// ============================================================
+// ROTA: ANÁLISE DE PADRÕES
+// ============================================================
+/**
+ * Analisa o histórico de localizações de um número para identificar:
+ * - Localização mais frequente
+ * - Horário mais frequente
+ * - Total de registros
+ */
+app.get('/api/analise-padroes', (req, res) => {
+    const { numero } = req.query;
+
+    // Validação: número é obrigatório
+    if (!numero) {
+        return res.status(400).json({ error: 'Número é obrigatório' });
+    }
+
+    // Consulta SQL: agrupa por coordenadas e horários
+    db.all(`
+        SELECT 
+            \`latitude\`, 
+            \`longitude\`, 
+            COUNT(*) AS frequencia,
+            DATE(\`data_hora\`) AS data,
+            strftime('%H', \`data_hora\`) AS hora
+        FROM historico_localizacao
+        WHERE \`numero\` = ?
+        GROUP BY \`latitude\`, \`longitude\`, DATE(\`data_hora\`), strftime('%H', \`data_hora\`)
+        ORDER BY \`data_hora\` DESC
+        LIMIT 100
+    `, [numero], (err, rows) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+
+        // Verifica se há dados suficientes
+        if (rows.length === 0) {
+            return res.json({ pattern: 'Sem dados suficientes' });
+        }
+
+        // ============================================================
+        // ENCONTRA A LOCALIZAÇÃO MAIS FREQUENTE
+        // ============================================================
+        const locationCount = {};
+        rows.forEach(row => {
+            const key = `${row.latitude},${row.longitude}`;
+            locationCount[key] = (locationCount[key] || 0) + row.frequencia;
+        });
+
+        let mostFrequent = null;
+        let maxCount = 0;
+        for (const [key, count] of Object.entries(locationCount)) {
+            if (count > maxCount) {
+                maxCount = count;
+                mostFrequent = key;
+            }
+        }
+
+        const [lat, lon] = mostFrequent ? mostFrequent.split(',').map(Number) : [null, null];
+
+        // ============================================================
+        // ENCONTRA O HORÁRIO MAIS FREQUENTE
+        // ============================================================
+        const hourCount = {};
+        rows.forEach(row => {
+            const hora = row.hora;
+            hourCount[hora] = (hourCount[hora] || 0) + 1;
+        });
+
+        let mostFrequentHour = null;
+        let maxHourCount = 0;
+        for (const [hora, count] of Object.entries(hourCount)) {
+            if (count > maxHourCount) {
+                maxHourCount = count;
+                mostFrequentHour = hora;
+            }
+        }
+
+        // ============================================================
+        // RETORNA O RESULTADO
+        // ============================================================
+        res.json({
+            pattern: {
+                localizacao_mais_frequente: { latitude: lat, longitude: lon },
+                horario_mais_frequente: mostFrequentHour,
+                total_registros: rows.length
+            }
+        });
+    });
+});
+
+// ============================================================
+// ROTA: ALERTAS PREDITIVOS
+// ============================================================
+/**
+ * Gera alertas baseados em padrões de movimento de um número.
+ * Atualmente detecta:
+ * - Velocidade média entre as últimas localizações
+ * - Movimentos suspeitos (velocidade > 50 km/h)
+ */
+app.get('/api/alertas', (req, res) => {
+    const { numero } = req.query;
+
+    // Validação: número é obrigatório
+    if (!numero) {
+        return res.status(400).json({ error: 'Número é obrigatório' });
+    }
+
+    // Consulta: últimas 10 localizações do número
+    db.all(`
+        SELECT 
+            \`latitude\`, 
+            \`longitude\`, 
+            \`data_hora\`
+        FROM historico_localizacao
+        WHERE \`numero\` = ?
+        ORDER BY \`data_hora\` DESC
+        LIMIT 10
+    `, [numero], (err, rows) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+
+        // Verifica se há dados suficientes para análise
+        if (rows.length < 3) {
+            return res.json({ alerta: 'Sem dados suficientes para alertas' });
+        }
+
+        // ============================================================
+        // CALCULA A VELOCIDADE MÉDIA (SIMPLIFICADA)
+        // ============================================================
+        let distanciaTotal = 0;
+        let intervalos = 0;
+
+        for (let i = 0; i < rows.length - 1; i++) {
+            const lat1 = rows[i].latitude;
+            const lon1 = rows[i].longitude;
+            const lat2 = rows[i+1].latitude;
+            const lon2 = rows[i+1].longitude;
+
+            // Cálculo simplificado de distância em km
+            // 1 grau ≈ 111 km
+            const dist = Math.sqrt(Math.pow(lat2 - lat1, 2) + Math.pow(lon2 - lon1, 2)) * 111;
+            distanciaTotal += dist;
+            intervalos++;
+        }
+
+        // Velocidade média (km/h) - estimativa por intervalo
+        const velocidadeMedia = distanciaTotal / (intervalos > 0 ? intervalos : 1);
+
+        // ============================================================
+        // GERA O ALERTA
+        // ============================================================
+        if (velocidadeMedia > 50) {
+            // Movimento suspeito: velocidade > 50 km/h
+            res.json({ 
+                alerta: `Movimento suspeito detectado (${velocidadeMedia.toFixed(1)} km/h). Últimas localizações indicam deslocamento rápido.` 
+            });
+        } else if (velocidadeMedia > 20) {
+            // Movimento moderado
+            res.json({ 
+                alerta: `Movimento moderado detectado (${velocidadeMedia.toFixed(1)} km/h).` 
+            });
+        } else {
+            // Padrão normal
+            res.json({ 
+                alerta: `Padrão normal (${velocidadeMedia.toFixed(1)} km/h).` 
+            });
+        }
+    });
+});
