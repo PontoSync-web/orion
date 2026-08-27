@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ORION - Sistema de ERBs</title>
+  <style>
+    body { font-family: Arial; margin: 20px; background: #0a0a1a; color: #00ff88; }
+    .container { max-width: 800px; margin: auto; }
+    input, button { padding: 8px; margin: 5px; background: #1a1a2e; color: #00ff88; border: 1px solid #00ff88; }
+    button { cursor: pointer; }
+    #resultado { background: #1a1a2e; padding: 10px; margin-top: 10px; white-space: pre-wrap; font-size: 12px; max-height: 400px; overflow-y: auto; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🛰️ ORION - Sistema de ERBs</h1>
+    <p>Status: <span id="status">Carregando...</span></p>
+    
+    <h3>📍 Buscar ERBs próximas</h3>
+    <input id="lat" placeholder="Latitude" value="-23.5505">
+    <input id="lon" placeholder="Longitude" value="-46.6333">
+    <input id="raio" placeholder="Raio (km)" value="10">
+    <button onclick="buscar()">Buscar</button>
+    
+    <h3>📊 Estatísticas</h3>
+    <button onclick="estatisticas()">Carregar</button>
+    
+    <pre id="resultado">Aguardando...</pre>
+  </div>
+
+  <script>
+    const API_URL = window.location.origin;
+
+    async function buscar() {
+      const lat = document.getElementById('lat').value;
+      const lon = document.getElementById('lon').value;
+      const raio = document.getElementById('raio').value;
+      const res = await fetch(`${API_URL}/api/estacoes/proximas?lat=${lat}&lon=${lon}&raio=${raio}`);
+      const data = await res.json();
+      document.getElementById('resultado').textContent = JSON.stringify(data, null, 2);
+    }
+
+    async function estatisticas() {
+      const res = await fetch(`${API_URL}/api/estatisticas`);
+      const data = await res.json();
+      document.getElementById('resultado').textContent = JSON.stringify(data, null, 2);
+      document.getElementById('status').textContent = '✅ Ativo';
+    }
+
+    estatisticas();
+  </script>
+</body>
+</html>
