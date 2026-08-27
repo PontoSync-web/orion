@@ -858,4 +858,76 @@ app.delete('/api/filtros/:id', (req, res) => {
 app.get('/api/historico', (req, res) => {
     db.all(`
         SELECT h.*, e.\`operadora\`, e.\`municipio\`, e.\`uf\`
-       
+        FROM historico h
+        LEFT JOIN estacoes e ON h.\`estacao_id\` = e.\`id_estacao\`
+        ORDER BY h.\`data_consulta\` DESC
+        LIMIT 100
+    `, (err, rows) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json(rows);
+    });
+});
+
+app.post('/api/historico', (req, res) => {
+    const { numero, estacao_id, distancia } = req.body;
+    if (!numero || !estacao_id) {
+        return res.status(400).json({ error: 'Número e estacao_id são obrigatórios' });
+    }
+
+    const stmt = db.prepare(`
+        INSERT INTO historico (\`numero\`, \`estacao_id\`, \`distancia\`)
+        VALUES (?, ?, ?)
+    `);
+    stmt.run(numero, estacao_id, distancia || null, function(err) {
+        stmt.finalize();
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ success: true, id: this.lastID });
+    });
+});
+
+// ============================================================
+// ROTAS PARA ESTATÍSTICAS
+// ============================================================
+
+app.get('/api/estatisticas', (req, res) => {
+    db.all(`
+        SELECT 
+            (SELECT COUNT(*) FROM estacoes) AS total_estacoes,
+            (SELECT COUNT(DISTINCT \`operadora\`) FROM estacoes) AS total_operadoras,
+            (SELECT COUNT(DISTINCT \`uf\`) FROM estacoes) AS total_ufs,
+            (SELECT COUNT(*) FROM numeros) AS total_numeros,
+            (SELECT COUNT(*) FROM alvos) AS total_alvos,
+            (SELECT COUNT(*) FROM bases) AS total_bases,
+            (SELECT COUNT(*) FROM recursos) AS total_recursos,
+            (SELECT COUNT(*) FROM filtros) AS total_filtros
+    `, (err, rows) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json(rows[0]);
+    });
+});
+
+// ============================================================
+// INICIALIZAÇÃO DO SERVIDOR
+// ============================================================
+
+(async () => {
+    await importarERBs();
+    console.log('✅ ORION pronto para uso.');
+})();
+
+app.listen(port, () => {
+    console.log(`🚀 ORION rodando na porta ${port}`);
+});
+
+process.on('SIGINT', () => {
+    db.close(() => {
+        console.log('👋 ORION encerrado.');
+        process.exit(0);
+    });
+});
