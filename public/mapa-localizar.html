@@ -6,7 +6,7 @@
     <title>ORION AI-DEPOM</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        /* Estilos mantidos */
+        /* Estilos */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0a0a1a; color: #00ff88; display: flex; flex-direction: column; height: 100vh; }
         #header { background: #1a1a2e; padding: 15px 20px; border-bottom: 1px solid #00ff88; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; z-index: 1000; }
@@ -14,21 +14,22 @@
         #header .status { font-size: 0.9em; color: #88ffbb; }
         #controls { background: #1a1a2e; padding: 15px 20px; border-bottom: 1px solid #00ff88; display: flex; flex-wrap: wrap; gap: 15px; align-items: flex-end; z-index: 1000; }
         .control-group { display: flex; flex-direction: column; gap: 5px; }
-        .control-group label { font-size: 0.8em; color: #88ffbb; }
-        .control-group input, .control-group select { padding: 8px 12px; background: #0a0a1a; color: #00ff88; border: 1px solid #00ff88; border-radius: 4px; font-size: 0.9em; min-width: 150px; }
+        .control-group label { font-size: 0.8em; color: #88ffbb; margin-bottom: 2px; }
+        .control-group input, .control-group select { padding: 8px 12px; background: #0a0a1a; color: #00ff88; border: 1px solid #00ff88; border-radius: 4px; font-size: 0.9em; min-width: 140px; }
         .control-group input::placeholder { color: #446655; }
         .btn { padding: 8px 20px; background: #00ff88; color: #0a0a1a; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; transition: background 0.2s; font-size: 0.9em; }
         .btn:hover { background: #88ffbb; }
         .btn-secondary { background: #1a1a2e; color: #00ff88; border: 1px solid #00ff88; }
         .btn-secondary:hover { background: #2a2a4e; }
+        .btn-success { background: #00cc66; color: #0a0a1a; }
+        .btn-success:hover { background: #44dd88; }
         #map { flex: 1; width: 100%; z-index: 1; }
         #resultado { position: fixed; bottom: 20px; right: 20px; background: #1a1a2e; border: 1px solid #00ff88; border-radius: 8px; padding: 15px; max-width: 400px; max-height: 300px; overflow-y: auto; z-index: 1000; font-size: 0.8em; color: #88ffbb; display: none; }
         #resultado.show { display: block; }
         #resultado .close { float: right; cursor: pointer; color: #ff6666; font-weight: bold; }
         .leaflet-popup-content { color: #0a0a1a; }
-        .btn-geo { background: #ffaa00; color: #0a0a1a; }
-        .btn-geo:hover { background: #ffcc44; }
         .status-location { font-size: 0.8em; margin-left: 10px; color: #88ffbb; }
+        .separator { color: #446655; padding: 0 5px; }
         @media (max-width: 768px) {
             #header { flex-direction: column; align-items: flex-start; }
             #controls { flex-direction: column; align-items: stretch; }
@@ -49,13 +50,23 @@
     </div>
 
     <div id="controls">
+        <!-- ====== SEÇÃO DE BUSCA ====== -->
         <div class="control-group">
-            <label for="numero">Número de celular *</label>
+            <label for="numero">Número para buscar *</label>
             <input type="text" id="numero" placeholder="Ex: 71985549724">
         </div>
+        <button class="btn btn-secondary" id="btnLocalizar">🔍 Localizar</button>
+
+        <span class="separator">|</span>
+
+        <!-- ====== SEÇÃO DE CADASTRO RÁPIDO ====== -->
         <div class="control-group">
-            <label for="operadora">Operadora</label>
-            <select id="operadora">
+            <label for="novoNumero">Novo Número</label>
+            <input type="text" id="novoNumero" placeholder="71985549724">
+        </div>
+        <div class="control-group">
+            <label for="novaOperadora">Operadora</label>
+            <select id="novaOperadora">
                 <option value="TIM">TIM</option>
                 <option value="VIVO">VIVO</option>
                 <option value="CLARO">CLARO</option>
@@ -64,11 +75,10 @@
             </select>
         </div>
         <div class="control-group">
-            <label for="nome">Nome (opcional)</label>
-            <input type="text" id="nome" placeholder="Investigador">
+            <label for="novoNome">Nome (opcional)</label>
+            <input type="text" id="novoNome" placeholder="Identificação">
         </div>
-        <button class="btn" id="btnCadastrar">💾 Cadastrar</button>
-        <button class="btn btn-secondary" id="btnLocalizar">🔍 Localizar por número</button>
+        <button class="btn btn-success" id="btnCadastrar">💾 Cadastrar</button>
     </div>
 
     <div id="map"></div>
@@ -171,12 +181,12 @@
         });
 
         // ============================================================
-        // EVENTO: CADASTRAR NÚMERO
+        // EVENTO: CADASTRAR RÁPIDO
         // ============================================================
         document.getElementById('btnCadastrar').addEventListener('click', async () => {
-            const numero = document.getElementById('numero').value.trim();
-            const operadora = document.getElementById('operadora').value;
-            const nome = document.getElementById('nome').value.trim();
+            const numero = document.getElementById('novoNumero').value.trim();
+            const operadora = document.getElementById('novaOperadora').value;
+            const nome = document.getElementById('novoNome').value.trim();
 
             if (!numero) {
                 mostrarResultado('❌ Número de celular é obrigatório.');
@@ -184,12 +194,18 @@
             }
 
             try {
-                const data = await apiRequest('/api/numeros', {
+                const data = await apiRequest('/api/recursos', {
                     method: 'POST',
-                    body: JSON.stringify({ numero, operadora, uf: '', municipio: nome || '' })
+                    body: JSON.stringify({ numero, operadora, nome, base_id: null, status: 'desconhecido' })
                 });
-                mostrarResultado(`✅ Número ${numero} cadastrado com sucesso!`);
-                document.getElementById('status').textContent = '🟢 Conectado';
+                if (data.success) {
+                    mostrarResultado(`✅ Número ${numero} cadastrado com sucesso!`);
+                    document.getElementById('novoNumero').value = '';
+                    document.getElementById('novoNome').value = '';
+                    document.getElementById('status').textContent = '🟢 Conectado';
+                } else {
+                    mostrarResultado(`❌ Erro ao cadastrar: ${data.error}`);
+                }
             } catch (error) {
                 mostrarResultado(`❌ Erro ao cadastrar: ${error.message}`);
                 document.getElementById('status').textContent = '🔴 Erro de conexão';
@@ -197,7 +213,7 @@
         });
 
         // ============================================================
-        // EVENTO: LOCALIZAR POR NÚMERO (COM ERB MAIS PRÓXIMA)
+        // EVENTO: LOCALIZAR POR NÚMERO
         // ============================================================
         document.getElementById('btnLocalizar').addEventListener('click', async () => {
             const numero = document.getElementById('numero').value.trim();
@@ -208,43 +224,50 @@
             }
 
             try {
-                // 1. Busca a localização do número
-                const recurso = await apiRequest(`/api/recursos/numero/${numero}`);
+                // Busca o recurso
+                let recurso;
+                try {
+                    recurso = await apiRequest(`/api/recursos/numero/${numero}`);
+                } catch (e) {
+                    if (e.message.includes('404')) {
+                        mostrarResultado(`❌ Número ${numero} não encontrado. Cadastre-o primeiro.`);
+                        document.getElementById('statusLocation').textContent = '📍 Número não cadastrado';
+                        return;
+                    }
+                    throw e;
+                }
+
                 if (!recurso || !recurso.base_id) {
                     mostrarResultado(`❌ Número ${numero} não possui uma base associada.`);
-                    document.getElementById('statusLocation').textContent = '📍 Localização não encontrada';
+                    document.getElementById('statusLocation').textContent = '📍 Sem base associada';
                     return;
                 }
 
-                // 2. Busca a base associada
+                // Busca a base
                 const base = await apiRequest(`/api/bases/${recurso.base_id}`);
                 if (!base || !base.latitude || !base.longitude) {
-                    mostrarResultado(`❌ Base associada ao número ${numero} não possui coordenadas.`);
+                    mostrarResultado(`❌ Base associada não possui coordenadas.`);
                     document.getElementById('statusLocation').textContent = '📍 Coordenadas não disponíveis';
                     return;
                 }
 
                 const lat = base.latitude;
                 const lon = base.longitude;
-                document.getElementById('statusLocation').textContent = `📍 Localização do número: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+                document.getElementById('statusLocation').textContent = `📍 Localização: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
 
-                // 3. Busca a ERB mais próxima
+                // Busca a ERB mais próxima
                 const estacao = await apiRequest(`/api/estacoes/mais-proxima?lat=${lat}&lon=${lon}`);
                 if (!estacao) {
-                    mostrarResultado(`❌ Nenhuma ERB encontrada nas proximidades de ${numero}.`);
+                    mostrarResultado(`❌ Nenhuma ERB encontrada nas proximidades.`);
                     return;
                 }
 
                 adicionarMarcadores([estacao]);
-                mostrarResultado(`✅ ERB mais próxima do número ${numero}: ${estacao.id_estacao} (${estacao.distancia.toFixed(2)} km)`);
+                mostrarResultado(`✅ ERB mais próxima: ${estacao.id_estacao} (${estacao.distancia.toFixed(2)} km)`);
                 document.getElementById('status').textContent = '🟢 Conectado';
 
             } catch (error) {
-                if (error.message.includes('404')) {
-                    mostrarResultado(`❌ Número ${numero} não encontrado na base de dados.`);
-                } else {
-                    mostrarResultado(`❌ Erro ao localizar: ${error.message}`);
-                }
+                mostrarResultado(`❌ Erro ao localizar: ${error.message}`);
                 document.getElementById('status').textContent = '🔴 Erro de conexão';
             }
         });
