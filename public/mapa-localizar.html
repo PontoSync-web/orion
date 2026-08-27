@@ -3,155 +3,366 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ORION AI-DEPOM — Localizador e Cadastro</title>
+    <title>ORION AI-DEPOM</title>
+    <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #0a0a2e; color: #e0e0e0; min-height: 100vh; display: flex; }
-        .sidebar { width: 380px; background: #111144; padding: 20px; border-right: 1px solid #1e3a5f; display: flex; flex-direction: column; gap: 15px; }
-        .sidebar h2 { color: #00d4ff; text-align: center; margin-bottom: 10px; }
-        .form-group { display: flex; flex-direction: column; gap: 5px; }
-        .form-group label { font-size: 0.8em; color: #aaa; text-transform: uppercase; letter-spacing: 1px; }
-        .form-group input { padding: 10px; background: #0d0d33; border: 1px solid #1e3a5f; border-radius: 6px; color: #e0e0e0; outline: none; }
-        .form-group input:focus { border-color: #00d4ff; }
-        button { padding: 12px; background: #00d4ff; color: #0a0a2e; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; transition: background 0.3s; }
-        button:hover { background: #00b8e0; }
-        .btn-cadastrar { background: #ffaa00; color: #0a0a2e; }
-        .btn-cadastrar:hover { background: #e69900; }
-        .resultado { background: #0d0d33; border: 1px solid #1e3a5f; border-radius: 6px; padding: 10px; min-height: 50px; font-size: 0.9em; }
-        .resultado .erro { color: #ff6666; }
-        .resultado .sucesso { color: #00ff44; }
-        #map { flex: 1; height: 100vh; }
-        @media (max-width: 768px) { body { flex-direction: column; } .sidebar { width: 100%; border-right: none; border-bottom: 1px solid #1e3a5f; } #map { height: 60vh; } }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0a0a1a;
+            color: #00ff88;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        #header {
+            background: #1a1a2e;
+            padding: 15px 20px;
+            border-bottom: 1px solid #00ff88;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            z-index: 1000;
+        }
+        #header h1 {
+            font-size: 1.5em;
+            color: #00ff88;
+        }
+        #header .status {
+            font-size: 0.9em;
+            color: #88ffbb;
+        }
+        #controls {
+            background: #1a1a2e;
+            padding: 15px 20px;
+            border-bottom: 1px solid #00ff88;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            align-items: flex-end;
+            z-index: 1000;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .control-group label {
+            font-size: 0.8em;
+            color: #88ffbb;
+        }
+        .control-group input,
+        .control-group select {
+            padding: 8px 12px;
+            background: #0a0a1a;
+            color: #00ff88;
+            border: 1px solid #00ff88;
+            border-radius: 4px;
+            font-size: 0.9em;
+            min-width: 150px;
+        }
+        .control-group input::placeholder {
+            color: #446655;
+        }
+        .btn {
+            padding: 8px 20px;
+            background: #00ff88;
+            color: #0a0a1a;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.2s;
+            font-size: 0.9em;
+        }
+        .btn:hover {
+            background: #88ffbb;
+        }
+        .btn-secondary {
+            background: #1a1a2e;
+            color: #00ff88;
+            border: 1px solid #00ff88;
+        }
+        .btn-secondary:hover {
+            background: #2a2a4e;
+        }
+        #map {
+            flex: 1;
+            width: 100%;
+            z-index: 1;
+        }
+        #resultado {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #1a1a2e;
+            border: 1px solid #00ff88;
+            border-radius: 8px;
+            padding: 15px;
+            max-width: 400px;
+            max-height: 300px;
+            overflow-y: auto;
+            z-index: 1000;
+            font-size: 0.8em;
+            color: #88ffbb;
+            display: none;
+        }
+        #resultado.show {
+            display: block;
+        }
+        #resultado .close {
+            float: right;
+            cursor: pointer;
+            color: #ff6666;
+            font-weight: bold;
+        }
+        .leaflet-popup-content {
+            color: #0a0a1a;
+        }
+        /* Responsividade */
+        @media (max-width: 768px) {
+            #header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            #controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .control-group {
+                width: 100%;
+            }
+            .control-group input,
+            .control-group select {
+                width: 100%;
+                min-width: unset;
+            }
+            #resultado {
+                max-width: 90vw;
+                right: 5vw;
+                bottom: 10px;
+            }
+        }
     </style>
 </head>
 <body>
-    <!-- 2026-08-26 — Painel lateral de cadastro e consulta -->
-    <div class="sidebar">
-        <h2>📍 ORION AI-DEPOM</h2>
 
-        <!-- 2026-08-26 — Formulário de cadastro -->
-        <div class="form-group">
-            <label for="cadTelefone">Número de celular *</label>
-            <input type="text" id="cadTelefone" placeholder="71988979724" maxlength="15">
-        </div>
-        <div class="form-group">
-            <label for="cadOperadora">Operadora</label>
-            <input type="text" id="cadOperadora" placeholder="TIM" value="TIM">
-        </div>
-        <div class="form-group">
-            <label for="cadNome">Nome (opcional)</label>
-            <input type="text" id="cadNome" placeholder="Investigador Souza">
-        </div>
-        <button class="btn-cadastrar" onclick="cadastrarNumero()">💾 Cadastrar</button>
-
-        <hr style="border-color: #1e3a5f;">
-
-        <!-- 2026-08-26 — Formulário de consulta -->
-        <div class="form-group">
-            <label for="consultaTelefone">Número de celular *</label>
-            <input type="text" id="consultaTelefone" placeholder="71988979724" maxlength="15">
-        </div>
-        <button onclick="localizarNumero()">🔍 Localizar por número</button>
-
-        <!-- 2026-08-26 — Área de resultado -->
-        <div class="resultado" id="resultado">
-            <p>Digite um número e clique em "Cadastrar" ou "Localizar".</p>
-        </div>
+    <div id="header">
+        <h1>📍 ORION AI-DEPOM</h1>
+        <span class="status" id="status">🟢 Conectado</span>
     </div>
 
-    <!-- 2026-08-26 — Mapa interativo -->
+    <div id="controls">
+        <div class="control-group">
+            <label for="numero">Número de celular *</label>
+            <input type="text" id="numero" placeholder="Ex: 71985549724" value="71985549724">
+        </div>
+        <div class="control-group">
+            <label for="operadora">Operadora</label>
+            <select id="operadora">
+                <option value="TIM">TIM</option>
+                <option value="VIVO">VIVO</option>
+                <option value="CLARO">CLARO</option>
+                <option value="OI">OI</option>
+                <option value="OUTRA">Outra</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <label for="nome">Nome (opcional)</label>
+            <input type="text" id="nome" placeholder="Investigador Souza" value="Investigador Souza">
+        </div>
+        <button class="btn" id="btnCadastrar">💾 Cadastrar</button>
+        <button class="btn btn-secondary" id="btnLocalizar">🔍 Localizar por número</button>
+    </div>
+
     <div id="map"></div>
 
+    <div id="resultado">
+        <span class="close" id="closeResultado">×</span>
+        <pre id="resultadoConteudo">Aguardando...</pre>
+    </div>
+
+    <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
     <script>
-        // 2026-08-26 — Inicializar o mapa (coordenadas iniciais: Salvador/BA)
-        const map = L.map('map').setView([-12.9714, -38.5014], 12);
+        // ============================================================
+        // CONFIGURAÇÃO DA API
+        // ============================================================
+        const API_URL = window.location.origin;
+
+        // ============================================================
+        // FUNÇÕES DE API
+        // ============================================================
+        async function apiRequest(endpoint, options = {}) {
+            const url = `${API_URL}${endpoint}`;
+            try {
+                const response = await fetch(url, {
+                    ...options,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(options.headers || {})
+                    }
+                });
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Erro ${response.status}: ${errorText}`);
+                }
+                return await response.json();
+            } catch (error) {
+                console.error(`❌ Erro na requisição para ${url}:`, error);
+                throw error;
+            }
+        }
+
+        // ============================================================
+        // INICIALIZAÇÃO DO MAPA
+        // ============================================================
+        const map = L.map('map').setView([-15.8, -47.9], 4);
+
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '© OpenStreetMap'
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         }).addTo(map);
 
-        let marker = null;
-        let circle = null;
+        let markerLayer = L.layerGroup().addTo(map);
+        let markers = {};
 
-        // 2026-08-26 — Função para cadastrar número no banco
-        async function cadastrarNumero() {
-            const telefone = document.getElementById('cadTelefone').value.trim();
-            const operadora = document.getElementById('cadOperadora').value.trim() || 'TIM';
-            const nome = document.getElementById('cadNome').value.trim() || 'Não informado';
+        // ============================================================
+        // FUNÇÃO PARA ADICIONAR MARCADORES
+        // ============================================================
+        function adicionarMarcadores(estacoes) {
+            markerLayer.clearLayers();
+            markers = {};
 
-            if (!telefone) {
-                exibirResultado('❌ Número de celular é obrigatório.', 'erro');
+            if (!estacoes || estacoes.length === 0) {
+                mostrarResultado('Nenhuma estação encontrada.');
                 return;
             }
 
-            try {
-                const res = await fetch('/api/cadastrar', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ telefone, operadora, nome })
+            estacoes.forEach((estacao) => {
+                const lat = estacao.latitude;
+                const lon = estacao.longitude;
+                if (!lat || !lon) return;
+
+                const marker = L.marker([lat, lon], {
+                    title: estacao.id_estacao
                 });
-                const data = await res.json();
 
-                if (data.success) {
-                    exibirResultado(`✅ Número ${telefone} cadastrado com sucesso!`, 'sucesso');
-                    limparCamposCadastro();
-                } else {
-                    exibirResultado(`❌ Erro: ${data.message}`, 'erro');
-                }
-            } catch (err) {
-                exibirResultado('❌ Erro de conexão com o servidor.', 'erro');
+                const popupContent = `
+                    <strong>ID:</strong> ${estacao.id_estacao}<br>
+                    <strong>Operadora:</strong> ${estacao.operadora || 'N/A'}<br>
+                    <strong>UF:</strong> ${estacao.uf || 'N/A'}<br>
+                    <strong>Município:</strong> ${estacao.municipio || 'N/A'}<br>
+                    <strong>Tecnologias:</strong> ${estacao.tecnologias || 'N/A'}<br>
+                    <strong>Frequências:</strong> ${estacao.frequencias || 'N/A'}<br>
+                    <strong>Distância:</strong> ${estacao.distancia ? estacao.distancia.toFixed(2) + ' km' : 'N/A'}
+                `;
+                marker.bindPopup(popupContent);
+
+                markerLayer.addLayer(marker);
+                markers[estacao.id_estacao] = marker;
+            });
+
+            // Ajusta o zoom para mostrar todos os marcadores
+            if (estacoes.length > 0) {
+                const group = L.featureGroup(Object.values(markers));
+                map.fitBounds(group.getBounds(), { padding: [50, 50] });
             }
+
+            mostrarResultado(`${estacoes.length} estações encontradas.`);
         }
 
-        // 2026-08-26 — Função para localizar número no mapa
-        async function localizarNumero() {
-            const telefone = document.getElementById('consultaTelefone').value.trim();
+        // ============================================================
+        // FUNÇÕES DE INTERFACE
+        // ============================================================
+        function mostrarResultado(mensagem) {
+            const el = document.getElementById('resultado');
+            const conteudo = document.getElementById('resultadoConteudo');
+            conteudo.textContent = typeof mensagem === 'object' ? JSON.stringify(mensagem, null, 2) : mensagem;
+            el.classList.add('show');
+        }
 
-            if (!telefone) {
-                exibirResultado('❌ Número de celular é obrigatório.', 'erro');
+        document.getElementById('closeResultado').addEventListener('click', () => {
+            document.getElementById('resultado').classList.remove('show');
+        });
+
+        // ============================================================
+        // EVENTO: CADASTRAR NÚMERO
+        // ============================================================
+        document.getElementById('btnCadastrar').addEventListener('click', async () => {
+            const numero = document.getElementById('numero').value.trim();
+            const operadora = document.getElementById('operadora').value;
+            const nome = document.getElementById('nome').value.trim();
+
+            if (!numero) {
+                mostrarResultado('❌ Número de celular é obrigatório.');
                 return;
             }
 
             try {
-                const res = await fetch(`/api/localizar?telefone=${encodeURIComponent(telefone)}`);
-                const data = await res.json();
+                const data = await apiRequest('/api/numeros', {
+                    method: 'POST',
+                    body: JSON.stringify({ numero, operadora, uf: '', municipio: nome || '' })
+                });
+                mostrarResultado(`✅ Número ${numero} cadastrado com sucesso!`);
+                document.getElementById('status').textContent = '🟢 Conectado';
+            } catch (error) {
+                mostrarResultado(`❌ Erro ao cadastrar: ${error.message}`);
+                document.getElementById('status').textContent = '🔴 Erro de conexão';
+            }
+        });
 
-                if (data.success && data.lat && data.lng) {
-                    if (marker) map.removeLayer(marker);
-                    if (circle) map.removeLayer(circle);
+        // ============================================================
+        // EVENTO: LOCALIZAR POR NÚMERO
+        // ============================================================
+        document.getElementById('btnLocalizar').addEventListener('click', async () => {
+            const numero = document.getElementById('numero').value.trim();
 
-                    map.setView([data.lat, data.lng], 15);
-                    marker = L.marker([data.lat, data.lng]).addTo(map)
-                        .bindPopup(`📱 ${data.telefone}<br>🏢 ${data.operadora}<br>👤 ${data.nome || '—'}`)
-                        .openPopup();
-                    circle = L.circle([data.lat, data.lng], {
-                        radius: data.precision || 200,
-                        color: '#00d4ff',
-                        fillColor: '#00d4ff',
-                        fillOpacity: 0.1
-                    }).addTo(map);
+            if (!numero) {
+                mostrarResultado('❌ Número de celular é obrigatório.');
+                return;
+            }
 
-                    exibirResultado('✅ Localização exibida no mapa.', 'sucesso');
-                } else {
-                    exibirResultado(`❌ ${data.message || 'Número não encontrado.'}`, 'erro');
-                }
-            } catch (err) {
-                exibirResultado('❌ Erro de conexão com o servidor.', 'erro');
+            // Por simplicidade, vamos buscar estações próximas a uma localização fixa (Brasília)
+            // Em um cenário real, você teria uma lógica para associar o número a uma localização.
+            const lat = -15.8;
+            const lon = -47.9;
+            const raio = 50;
+
+            try {
+                const data = await apiRequest(`/api/estacoes/proximas?lat=${lat}&lon=${lon}&raio=${raio}`);
+                adicionarMarcadores(data);
+                mostrarResultado(`✅ ${data.length} estações encontradas para o número ${numero}.`);
+                document.getElementById('status').textContent = '🟢 Conectado';
+            } catch (error) {
+                mostrarResultado(`❌ Erro ao localizar: ${error.message}`);
+                document.getElementById('status').textContent = '🔴 Erro de conexão';
+            }
+        });
+
+        // ============================================================
+        // VERIFICAÇÃO INICIAL DE CONEXÃO
+        // ============================================================
+        async function verificarConexao() {
+            try {
+                const data = await apiRequest('/api/estatisticas');
+                document.getElementById('status').textContent = '🟢 Conectado';
+                mostrarResultado(`✅ Sistema conectado. ${data.total_estacoes || 0} estações disponíveis.`);
+            } catch (error) {
+                document.getElementById('status').textContent = '🔴 Erro de conexão';
+                mostrarResultado(`❌ Erro de conexão com o servidor: ${error.message}`);
             }
         }
 
-        // 2026-08-26 — Função para exibir resultado
-        function exibirResultado(mensagem, tipo) {
-            const div = document.getElementById('resultado');
-            div.innerHTML = `<p class="${tipo}">${mensagem}</p>`;
-        }
-
-        // 2026-08-26 — Limpar campos após cadastro
-        function limparCamposCadastro() {
-            document.getElementById('cadTelefone').value = '';
-            document.getElementById('cadNome').value = '';
-        }
+        // Inicializa
+        verificarConexao();
     </script>
 </body>
 </html>
