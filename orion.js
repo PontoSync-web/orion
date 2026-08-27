@@ -402,6 +402,7 @@ app.get('/api/estacoes/proximas', (req, res) => {
     const raioKm = parseFloat(raio) || 10;
 
     // Consulta SQL com fórmula de Haversine para calcular distância
+    // Usando WHERE em vez de HAVING para evitar erro de sintaxe
     const sql = `
         SELECT *,
             (6371 * acos( cos(radians(?)) * cos(radians(\`latitude\`)) *
@@ -409,13 +410,16 @@ app.get('/api/estacoes/proximas', (req, res) => {
                 sin(radians(\`latitude\`)) )) AS distancia
         FROM estacoes
         WHERE \`latitude\` IS NOT NULL AND \`longitude\` IS NOT NULL
-        HAVING distancia <= ?
+        AND (6371 * acos( cos(radians(?)) * cos(radians(\`latitude\`)) *
+                cos(radians(\`longitude\`) - radians(?)) + sin(radians(?)) *
+                sin(radians(\`latitude\`)) )) <= ?
         ORDER BY distancia
         LIMIT 50
     `;
 
     // Executa a consulta com os parâmetros fornecidos
-    db.all(sql, [lat, lon, lat, raioKm], (err, rows) => {
+    // Os placeholders são repetidos para cada ocorrência na query
+    db.all(sql, [lat, lon, lat, lat, lon, lat, raioKm], (err, rows) => {
         if (err) {
             return res.status(500).json({ error: err.message });
         }
