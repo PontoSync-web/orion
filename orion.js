@@ -183,6 +183,7 @@ db.serialize(() => {
         \`data_criacao\` DATETIME DEFAULT CURRENT_TIMESTAMP
     )`, (err) => {
         if (err) console.error('❌ Erro ao criar tabela filtros:', err.message);
+        else console.log('✅ Tabela filtros criada/verificada com sucesso.');
     });
 });
 
@@ -759,6 +760,7 @@ app.delete('/api/recursos/:id', (req, res) => {
 // ROTAS PARA FILTROS INTELIGENTES
 // ============================================================
 
+// Criar um novo filtro
 app.post('/api/filtros', (req, res) => {
     const { nome, tag, operadora, uf, municipio, base_id, distancia_max, horario_inicio, horario_fim, notificar, ativo } = req.body;
     if (!nome) {
@@ -786,6 +788,7 @@ app.post('/api/filtros', (req, res) => {
     );
 });
 
+// Listar todos os filtros
 app.get('/api/filtros', (req, res) => {
     db.all('SELECT * FROM filtros ORDER BY nome', (err, rows) => {
         if (err) {
@@ -795,6 +798,7 @@ app.get('/api/filtros', (req, res) => {
     });
 });
 
+// Buscar um filtro por ID
 app.get('/api/filtros/:id', (req, res) => {
     const { id } = req.params;
     db.get('SELECT * FROM filtros WHERE id = ?', [id], (err, row) => {
@@ -808,6 +812,7 @@ app.get('/api/filtros/:id', (req, res) => {
     });
 });
 
+// Atualizar um filtro
 app.put('/api/filtros/:id', (req, res) => {
     const { id } = req.params;
     const { nome, tag, operadora, uf, municipio, base_id, distancia_max, horario_inicio, horario_fim, notificar, ativo } = req.body;
@@ -835,6 +840,7 @@ app.put('/api/filtros/:id', (req, res) => {
     );
 });
 
+// Deletar um filtro
 app.delete('/api/filtros/:id', (req, res) => {
     const { id } = req.params;
     db.run('DELETE FROM filtros WHERE id = ?', [id], function(err) {
@@ -852,6 +858,4 @@ app.delete('/api/filtros/:id', (req, res) => {
 app.get('/api/historico', (req, res) => {
     db.all(`
         SELECT h.*, e.\`operadora\`, e.\`municipio\`, e.\`uf\`
-        FROM historico h
-        LEFT JOIN estacoes e ON h.\`estacao_id\` = e.\`id_estacao\`
-        ORDER BY
+       
