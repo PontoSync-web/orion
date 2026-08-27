@@ -30,7 +30,6 @@ app.use((req, res, next) => {
 const db = new sqlite3.Database(DB_PATH);
 
 db.serialize(() => {
-  // Tabela de estações (ERBs)
   db.run(`CREATE TABLE IF NOT EXISTS estacoes (
     id_estacao TEXT PRIMARY KEY,
     operadora TEXT,
@@ -53,7 +52,6 @@ db.serialize(() => {
     data_importacao DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
-  // Tabela de números cadastrados
   db.run(`CREATE TABLE IF NOT EXISTS numeros (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     numero TEXT UNIQUE,
@@ -63,7 +61,6 @@ db.serialize(() => {
     data_cadastro DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
-  // Tabela de histórico de consultas
   db.run(`CREATE TABLE IF NOT EXISTS historico (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     numero TEXT,
@@ -72,7 +69,6 @@ db.serialize(() => {
     data_consulta DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
-  // Tabela de log de importação
   db.run(`CREATE TABLE IF NOT EXISTS importacao_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     arquivo TEXT,
@@ -91,20 +87,9 @@ async function importarERBs() {
     return;
   }
 
-  // Detecta arquivos de ERB (suporta múltiplos formatos)
-  const padroes = [
-    'erb_consolidado_final_part',
-    'Estacoes_Licenciadas_SMP_part',
-    'coleta_campo'
-  ];
-
-  let arquivos = [];
-  for (const padrao of padroes) {
-    const encontrados = fs.readdirSync(DATA_DIR).filter(f => 
-      f.startsWith(padrao) && f.endsWith('.csv')
-    );
-    arquivos = arquivos.concat(encontrados);
-  }
+  const arquivos = fs.readdirSync(DATA_DIR).filter(f => 
+    f.startsWith('erb_consolidado_final_part') && f.endsWith('.csv')
+  );
 
   if (arquivos.length === 0) {
     console.log('⚠️ Nenhum arquivo ERB encontrado.');
@@ -117,69 +102,49 @@ async function importarERBs() {
     const caminho = path.join(DATA_DIR, arquivo);
     console.log(`🔍 Lendo ${arquivo}...`);
 
-    // Detecta separador
-    let separador = ',';
-    try {
-      const primeiraLinha = fs.readFileSync(caminho, 'utf8').split('\n')[0];
-      if (primeiraLinha.includes(';')) separador = ';';
-      if (primeiraLinha.includes('\t')) separador = '\t';
-    } catch (e) {}
-
-    // Detecta se tem cabeçalho
-    let temCabecalho = false;
-    try {
-      const primeiraLinha = fs.readFileSync(caminho, 'utf8').split('\n')[0];
-      if (primeiraLinha.toLowerCase().includes('id_estacao') || 
-          primeiraLinha.toLowerCase().includes('prestadora') ||
-          primeiraLinha.toLowerCase().includes('número')) {
-        temCabecalho = true;
-      }
-    } catch (e) {}
-
-    console.log(`   Separador: '${separador}', Cabeçalho: ${temCabecalho ? 'Sim' : 'Não'}`);
-
     let estacoes = {};
     let linhaAtual = 0;
 
     await new Promise((resolve, reject) => {
       fs.createReadStream(caminho, { encoding: 'utf8' })
         .pipe(csv({
-          separator: separador,
-          skipLines: temCabecalho ? 1 : 0,
+          separator: ',',
+          skipLines: 0,
+          quote: '"',
+          escape: '"',
           mapHeaders: ({ header, index }) => `coluna_${index}`
         }))
         .on('data', (row) => {
           linhaAtual++;
           
-          // Tenta identificar a coluna de ID em diferentes posições
-          const id = row['coluna_0'] || row['coluna_2'] || row['coluna_1'] || '';
+          const id = row['coluna_0'] || '';
           if (!id) return;
 
-          if (!estacoes[id]) {
-            // Mapeamento flexível para diferentes formatos
-            const lat = parseFloat(row['coluna_10'] || row['coluna_9'] || 0);
-            const lon = parseFloat(row['coluna_11'] || row['coluna_10'] || 0);
-            
-            // Valida coordenadas (Brasil)
-            if (lat < -34 || lat > 6 || lon < -75 || lon > -33) {
-              return;
-            }
+          // Valida coordenadas
+          const lat = parseFloat(row['coluna_10'] || 0);
+          const lon = parseFloat(row['coluna_11'] || 0);
+          
+          // Descarta coordenadas inválidas (ex: -99.52 ou fora do Brasil)
+          if (isNaN(lat) || isNaN(lon) || lat < -34 || lat > 6 || lon < -75 || lon > -33) {
+            return;
+          }
 
+          if (!estacoes[id]) {
             estacoes[id] = {
               id_estacao: id,
-              operadora: row['coluna_1'] || row['coluna_0'] || '',
-              uf: row['coluna_2'] || row['coluna_3'] || '',
-              municipio: row['coluna_3'] || row['coluna_4'] || '',
-              bairro: row['coluna_4'] || row['coluna_5'] || '',
-              endereco: row['coluna_5'] || row['coluna_6'] || '',
-              codigo_municipio_ibge: row['coluna_6'] || row['coluna_7'] || '',
+              operadora: row['coluna_1'] || '',
+              uf: row['coluna_2'] || '',
+              municipio: row['coluna_3'] || '',
+              bairro: row['coluna_4'] || '',
+              endereco: row['coluna_5'] || '',
+              codigo_municipio_ibge: row['coluna_6'] || '',
               latitude: lat,
               longitude: lon,
               tecnologias: row['coluna_8'] || '',
               frequencias: row['coluna_9'] || '',
-              azimutes: row['coluna_13'] || '',
-              emissoes: row['coluna_14'] || '',
-              fonte: 'Anatel/OpenCellID',
+              azimutes: '',
+              emissoes: row['coluna_25'] || '',
+              fonte: 'OpenCellID + Anatel',
               opencellid_radio: row['coluna_12'] || '',
               opencellid_cell: row['coluna_16'] || '',
               opencellid_correspondencia: row['coluna_21'] || '',
@@ -234,7 +199,6 @@ async function importarERBs() {
 // ROTAS DA API
 // ============================================================
 
-// Listar estações próximas
 app.get('/api/estacoes/proximas', (req, res) => {
   const { lat, lon, raio } = req.query;
   if (!lat || !lon) {
@@ -262,7 +226,6 @@ app.get('/api/estacoes/proximas', (req, res) => {
   });
 });
 
-// Buscar estação por ID
 app.get('/api/estacoes/:id', (req, res) => {
   const { id } = req.params;
   db.get('SELECT * FROM estacoes WHERE id_estacao = ?', [id], (err, row) => {
@@ -276,7 +239,6 @@ app.get('/api/estacoes/:id', (req, res) => {
   });
 });
 
-// Filtrar por UF
 app.get('/api/estacoes/uf/:uf', (req, res) => {
   const { uf } = req.params;
   db.all('SELECT * FROM estacoes WHERE uf = ? ORDER BY municipio', [uf.toUpperCase()], (err, rows) => {
@@ -287,7 +249,6 @@ app.get('/api/estacoes/uf/:uf', (req, res) => {
   });
 });
 
-// Filtrar por operadora
 app.get('/api/estacoes/operadora/:operadora', (req, res) => {
   const { operadora } = req.params;
   db.all('SELECT * FROM estacoes WHERE operadora LIKE ? ORDER BY uf, municipio', [`%${operadora}%`], (err, rows) => {
@@ -298,7 +259,6 @@ app.get('/api/estacoes/operadora/:operadora', (req, res) => {
   });
 });
 
-// Cadastrar número
 app.post('/api/numeros', (req, res) => {
   const { numero, operadora, uf, municipio } = req.body;
   if (!numero) {
@@ -318,7 +278,6 @@ app.post('/api/numeros', (req, res) => {
   });
 });
 
-// Listar números cadastrados
 app.get('/api/numeros', (req, res) => {
   db.all('SELECT * FROM numeros ORDER BY data_cadastro DESC', (err, rows) => {
     if (err) {
@@ -328,7 +287,6 @@ app.get('/api/numeros', (req, res) => {
   });
 });
 
-// Histórico de consultas
 app.get('/api/historico', (req, res) => {
   db.all(`
     SELECT h.*, e.operadora, e.municipio, e.uf
@@ -344,7 +302,6 @@ app.get('/api/historico', (req, res) => {
   });
 });
 
-// Estatísticas
 app.get('/api/estatisticas', (req, res) => {
   db.all(`
     SELECT 
