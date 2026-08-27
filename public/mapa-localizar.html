@@ -44,7 +44,7 @@
         <h1>📍 ORION AI-DEPOM</h1>
         <div>
             <span class="status" id="status">🟢 Conectado</span>
-            <span class="status-location" id="statusLocation">📍 Localização: Aguardando...</span>
+            <span class="status-location" id="statusLocation">📍 Aguardando busca...</span>
         </div>
     </div>
 
@@ -69,7 +69,6 @@
         </div>
         <button class="btn" id="btnCadastrar">💾 Cadastrar</button>
         <button class="btn btn-secondary" id="btnLocalizar">🔍 Localizar por número</button>
-        <button class="btn btn-geo" id="btnMinhaLocalizacao">📍 Minha Localização</button>
     </div>
 
     <div id="map"></div>
@@ -118,10 +117,6 @@
 
         let markerLayer = L.layerGroup().addTo(map);
         let markers = {};
-        let minhaLocalizacaoMarker = null;
-        let usuarioLat = null;
-        let usuarioLon = null;
-        let localizacaoObtida = false;
 
         // ============================================================
         // FUNÇÕES DE MAPA
@@ -161,60 +156,6 @@
             }
         }
 
-        function adicionarMinhaLocalizacao(lat, lon) {
-            if (minhaLocalizacaoMarker) map.removeLayer(minhaLocalizacaoMarker);
-            const icon = L.divIcon({
-                className: 'custom-div-icon',
-                html: '<div style="background-color:#ff4444; width: 16px; height: 16px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 10px rgba(255,68,68,0.8);"></div>',
-                iconSize: [20, 20],
-                iconAnchor: [10, 10]
-            });
-            minhaLocalizacaoMarker = L.marker([lat, lon], { icon }).addTo(map);
-            minhaLocalizacaoMarker.bindPopup('📍 Sua localização atual');
-            usuarioLat = lat;
-            usuarioLon = lon;
-            localizacaoObtida = true;
-            map.setView([lat, lon], 12);
-            document.getElementById('statusLocation').textContent = `📍 Localização: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
-            mostrarResultado(`📍 Localização atual: ${lat.toFixed(4)}, ${lon.toFixed(4)}`);
-        }
-
-        // ============================================================
-        // FUNÇÃO DE LOCALIZAÇÃO REAL (SEM FALLBACK)
-        // ============================================================
-        function obterLocalizacao() {
-            return new Promise((resolve) => {
-                if (!navigator.geolocation) {
-                    document.getElementById('statusLocation').textContent = '❌ Geolocalização não suportada';
-                    mostrarResultado('❌ Seu navegador não suporta geolocalização.');
-                    resolve(null);
-                    return;
-                }
-
-                document.getElementById('statusLocation').textContent = '⏳ Solicitando permissão de localização...';
-                navigator.geolocation.getCurrentPosition(
-                    (position) => {
-                        const { latitude, longitude } = position.coords;
-                        document.getElementById('statusLocation').textContent = `✅ Localização obtida!`;
-                        resolve({ lat: latitude, lon: longitude });
-                    },
-                    (error) => {
-                        let msg = '';
-                        switch (error.code) {
-                            case error.PERMISSION_DENIED: msg = 'Permissão negada pelo usuário.'; break;
-                            case error.POSITION_UNAVAILABLE: msg = 'Localização indisponível.'; break;
-                            case error.TIMEOUT: msg = 'Tempo limite excedido.'; break;
-                            default: msg = error.message;
-                        }
-                        document.getElementById('statusLocation').textContent = `❌ Erro: ${msg}`;
-                        mostrarResultado(`❌ Erro de localização: ${msg}`);
-                        resolve(null);
-                    },
-                    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-                );
-            });
-        }
-
         // ============================================================
         // FUNÇÕES DE INTERFACE
         // ============================================================
@@ -227,15 +168,6 @@
 
         document.getElementById('closeResultado').addEventListener('click', () => {
             document.getElementById('resultado').classList.remove('show');
-        });
-
-        // ============================================================
-        // EVENTO: MINHA LOCALIZAÇÃO
-        // ============================================================
-        document.getElementById('btnMinhaLocalizacao').addEventListener('click', async () => {
-            const pos = await obterLocalizacao();
-            if (pos) adicionarMinhaLocalizacao(pos.lat, pos.lon);
-            else mostrarResultado('❌ Não foi possível obter sua localização.');
         });
 
         // ============================================================
@@ -275,27 +207,44 @@
                 return;
             }
 
-            if (!localizacaoObtida) {
-                mostrarResultado('⏳ Obtendo sua localização...');
-                const pos = await obterLocalizacao();
-                if (pos) {
-                    adicionarMinhaLocalizacao(pos.lat, pos.lon);
-                } else {
-                    mostrarResultado('❌ Não foi possível obter sua localização. Clique em "Minha Localização" primeiro.');
+            try {
+                // 1. Busca a localização do número
+                const recurso = await apiRequest(`/api/recursos/numero/${numero}`);
+                if (!recurso || !recurso.base_id) {
+                    mostrarResultado(`❌ Número ${numero} não possui uma base associada.`);
+                    document.getElementById('statusLocation').textContent = '📍 Localização não encontrada';
                     return;
                 }
-            }
 
-            const lat = usuarioLat || -15.8;
-            const lon = usuarioLon || -47.9;
+                // 2. Busca a base associada
+                const base = await apiRequest(`/api/bases/${recurso.base_id}`);
+                if (!base || !base.latitude || !base.longitude) {
+                    mostrarResultado(`❌ Base associada ao número ${numero} não possui coordenadas.`);
+                    document.getElementById('statusLocation').textContent = '📍 Coordenadas não disponíveis';
+                    return;
+                }
 
-            try {
+                const lat = base.latitude;
+                const lon = base.longitude;
+                document.getElementById('statusLocation').textContent = `📍 Localização do número: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+
+                // 3. Busca a ERB mais próxima
                 const estacao = await apiRequest(`/api/estacoes/mais-proxima?lat=${lat}&lon=${lon}`);
+                if (!estacao) {
+                    mostrarResultado(`❌ Nenhuma ERB encontrada nas proximidades de ${numero}.`);
+                    return;
+                }
+
                 adicionarMarcadores([estacao]);
-                mostrarResultado(`✅ ERB mais próxima: ${estacao.id_estacao} (${estacao.distancia.toFixed(2)} km)`);
+                mostrarResultado(`✅ ERB mais próxima do número ${numero}: ${estacao.id_estacao} (${estacao.distancia.toFixed(2)} km)`);
                 document.getElementById('status').textContent = '🟢 Conectado';
+
             } catch (error) {
-                mostrarResultado(`❌ Erro ao localizar: ${error.message}`);
+                if (error.message.includes('404')) {
+                    mostrarResultado(`❌ Número ${numero} não encontrado na base de dados.`);
+                } else {
+                    mostrarResultado(`❌ Erro ao localizar: ${error.message}`);
+                }
                 document.getElementById('status').textContent = '🔴 Erro de conexão';
             }
         });
@@ -311,14 +260,6 @@
             } catch (error) {
                 document.getElementById('status').textContent = '🔴 Erro de conexão';
                 mostrarResultado(`❌ Erro de conexão com o servidor: ${error.message}`);
-            }
-
-            // Tenta obter localização automaticamente
-            const pos = await obterLocalizacao();
-            if (pos) {
-                adicionarMinhaLocalizacao(pos.lat, pos.lon);
-            } else {
-                document.getElementById('statusLocation').textContent = '⚠️ Localização não disponível';
             }
         })();
     </script>
