@@ -853,4 +853,4 @@ app.get('/api/historico', (req, res) => {
     db.all(`
         SELECT h.*, e.\`operadora\`, e.\`municipio\`, e.\`uf\`
         FROM historico h
-        LEFT JOIN
+        LEFT
