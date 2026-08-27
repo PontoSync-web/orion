@@ -9,6 +9,7 @@
 // 5. Gestão de alvos (números de interesse)
 // 6. Gestão de bases (setores/instalações)
 // 7. Gestão de recursos (números associados a bases)
+// 8. Filtros inteligentes para alertas
 // ============================================================
 
 // ============================================================
@@ -163,6 +164,25 @@ db.serialize(() => {
         FOREIGN KEY (\`base_id\`) REFERENCES \`bases\`(\`id\`)
     )`, (err) => {
         if (err) console.error('❌ Erro ao criar tabela alocacoes:', err.message);
+    });
+
+    // Tabela filtros inteligentes
+    db.run(`CREATE TABLE IF NOT EXISTS filtros (
+        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
+        \`nome\` TEXT NOT NULL,
+        \`tag\` TEXT,
+        \`operadora\` TEXT,
+        \`uf\` TEXT,
+        \`municipio\` TEXT,
+        \`base_id\` INTEGER,
+        \`distancia_max\` REAL,
+        \`horario_inicio\` TEXT,
+        \`horario_fim\` TEXT,
+        \`notificar\` INTEGER DEFAULT 1,
+        \`ativo\` INTEGER DEFAULT 1,
+        \`data_criacao\` DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`, (err) => {
+        if (err) console.error('❌ Erro ao criar tabela filtros:', err.message);
     });
 });
 
@@ -380,6 +400,43 @@ async function importarERBs() {
 // ROTAS PARA ESTAÇÕES (ERBs)
 // ============================================================
 
+// Rota para encontrar a ERB mais próxima
+app.get('/api/estacoes/mais-proxima', (req, res) => {
+    const { lat, lon } = req.query;
+    if (!lat || !lon) {
+        return res.status(400).json({ error: 'Latitude e longitude são obrigatórias' });
+    }
+
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lon);
+
+    if (isNaN(latitude) || isNaN(longitude)) {
+        return res.status(400).json({ error: 'Latitude e longitude devem ser números válidos' });
+    }
+
+    const sql = `
+        SELECT *,
+            (6371 * acos( cos(radians(?)) * cos(radians(\`latitude\`)) *
+                cos(radians(\`longitude\`) - radians(?)) + sin(radians(?)) *
+                sin(radians(\`latitude\`)) )) AS distancia
+        FROM estacoes
+        WHERE \`latitude\` IS NOT NULL AND \`longitude\` IS NOT NULL
+        ORDER BY distancia ASC
+        LIMIT 1
+    `;
+
+    db.get(sql, [latitude, longitude, latitude], (err, row) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        if (!row) {
+            return res.status(404).json({ error: 'Nenhuma ERB encontrada nas proximidades' });
+        }
+        res.json(row);
+    });
+});
+
+// Rota para buscar estações próximas
 app.get('/api/estacoes/proximas', (req, res) => {
     const { lat, lon, raio } = req.query;
     if (!lat || !lon) {
@@ -699,17 +756,38 @@ app.delete('/api/recursos/:id', (req, res) => {
 });
 
 // ============================================================
-// ROTAS PARA HISTÓRICO
+// ROTAS PARA FILTROS INTELIGENTES
 // ============================================================
 
-app.get('/api/historico', (req, res) => {
-    db.all(`
-        SELECT h.*, e.\`operadora\`, e.\`municipio\`, e.\`uf\`
-        FROM historico h
-        LEFT JOIN estacoes e ON h.\`estacao_id\` = e.\`id_estacao\`
-        ORDER BY h.\`data_consulta\` DESC
-        LIMIT 100
-    `, (err, rows) => {
+app.post('/api/filtros', (req, res) => {
+    const { nome, tag, operadora, uf, municipio, base_id, distancia_max, horario_inicio, horario_fim, notificar, ativo } = req.body;
+    if (!nome) {
+        return res.status(400).json({ error: 'Nome do filtro é obrigatório' });
+    }
+
+    const stmt = db.prepare(`
+        INSERT INTO filtros (
+            \`nome\`, \`tag\`, \`operadora\`, \`uf\`, \`municipio\`, \`base_id\`,
+            \`distancia_max\`, \`horario_inicio\`, \`horario_fim\`, \`notificar\`, \`ativo\`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+        nome, tag || null, operadora || null, uf || null, municipio || null, base_id || null,
+        distancia_max || null, horario_inicio || null, horario_fim || null,
+        notificar !== undefined ? notificar : 1,
+        ativo !== undefined ? ativo : 1,
+        function(err) {
+            stmt.finalize();
+            if (err) {
+                return res.status(500).json({ error: err.message });
+            }
+            res.json({ success: true, id: this.lastID });
+        }
+    );
+});
+
+app.get('/api/filtros', (req, res) => {
+    db.all('SELECT * FROM filtros ORDER BY nome', (err, rows) => {
         if (err) {
             return res.status(500).json({ error: err.message });
         }
@@ -717,63 +795,62 @@ app.get('/api/historico', (req, res) => {
     });
 });
 
-app.post('/api/historico', (req, res) => {
-    const { numero, estacao_id, distancia } = req.body;
-    if (!numero || !estacao_id) {
-        return res.status(400).json({ error: 'Número e estacao_id são obrigatórios' });
-    }
+app.get('/api/filtros/:id', (req, res) => {
+    const { id } = req.params;
+    db.get('SELECT * FROM filtros WHERE id = ?', [id], (err, row) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        if (!row) {
+            return res.status(404).json({ error: 'Filtro não encontrado' });
+        }
+        res.json(row);
+    });
+});
+
+app.put('/api/filtros/:id', (req, res) => {
+    const { id } = req.params;
+    const { nome, tag, operadora, uf, municipio, base_id, distancia_max, horario_inicio, horario_fim, notificar, ativo } = req.body;
 
     const stmt = db.prepare(`
-        INSERT INTO historico (\`numero\`, \`estacao_id\`, \`distancia\`)
-        VALUES (?, ?, ?)
+        UPDATE filtros SET
+            \`nome\` = ?, \`tag\` = ?, \`operadora\` = ?, \`uf\` = ?, \`municipio\` = ?,
+            \`base_id\` = ?, \`distancia_max\` = ?, \`horario_inicio\` = ?, \`horario_fim\` = ?,
+            \`notificar\` = ?, \`ativo\` = ?
+        WHERE id = ?
     `);
-    stmt.run(numero, estacao_id, distancia || null, function(err) {
-        stmt.finalize();
+    stmt.run(
+        nome, tag || null, operadora || null, uf || null, municipio || null,
+        base_id || null, distancia_max || null, horario_inicio || null, horario_fim || null,
+        notificar !== undefined ? notificar : 1,
+        ativo !== undefined ? ativo : 1,
+        id,
+        function(err) {
+            stmt.finalize();
+            if (err) {
+                return res.status(500).json({ error: err.message });
+            }
+            res.json({ success: true, updated: this.changes });
+        }
+    );
+});
+
+app.delete('/api/filtros/:id', (req, res) => {
+    const { id } = req.params;
+    db.run('DELETE FROM filtros WHERE id = ?', [id], function(err) {
         if (err) {
             return res.status(500).json({ error: err.message });
         }
-        res.json({ success: true, id: this.lastID });
+        res.json({ success: true, deleted: this.changes });
     });
 });
 
 // ============================================================
-// ROTAS PARA ESTATÍSTICAS
+// ROTAS PARA HISTÓRICO
 // ============================================================
 
-app.get('/api/estatisticas', (req, res) => {
+app.get('/api/historico', (req, res) => {
     db.all(`
-        SELECT 
-            (SELECT COUNT(*) FROM estacoes) AS total_estacoes,
-            (SELECT COUNT(DISTINCT \`operadora\`) FROM estacoes) AS total_operadoras,
-            (SELECT COUNT(DISTINCT \`uf\`) FROM estacoes) AS total_ufs,
-            (SELECT COUNT(*) FROM numeros) AS total_numeros,
-            (SELECT COUNT(*) FROM alvos) AS total_alvos,
-            (SELECT COUNT(*) FROM bases) AS total_bases,
-            (SELECT COUNT(*) FROM recursos) AS total_recursos
-    `, (err, rows) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json(rows[0]);
-    });
-});
-
-// ============================================================
-// INICIALIZAÇÃO DO SERVIDOR
-// ============================================================
-
-(async () => {
-    await importarERBs();
-    console.log('✅ ORION pronto para uso.');
-})();
-
-app.listen(port, () => {
-    console.log(`🚀 ORION rodando na porta ${port}`);
-});
-
-process.on('SIGINT', () => {
-    db.close(() => {
-        console.log('👋 ORION encerrado.');
-        process.exit(0);
-    });
-});
+        SELECT h.*, e.\`operadora\`, e.\`municipio\`, e.\`uf\`
+        FROM historico h
+        LEFT JOIN
