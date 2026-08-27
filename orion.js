@@ -177,10 +177,10 @@ function parseCSVLine(line, linhaNumero) {
 }
 
 // ============================================================
-// FUNÇÃO PARA IMPORTAR ERBs
+// FUNÇÃO PARA IMPORTAR ERBs (VERSÃO OTIMIZADA)
 // ============================================================
-// Esta é a função principal que lê os arquivos CSV e importa os dados
-// para o banco de dados SQLite.
+// Esta função lê os arquivos CSV e importa os dados em lote
+// para o banco de dados SQLite, com logs de progresso.
 // ============================================================
 
 async function importarERBs() {
@@ -287,6 +287,12 @@ async function importarERBs() {
                             anatel_correspondencia: valores[29] || ''
                         };
                     }
+
+                    // Log de progresso a cada 5000 linhas
+                    if (linhaAtual % 5000 === 0) {
+                        console.log(`   ⏳ Processadas ${linhaAtual} linhas...`);
+                    }
+
                 } catch (err) {
                     // Captura qualquer erro inesperado durante o processamento
                     erros++;
@@ -304,7 +310,7 @@ async function importarERBs() {
 
                 // Se houver estações para importar, insere no banco de dados
                 if (qtd > 0) {
-                    // Prepara a instrução SQL para inserção (com OR REPLACE para evitar duplicatas)
+                    // INSERÇÃO EM LOTES (BATCH) COM TRANSAÇÃO
                     const stmt = db.prepare(`
                         INSERT OR REPLACE INTO estacoes (
                             \`id_estacao\`, \`operadora\`, \`uf\`, \`municipio\`, \`bairro\`, \`endereco\`,
@@ -314,26 +320,48 @@ async function importarERBs() {
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     `);
 
-                    let errosInsercao = 0;
-                    // Percorre todas as estações e as insere no banco
-                    for (const id in estacoes) {
-                        const e = estacoes[id];
-                        try {
-                            stmt.run(
-                                e.id_estacao, e.operadora, e.uf, e.municipio, e.bairro, e.endereco,
-                                e.codigo_municipio_ibge, e.latitude, e.longitude, e.tecnologias,
-                                e.frequencias, e.azimutes, e.emissoes, e.fonte,
-                                e.opencellid_radio, e.opencellid_cell, e.opencellid_correspondencia, e.anatel_correspondencia
-                            );
-                        } catch (insertErr) {
-                            errosInsercao++;
-                            if (errosInsercao <= 5) {
-                                console.error(`   ❌ Erro ao inserir estação ${e.id_estacao}: ${insertErr.message}`);
+                    // Inicia uma transação para inserção em lote
+                    db.serialize(() => {
+                        db.run('BEGIN TRANSACTION');
+                        let count = 0;
+                        let errosInsercao = 0;
+
+                        for (const id in estacoes) {
+                            const e = estacoes[id];
+                            try {
+                                stmt.run(
+                                    e.id_estacao, e.operadora, e.uf, e.municipio, e.bairro, e.endereco,
+                                    e.codigo_municipio_ibge, e.latitude, e.longitude, e.tecnologias,
+                                    e.frequencias, e.azimutes, e.emissoes, e.fonte,
+                                    e.opencellid_radio, e.opencellid_cell, e.opencellid_correspondencia, e.anatel_correspondencia
+                                );
+                                count++;
+                                // Log de progresso da inserção a cada 5000 registros
+                                if (count % 5000 === 0) {
+                                    console.log(`   ⏳ ${count} estações inseridas...`);
+                                }
+                            } catch (insertErr) {
+                                errosInsercao++;
+                                if (errosInsercao <= 5) {
+                                    console.error(`   ❌ Erro ao inserir estação ${e.id_estacao}: ${insertErr.message}`);
+                                }
                             }
                         }
-                    }
-                    stmt.finalize(); // Finaliza a instrução preparada
-                    console.log(`   ✅ ${Object.keys(estacoes).length - errosInsercao} estações inseridas com sucesso.`);
+                        stmt.finalize();
+
+                        // Finaliza a transação (COMMIT ou ROLLBACK em caso de erro crítico)
+                        db.run('COMMIT', (err) => {
+                            if (err) {
+                                console.error('❌ Erro no COMMIT da transação:', err.message);
+                                db.run('ROLLBACK');
+                            } else {
+                                console.log(`   ✅ ${count} estações inseridas com sucesso.`);
+                                if (errosInsercao > 0) {
+                                    console.log(`   ⚠️ ${errosInsercao} estações tiveram erro na inserção.`);
+                                }
+                            }
+                        });
+                    });
                 }
 
                 // Registra o log da importação
