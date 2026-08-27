@@ -4,9 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ORION AI-DEPOM</title>
-    <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
+        /* Estilos mantidos */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0a0a1a; color: #00ff88; display: flex; flex-direction: column; height: 100vh; }
         #header { background: #1a1a2e; padding: 15px 20px; border-bottom: 1px solid #00ff88; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; z-index: 1000; }
@@ -95,10 +95,7 @@
             try {
                 const response = await fetch(url, {
                     ...options,
-                    headers: {
-                        'Content-Type': 'application/json',
-                        ...(options.headers || {})
-                    }
+                    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
                 });
                 if (!response.ok) {
                     const errorText = await response.text();
@@ -114,7 +111,6 @@
         // ============================================================
         // INICIALIZAÇÃO DO MAPA
         // ============================================================
-        // Definir centro inicial em Brasília (fallback)
         const map = L.map('map').setView([-15.8, -47.9], 4);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
@@ -144,10 +140,7 @@
                 const lon = estacao.longitude;
                 if (!lat || !lon) return;
 
-                const marker = L.marker([lat, lon], {
-                    title: estacao.id_estacao
-                });
-
+                const marker = L.marker([lat, lon], { title: estacao.id_estacao });
                 const popupContent = `
                     <strong>ID:</strong> ${estacao.id_estacao}<br>
                     <strong>Operadora:</strong> ${estacao.operadora || 'N/A'}<br>
@@ -158,7 +151,6 @@
                     <strong>Distância:</strong> ${estacao.distancia ? estacao.distancia.toFixed(2) + ' km' : 'N/A'}
                 `;
                 marker.bindPopup(popupContent);
-
                 markerLayer.addLayer(marker);
                 markers[estacao.id_estacao] = marker;
             });
@@ -167,14 +159,10 @@
                 const group = L.featureGroup(Object.values(markers));
                 map.fitBounds(group.getBounds(), { padding: [50, 50] });
             }
-
-            mostrarResultado(`${estacoes.length} estações encontradas.`);
         }
 
         function adicionarMinhaLocalizacao(lat, lon) {
-            if (minhaLocalizacaoMarker) {
-                map.removeLayer(minhaLocalizacaoMarker);
-            }
+            if (minhaLocalizacaoMarker) map.removeLayer(minhaLocalizacaoMarker);
             const icon = L.divIcon({
                 className: 'custom-div-icon',
                 html: '<div style="background-color:#ff4444; width: 16px; height: 16px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 10px rgba(255,68,68,0.8);"></div>',
@@ -183,7 +171,6 @@
             });
             minhaLocalizacaoMarker = L.marker([lat, lon], { icon }).addTo(map);
             minhaLocalizacaoMarker.bindPopup('📍 Sua localização atual');
-
             usuarioLat = lat;
             usuarioLon = lon;
             localizacaoObtida = true;
@@ -193,17 +180,18 @@
         }
 
         // ============================================================
-        // FUNÇÃO DE LOCALIZAÇÃO (Prioridade Máxima)
+        // FUNÇÃO DE LOCALIZAÇÃO REAL (SEM FALLBACK)
         // ============================================================
         function obterLocalizacao() {
             return new Promise((resolve) => {
                 if (!navigator.geolocation) {
                     document.getElementById('statusLocation').textContent = '❌ Geolocalização não suportada';
+                    mostrarResultado('❌ Seu navegador não suporta geolocalização.');
                     resolve(null);
                     return;
                 }
 
-                document.getElementById('statusLocation').textContent = '⏳ Obtendo localização...';
+                document.getElementById('statusLocation').textContent = '⏳ Solicitando permissão de localização...';
                 navigator.geolocation.getCurrentPosition(
                     (position) => {
                         const { latitude, longitude } = position.coords;
@@ -219,6 +207,7 @@
                             default: msg = error.message;
                         }
                         document.getElementById('statusLocation').textContent = `❌ Erro: ${msg}`;
+                        mostrarResultado(`❌ Erro de localização: ${msg}`);
                         resolve(null);
                     },
                     { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
@@ -241,15 +230,12 @@
         });
 
         // ============================================================
-        // EVENTO: MINHA LOCALIZAÇÃO (Forçado)
+        // EVENTO: MINHA LOCALIZAÇÃO
         // ============================================================
         document.getElementById('btnMinhaLocalizacao').addEventListener('click', async () => {
             const pos = await obterLocalizacao();
-            if (pos) {
-                adicionarMinhaLocalizacao(pos.lat, pos.lon);
-            } else {
-                mostrarResultado('❌ Não foi possível obter sua localização. Verifique as permissões do navegador.');
-            }
+            if (pos) adicionarMinhaLocalizacao(pos.lat, pos.lon);
+            else mostrarResultado('❌ Não foi possível obter sua localização.');
         });
 
         // ============================================================
@@ -279,7 +265,7 @@
         });
 
         // ============================================================
-        // EVENTO: LOCALIZAR POR NÚMERO (USA LOCALIZAÇÃO REAL)
+        // EVENTO: LOCALIZAR POR NÚMERO (COM ERB MAIS PRÓXIMA)
         // ============================================================
         document.getElementById('btnLocalizar').addEventListener('click', async () => {
             const numero = document.getElementById('numero').value.trim();
@@ -289,7 +275,6 @@
                 return;
             }
 
-            // Se não tiver localização, tenta obter automaticamente
             if (!localizacaoObtida) {
                 mostrarResultado('⏳ Obtendo sua localização...');
                 const pos = await obterLocalizacao();
@@ -301,15 +286,13 @@
                 }
             }
 
-            // Usa a localização do usuário (Bahia, de preferência!)
             const lat = usuarioLat || -15.8;
             const lon = usuarioLon || -47.9;
-            const raio = 50;
 
             try {
-                const data = await apiRequest(`/api/estacoes/proximas?lat=${lat}&lon=${lon}&raio=${raio}`);
-                adicionarMarcadores(data);
-                mostrarResultado(`✅ ${data.length} estações encontradas para o número ${numero}.`);
+                const estacao = await apiRequest(`/api/estacoes/mais-proxima?lat=${lat}&lon=${lon}`);
+                adicionarMarcadores([estacao]);
+                mostrarResultado(`✅ ERB mais próxima: ${estacao.id_estacao} (${estacao.distancia.toFixed(2)} km)`);
                 document.getElementById('status').textContent = '🟢 Conectado';
             } catch (error) {
                 mostrarResultado(`❌ Erro ao localizar: ${error.message}`);
@@ -318,10 +301,9 @@
         });
 
         // ============================================================
-        // INICIALIZAÇÃO: OBTER LOCALIZAÇÃO AO CARREGAR A PÁGINA
+        // INICIALIZAÇÃO
         // ============================================================
         (async function init() {
-            // Verifica conexão com a API
             try {
                 const data = await apiRequest('/api/estatisticas');
                 document.getElementById('status').textContent = '🟢 Conectado';
@@ -336,9 +318,7 @@
             if (pos) {
                 adicionarMinhaLocalizacao(pos.lat, pos.lon);
             } else {
-                // Fallback para Brasília, mas com aviso claro
-                document.getElementById('statusLocation').textContent = '⚠️ Fallback: Brasília (DF)';
-                mostrarResultado('⚠️ Localização não obtida. Use o botão "Minha Localização" para atualizar.');
+                document.getElementById('statusLocation').textContent = '⚠️ Localização não disponível';
             }
         })();
     </script>
