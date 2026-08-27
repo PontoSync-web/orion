@@ -2,8 +2,7 @@ const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
-const csv = require('csv-parser');
-const readline = require('readline'); // ← Importação adicionada
+const readline = require('readline');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -80,7 +79,44 @@ db.serialize(() => {
 });
 
 // ============================================================
-// FUNÇÃO PARA IMPORTAR ERBs (COM READLINE)
+// FUNÇÃO PARA PARSEAR LINHA CSV COM ASPAS
+// ============================================================
+function parseCSVLine(line) {
+  const valores = [];
+  let campoAtual = '';
+  let dentroAspas = false;
+  let i = 0;
+
+  // Remove espaços e tabs extras no final
+  line = line.trim();
+
+  while (i < line.length) {
+    const char = line[i];
+    
+    if (char === '"') {
+      if (dentroAspas && i + 1 < line.length && line[i + 1] === '"') {
+        campoAtual += '"';
+        i += 2;
+        continue;
+      } else if (dentroAspas) {
+        dentroAspas = false;
+      } else {
+        dentroAspas = true;
+      }
+    } else if (char === ',' && !dentroAspas) {
+      valores.push(campoAtual);
+      campoAtual = '';
+    } else {
+      campoAtual += char;
+    }
+    i++;
+  }
+  valores.push(campoAtual);
+  return valores;
+}
+
+// ============================================================
+// FUNÇÃO PARA IMPORTAR ERBs
 // ============================================================
 async function importarERBs() {
   if (!fs.existsSync(DATA_DIR)) {
@@ -106,6 +142,7 @@ async function importarERBs() {
     let estacoes = {};
     let linhaAtual = 0;
     let erros = 0;
+    let ignorados = 0;
 
     await new Promise((resolve, reject) => {
       const rl = readline.createInterface({
@@ -115,44 +152,37 @@ async function importarERBs() {
 
       rl.on('line', (line) => {
         linhaAtual++;
-        if (!line.trim()) return;
-        if (line.toLowerCase().includes('id_estacao')) return;
+        
+        // Pula linhas vazias ou cabeçalho
+        if (!line.trim()) {
+          ignorados++;
+          return;
+        }
+        if (line.toLowerCase().includes('id_estacao')) {
+          ignorados++;
+          return;
+        }
 
         try {
-          const valores = [];
-          let campoAtual = '';
-          let dentroAspas = false;
-          let i = 0;
-
-          while (i < line.length) {
-            const char = line[i];
-            if (char === '"') {
-              if (dentroAspas && line[i+1] === '"') {
-                campoAtual += '"';
-                i += 2;
-                continue;
-              } else if (dentroAspas) {
-                dentroAspas = false;
-              } else {
-                dentroAspas = true;
-              }
-            } else if (char === ',' && !dentroAspas) {
-              valores.push(campoAtual.trim());
-              campoAtual = '';
-            } else {
-              campoAtual += char;
-            }
-            i++;
+          const valores = parseCSVLine(line);
+          
+          // Pula linhas malformadas
+          if (valores.length < 10) {
+            erros++;
+            return;
           }
-          valores.push(campoAtual.trim());
 
           const id = valores[0] || '';
-          if (!id) { erros++; return; }
+          if (!id) {
+            erros++;
+            return;
+          }
 
           const lat = parseFloat(valores[10] || 0);
           const lon = parseFloat(valores[11] || 0);
           
-          if (isNaN(lat) || isNaN(lon) || lat < -34 || lat > 6 || lon < -75 || lon > -33) {
+          if (isNaN(lat) || isNaN(lon)) {
+            erros++;
             return;
           }
 
@@ -189,6 +219,7 @@ async function importarERBs() {
       rl.on('close', () => {
         const qtd = Object.keys(estacoes).length;
         console.log(`✅ ${arquivo}: ${linhaAtual} linhas lidas, ${qtd} estações importadas.`);
+        console.log(`   ⚠️ ${ignorados} linhas ignoradas, ${erros} erros.`);
 
         if (qtd > 0) {
           const stmt = db.prepare(`
