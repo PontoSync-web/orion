@@ -555,15 +555,21 @@ function predizerLocalizacaoKNN(estacao_id, rsrp, sinr, ta, k = 3) {
 
 app.get('/api/estacoes/mais-proxima', (req, res) => {
     const { lat, lon } = req.query;
+    
+    // NÃO USA FALLBACK - retorna erro se não houver coordenadas
     if (!lat || !lon) {
-        return res.status(400).json({ error: 'Latitude e longitude são obrigatórias' });
+        return res.status(400).json({ 
+            error: 'Latitude e longitude são obrigatórias. Nenhum fallback será usado.' 
+        });
     }
 
     const latitude = parseFloat(lat);
     const longitude = parseFloat(lon);
 
     if (isNaN(latitude) || isNaN(longitude)) {
-        return res.status(400).json({ error: 'Latitude e longitude devem ser números válidos' });
+        return res.status(400).json({ 
+            error: 'Latitude e longitude devem ser números válidos.' 
+        });
     }
 
     const sql = `
@@ -582,7 +588,9 @@ app.get('/api/estacoes/mais-proxima', (req, res) => {
             return res.status(500).json({ error: err.message });
         }
         if (!row) {
-            return res.status(404).json({ error: 'Nenhuma ERB encontrada nas proximidades' });
+            return res.status(404).json({ 
+                error: 'Nenhuma ERB encontrada nas proximidades. Verifique se a localização está correta.' 
+            });
         }
         res.json(row);
     });
