@@ -830,10 +830,23 @@ app.delete('/api/bases/:id', (req, res) => {
 });
 
 // ============================================================
-// ROTAS PARA RECURSOS (COM CRIAÇÃO AUTOMÁTICA DE BASE)
+// ROTAS PARA RECURSOS (COM CRIAÇÃO AUTOMÁTICA DE BASE USANDO LOCALIZAÇÃO REAL)
 // ============================================================
 
-async function criarBaseAutomatica(numero, lat = -15.8, lon = -47.9) {
+/**
+ * Cria uma base automática usando coordenadas reais (sem fallback para Brasília)
+ * @param {string} numero - Número do recurso
+ * @param {number} lat - Latitude real
+ * @param {number} lon - Longitude real
+ * @returns {Promise<number|null>} ID da base criada ou null se não houver coordenadas
+ */
+async function criarBaseAutomatica(numero, lat = null, lon = null) {
+    // Se não houver coordenadas fornecidas, NÃO CRIA a base
+    if (lat === null || lon === null) {
+        console.log(`⚠️ Número ${numero}: coordenadas não fornecidas. Base NÃO criada.`);
+        return null;
+    }
+    
     const nomeBase = `Base Automática - ${numero}`;
     return new Promise((resolve, reject) => {
         const stmt = db.prepare(`
@@ -845,6 +858,7 @@ async function criarBaseAutomatica(numero, lat = -15.8, lon = -47.9) {
             if (err) {
                 reject(err);
             } else {
+                console.log(`✅ Base automática criada para o número ${numero} com coordenadas reais (${lat}, ${lon})`);
                 resolve(this.lastID);
             }
         });
@@ -863,14 +877,19 @@ app.post('/api/recursos', (req, res) => {
         }
 
         let finalBaseId = base_id;
-        let coordenadasUsadas = { lat: latitude || -15.8, lon: longitude || -47.9 };
 
+        // Se não houver base_id e o número for novo, tenta criar com coordenadas reais
         if (!recursoExistente && !base_id) {
-            try {
-                finalBaseId = await criarBaseAutomatica(numero, coordenadasUsadas.lat, coordenadasUsadas.lon);
-                console.log(`✅ Base automática criada para o número ${numero} (ID: ${finalBaseId})`);
-            } catch (error) {
-                return res.status(500).json({ error: 'Erro ao criar base automática: ' + error.message });
+            // Só cria base se houver coordenadas fornecidas
+            if (latitude && longitude) {
+                try {
+                    finalBaseId = await criarBaseAutomatica(numero, latitude, longitude);
+                } catch (error) {
+                    return res.status(500).json({ error: 'Erro ao criar base automática: ' + error.message });
+                }
+            } else {
+                // Se não houver coordenadas, NÃO cria base - o número ficará sem base
+                console.log(`⚠️ Número ${numero} cadastrado sem coordenadas. Base NÃO criada.`);
             }
         }
 
@@ -887,7 +906,7 @@ app.post('/api/recursos', (req, res) => {
                 success: true,
                 id: this.lastID,
                 base_id: finalBaseId,
-                message: recursoExistente ? 'Recurso atualizado' : 'Recurso cadastrado com base automática'
+                message: recursoExistente ? 'Recurso atualizado' : 'Recurso cadastrado' + (finalBaseId ? ' com base automática' : ' sem base')
             });
         });
     });
