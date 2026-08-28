@@ -6,7 +6,7 @@
     <title>ORION AI-DEPOM</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        /* Estilos mantidos */
+        /* Estilos mantidos (100% idênticos ao original) */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0a0a1a; color: #00ff88; display: flex; flex-direction: column; height: 100vh; }
         #header { background: #1a1a2e; padding: 15px 20px; border-bottom: 1px solid #00ff88; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; z-index: 1000; }
@@ -190,66 +190,6 @@
         }
 
         // ============================================================
-        // FUNÇÃO PARA OBTER DADOS DE SINAL E ENVIAR PARA O ORION
-        // ============================================================
-        async function coletarDadosSinal(numero, estacao, latitude, longitude) {
-            try {
-                // Tenta obter dados de sinal do navegador (se disponível)
-                let rsrp = null, sinr = null, ta = null;
-
-                // Simulação: valores estimados (em produção, seriam capturados de uma API nativa)
-                if (navigator.connection) {
-                    // Exemplo de estimativa: quanto pior a conexão, pior o sinal
-                    const tipoConexao = navigator.connection.effectiveType;
-                    if (tipoConexao === '4g') {
-                        rsrp = -75;
-                        sinr = 20;
-                        ta = 0;
-                    } else if (tipoConexao === '3g') {
-                        rsrp = -85;
-                        sinr = 15;
-                        ta = 1;
-                    } else {
-                        rsrp = -95;
-                        sinr = 10;
-                        ta = 2;
-                    }
-                }
-
-                // Se não conseguiu obter dados reais, usa valores estimados com base na distância
-                if (rsrp === null) {
-                    // Estima a distância da ERB (quanto mais longe, pior o sinal)
-                    const distKm = estacao.distancia || 0; // Usar a distância retornada pela API
-                    rsrp = -70 - distKm * 10;
-                    sinr = 25 - distKm * 2;
-                    ta = Math.round(distKm * 5);
-                }
-
-                const data = {
-                    numero: numero,
-                    estacao_id: estacao.id_estacao || estacao,
-                    latitude: latitude,
-                    longitude: longitude,
-                    rsrp: rsrp,
-                    sinr: sinr,
-                    ta: ta
-                };
-
-                const response = await fetch(`${API_URL}/api/coletar-sinal-auto`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
-                const result = await response.json();
-                console.log('📡 Dados de sinal coletados:', result);
-                return result;
-            } catch (error) {
-                console.error('❌ Erro ao coletar dados de sinal:', error);
-                return null;
-            }
-        }
-
-        // ============================================================
         // FUNÇÃO DE LOCALIZAÇÃO REAL
         // ============================================================
         function obterLocalizacao() {
@@ -289,4 +229,142 @@
         // FUNÇÕES DE INTERFACE
         // ============================================================
         function mostrarResultado(mensagem) {
-            const el = document
+            const el = document.getElementById('resultado');
+            const conteudo = document.getElementById('resultadoConteudo');
+            conteudo.textContent = typeof mensagem === 'object' ? JSON.stringify(mensagem, null, 2) : mensagem;
+            el.classList.add('show');
+        }
+
+        document.getElementById('closeResultado').addEventListener('click', () => {
+            document.getElementById('resultado').classList.remove('show');
+        });
+
+        // ============================================================
+        // EVENTO: CADASTRAR NÚMERO
+        // ============================================================
+        document.getElementById('btnCadastrar').addEventListener('click', async () => {
+            const numero = document.getElementById('novoNumero').value.trim();
+            const operadora = document.getElementById('novaOperadora').value;
+            const nome = document.getElementById('novoNome').value.trim();
+
+            if (!numero) {
+                mostrarResultado('❌ Número de celular é obrigatório.');
+                return;
+            }
+
+            try {
+                const data = await apiRequest('/api/recursos', {
+                    method: 'POST',
+                    body: JSON.stringify({ numero, operadora, nome, base_id: null, status: 'desconhecido' })
+                });
+                if (data.success) {
+                    mostrarResultado(`✅ Número ${numero} cadastrado com sucesso!`);
+                    document.getElementById('novoNumero').value = '';
+                    document.getElementById('novoNome').value = '';
+                    document.getElementById('status').textContent = '🟢 Conectado';
+                } else {
+                    mostrarResultado(`❌ Erro ao cadastrar: ${data.error}`);
+                }
+            } catch (error) {
+                mostrarResultado(`❌ Erro ao cadastrar: ${error.message}`);
+                document.getElementById('status').textContent = '🔴 Erro de conexão';
+            }
+        });
+
+        // ============================================================
+        // EVENTO: LOCALIZAR POR NÚMERO (COM ML - ATUALIZADO)
+        // ============================================================
+        document.getElementById('btnLocalizar').addEventListener('click', async () => {
+            const numero = document.getElementById('numero').value.trim();
+
+            if (!numero) {
+                mostrarResultado('❌ Número de celular é obrigatório.');
+                return;
+            }
+
+            // Obtém a localização do usuário (se não tiver)
+            if (!localizacaoObtida) {
+                mostrarResultado('⏳ Obtendo sua localização...');
+                const pos = await obterLocalizacao();
+                if (pos) {
+                    adicionarMinhaLocalizacao(pos.lat, pos.lon);
+                } else {
+                    mostrarResultado('❌ Não foi possível obter sua localização.');
+                    return;
+                }
+            }
+
+            const lat = usuarioLat;
+            const lon = usuarioLon;
+
+            try {
+                // 1. Encontra a ERB mais próxima para obter o estacao_id
+                const estacao = await apiRequest(`/api/estacoes/mais-proxima?lat=${lat}&lon=${lon}`);
+                if (!estacao) {
+                    mostrarResultado('❌ Nenhuma ERB encontrada nas proximidades.');
+                    return;
+                }
+
+                // 2. Estima dados de sinal com base na distância
+                const rsrp = -70 - estacao.distancia * 10;
+                const sinr = 25 - estacao.distancia * 2;
+                const ta = Math.round(estacao.distancia * 5);
+
+                // 3. Tenta usar a predição do ML (KNN)
+                try {
+                    const mlResult = await apiRequest(`/api/predizer-localizacao?estacao_id=${estacao.id_estacao}&rsrp=${rsrp}&sinr=${sinr}&ta=${ta}&k=3`);
+                    if (mlResult && mlResult.success) {
+                        adicionarMarcadores([{ 
+                            latitude: mlResult.latitude, 
+                            longitude: mlResult.longitude, 
+                            id_estacao: 'ML-Prediction',
+                            operadora: 'ML',
+                            uf: 'Predição',
+                            municipio: 'KNN',
+                            tecnologias: 'Machine Learning',
+                            frequencias: 'k=3',
+                            distancia: 0
+                        }]);
+                        mostrarResultado(`✅ Localização predita pelo ML: ${mlResult.latitude.toFixed(4)}, ${mlResult.longitude.toFixed(4)}`);
+                        document.getElementById('status').textContent = '🟢 Conectado (ML)';
+                        return;
+                    }
+                } catch (mlError) {
+                    console.log('⚠️ ML não disponível, usando fallback:', mlError.message);
+                }
+
+                // 4. Fallback: ERB mais próxima
+                adicionarMarcadores([estacao]);
+                mostrarResultado(`✅ ERB mais próxima: ${estacao.id_estacao} (${estacao.distancia.toFixed(2)} km)`);
+                document.getElementById('status').textContent = '🟢 Conectado';
+
+            } catch (error) {
+                mostrarResultado(`❌ Erro ao localizar: ${error.message}`);
+                document.getElementById('status').textContent = '🔴 Erro de conexão';
+            }
+        });
+
+        // ============================================================
+        // INICIALIZAÇÃO
+        // ============================================================
+        (async function init() {
+            try {
+                const data = await apiRequest('/api/estatisticas');
+                document.getElementById('status').textContent = '🟢 Conectado';
+                mostrarResultado(`✅ Sistema conectado. ${data.total_estacoes || 0} estações disponíveis.`);
+            } catch (error) {
+                document.getElementById('status').textContent = '🔴 Erro de conexão';
+                mostrarResultado(`❌ Erro de conexão com o servidor: ${error.message}`);
+            }
+
+            // Tenta obter localização automaticamente
+            const pos = await obterLocalizacao();
+            if (pos) {
+                adicionarMinhaLocalizacao(pos.lat, pos.lon);
+            } else {
+                document.getElementById('statusLocation').textContent = '⚠️ Localização não disponível';
+            }
+        })();
+    </script>
+</body>
+</html>
