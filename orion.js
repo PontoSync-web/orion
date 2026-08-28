@@ -875,8 +875,8 @@ app.post('/api/recursos', (req, res) => {
             if (err) {
                 return res.status(500).json({ error: err.message });
             }
-            res.json({ 
-                success: true, 
+            res.json({
+                success: true,
                 id: this.lastID,
                 base_id: finalBaseId,
                 message: recursoExistente ? 'Recurso atualizado' : 'Recurso cadastrado com base automática'
@@ -1102,9 +1102,9 @@ app.get('/api/analise-padroes', (req, res) => {
     }
 
     db.all(`
-        SELECT 
-            \`latitude\`, 
-            \`longitude\`, 
+        SELECT
+            \`latitude\`,
+            \`longitude\`,
             COUNT(*) AS frequencia,
             DATE(\`data_hora\`) AS data,
             strftime('%H', \`data_hora\`) AS hora
@@ -1173,9 +1173,9 @@ app.get('/api/alertas', (req, res) => {
     }
 
     db.all(`
-        SELECT 
-            \`latitude\`, 
-            \`longitude\`, 
+        SELECT
+            \`latitude\`,
+            \`longitude\`,
             \`data_hora\`
         FROM historico_localizacao
         WHERE \`numero\` = ?
@@ -1208,16 +1208,16 @@ app.get('/api/alertas', (req, res) => {
         const velocidadeMedia = intervalos > 0 ? distanciaTotal / intervalos : 0;
 
         if (velocidadeMedia > 50) {
-            res.json({ 
-                alerta: `🚨 Movimento suspeito detectado (${velocidadeMedia.toFixed(1)} km/h). Últimas localizações indicam deslocamento rápido.` 
+            res.json({
+                alerta: `🚨 Movimento suspeito detectado (${velocidadeMedia.toFixed(1)} km/h). Últimas localizações indicam deslocamento rápido.`
             });
         } else if (velocidadeMedia > 20) {
-            res.json({ 
-                alerta: `⚠️ Movimento moderado detectado (${velocidadeMedia.toFixed(1)} km/h).` 
+            res.json({
+                alerta: `⚠️ Movimento moderado detectado (${velocidadeMedia.toFixed(1)} km/h).`
             });
         } else {
-            res.json({ 
-                alerta: `✅ Padrão normal (${velocidadeMedia.toFixed(1)} km/h).` 
+            res.json({
+                alerta: `✅ Padrão normal (${velocidadeMedia.toFixed(1)} km/h).`
             });
         }
     });
@@ -1227,6 +1227,10 @@ app.get('/api/alertas', (req, res) => {
 // ROTAS PARA COLETAR DADOS DE SINAL E ML
 // ============================================================
 
+/**
+ * Rota para coletar dados de sinal manualmente
+ * @route POST /api/coletar-sinal
+ */
 app.post('/api/coletar-sinal', (req, res) => {
     const { numero, estacao_id, latitude, longitude, rsrp, sinr, ta } = req.body;
 
@@ -1247,9 +1251,10 @@ app.post('/api/coletar-sinal', (req, res) => {
     });
 });
 
-// ============================================================
-// ROTA PARA COLETAR DADOS DE SINAL AUTOMATICAMENTE (COM TREINAMENTO)
-// ============================================================
+/**
+ * Rota para coletar dados de sinal automaticamente com treinamento do modelo KNN
+ * @route POST /api/coletar-sinal-auto
+ */
 app.post('/api/coletar-sinal-auto', (req, res) => {
     const { numero, estacao_id, latitude, longitude, rsrp, sinr, ta } = req.body;
 
@@ -1286,9 +1291,9 @@ app.post('/api/coletar-sinal-auto', (req, res) => {
                     });
             }
 
-            res.json({ 
-                success: true, 
-                id: this.lastID, 
+            res.json({
+                success: true,
+                id: this.lastID,
                 message: 'Dados de sinal coletados com sucesso.',
                 total_registros: total
             });
@@ -1296,6 +1301,10 @@ app.post('/api/coletar-sinal-auto', (req, res) => {
     });
 });
 
+/**
+ * Rota para treinar o modelo KNN manualmente
+ * @route POST /api/treinar-modelo
+ */
 app.post('/api/treinar-modelo', async (req, res) => {
     try {
         const result = await treinarModeloKNN();
@@ -1305,6 +1314,10 @@ app.post('/api/treinar-modelo', async (req, res) => {
     }
 });
 
+/**
+ * Rota para predizer a localização com base em dados de sinal usando KNN
+ * @route GET /api/predizer-localizacao
+ */
 app.get('/api/predizer-localizacao', (req, res) => {
     const { estacao_id, rsrp, sinr, ta, k } = req.query;
 
@@ -1335,7 +1348,7 @@ app.get('/api/predizer-localizacao', (req, res) => {
 
 app.get('/api/estatisticas', (req, res) => {
     db.all(`
-        SELECT 
+        SELECT
             (SELECT COUNT(*) FROM estacoes) AS total_estacoes,
             (SELECT COUNT(DISTINCT \`operadora\`) FROM estacoes) AS total_operadoras,
             (SELECT COUNT(DISTINCT \`uf\`) FROM estacoes) AS total_ufs,
