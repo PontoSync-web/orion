@@ -1,5 +1,5 @@
 // ============================================================
-// ORION - SISTEMA DE GERENCIAMENTO DE ERBs (VERSÃO COMPLETA)
+// ORION - SISTEMA DE GERENCIAMENTO DE ERBs (VERSÃO COMPLETA COM ML)
 // ============================================================
 // Este arquivo é o coração do sistema ORION. Ele gerencia:
 // 1. Importação de dados de ERBs a partir de arquivos CSV
@@ -11,6 +11,7 @@
 // 7. Gestão de recursos (números associados a bases)
 // 8. Filtros inteligentes para alertas
 // 9. Inteligência preditiva (análise de padrões e alertas)
+// 10. Machine Learning para localização (KNN)
 // ============================================================
 
 // ============================================================
@@ -219,6 +220,24 @@ db.serialize(() => {
     )`, (err) => {
         if (err) console.error('❌ Erro ao criar tabela historico_localizacao:', err.message);
         else console.log('✅ Tabela historico_localizacao criada/verificada com sucesso.');
+    });
+
+    // ============================================================
+    // TABELA 11: dados_sinal (para Machine Learning)
+    // ============================================================
+    db.run(`CREATE TABLE IF NOT EXISTS dados_sinal (
+        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
+        \`numero\` TEXT,
+        \`estacao_id\` TEXT,
+        \`latitude\` REAL,
+        \`longitude\` REAL,
+        \`rsrp\` REAL,
+        \`sinr\` REAL,
+        \`ta\` REAL,
+        \`data_hora\` DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`, (err) => {
+        if (err) console.error('❌ Erro ao criar tabela dados_sinal:', err.message);
+        else console.log('✅ Tabela dados_sinal criada/verificada com sucesso.');
     });
 });
 
@@ -429,6 +448,108 @@ async function importarERBs() {
 }
 
 // ============================================================
+// FUNÇÃO PARA TREINAR O MODELO KNN
+// ============================================================
+
+function treinarModeloKNN() {
+    return new Promise((resolve, reject) => {
+        db.all('SELECT * FROM dados_sinal', (err, rows) => {
+            if (err) {
+                reject('Erro ao buscar dados de sinal: ' + err.message);
+                return;
+            }
+
+            if (rows.length < 10) {
+                reject('Dados insuficientes para treinar o modelo (mínimo 10 registros).');
+                return;
+            }
+
+            // Prepara os dados para o modelo
+            const features = [];
+            const labels = [];
+
+            rows.forEach(row => {
+                const feature = [
+                    row.estacao_id,
+                    row.rsrp || 0,
+                    row.sinr || 0,
+                    row.ta || 0
+                ];
+                features.push(feature);
+                labels.push([row.latitude, row.longitude]);
+            });
+
+            const modelData = { features, labels };
+            const fs = require('fs');
+            const modelPath = path.join(__dirname, 'models', 'knn_model.json');
+
+            const modelsDir = path.join(__dirname, 'models');
+            if (!fs.existsSync(modelsDir)) {
+                fs.mkdirSync(modelsDir);
+            }
+
+            fs.writeFileSync(modelPath, JSON.stringify(modelData, null, 2));
+            resolve({ total_registros: rows.length });
+        });
+    });
+}
+
+// ============================================================
+// FUNÇÃO PARA PREDIZER LOCALIZAÇÃO COM KNN
+// ============================================================
+
+function predizerLocalizacaoKNN(estacao_id, rsrp, sinr, ta, k = 3) {
+    return new Promise((resolve, reject) => {
+        const fs = require('fs');
+        const modelPath = path.join(__dirname, 'models', 'knn_model.json');
+
+        if (!fs.existsSync(modelPath)) {
+            reject('Modelo não encontrado. Treine o modelo primeiro.');
+            return;
+        }
+
+        const modelData = JSON.parse(fs.readFileSync(modelPath, 'utf8'));
+        const { features, labels } = modelData;
+
+        if (features.length === 0) {
+            reject('Modelo vazio. Treine o modelo primeiro.');
+            return;
+        }
+
+        const query = [estacao_id, rsrp || 0, sinr || 0, ta || 0];
+
+        const distances = features.map((feature, index) => {
+            const dist = Math.sqrt(
+                Math.pow(feature[0] - query[0], 2) +
+                Math.pow(feature[1] - query[1], 2) +
+                Math.pow(feature[2] - query[2], 2) +
+                Math.pow(feature[3] - query[3], 2)
+            );
+            return { index, distance: dist };
+        });
+
+        distances.sort((a, b) => a.distance - b.distance);
+        const kNearest = distances.slice(0, k);
+
+        let sumLat = 0;
+        let sumLon = 0;
+        kNearest.forEach(neighbor => {
+            sumLat += labels[neighbor.index][0];
+            sumLon += labels[neighbor.index][1];
+        });
+
+        const predLat = sumLat / k;
+        const predLon = sumLon / k;
+
+        resolve({ latitude: predLat, longitude: predLon, k: k });
+    });
+}
+
+// ============================================================
+// FUNÇÃO PARA ENVIAR MENSAGEM AO TELEGRAM (OPCIONAL)
+// ============================================================
+
+// ============================================================
 // ROTAS DA API
 // ============================================================
 
@@ -436,7 +557,6 @@ async function importarERBs() {
 // ROTAS PARA ESTAÇÕES (ERBs)
 // ============================================================
 
-// Rota para encontrar a ERB mais próxima
 app.get('/api/estacoes/mais-proxima', (req, res) => {
     const { lat, lon } = req.query;
     if (!lat || !lon) {
@@ -472,7 +592,6 @@ app.get('/api/estacoes/mais-proxima', (req, res) => {
     });
 });
 
-// Rota para buscar estações próximas
 app.get('/api/estacoes/proximas', (req, res) => {
     const { lat, lon, raio } = req.query;
     if (!lat || !lon) {
@@ -710,7 +829,6 @@ app.delete('/api/bases/:id', (req, res) => {
 // ROTAS PARA RECURSOS
 // ============================================================
 
-// Função para criar base automaticamente
 async function criarBaseAutomatica(numero, lat = -15.8, lon = -47.9) {
     const nomeBase = `Base Automática - ${numero}`;
     return new Promise((resolve, reject) => {
@@ -743,425 +861,7 @@ app.post('/api/recursos', (req, res) => {
         let finalBaseId = base_id;
         let coordenadasUsadas = { lat: latitude || -15.8, lon: longitude || -47.9 };
 
-        // Se não existir recurso e não houver base_id, cria base automaticamente
         if (!recursoExistente && !base_id) {
             try {
                 finalBaseId = await criarBaseAutomatica(numero, coordenadasUsadas.lat, coordenadasUsadas.lon);
-                console.log(`✅ Base automática criada para o número ${numero} (ID: ${finalBaseId})`);
-            } catch (error) {
-                return res.status(500).json({ error: 'Erro ao criar base automática: ' + error.message });
-            }
-        }
-
-        const stmt = db.prepare(`
-            INSERT OR REPLACE INTO recursos (\`numero\`, \`operadora\`, \`nome\`, \`base_id\`, \`status\`)
-            VALUES (?, ?, ?, ?, ?)
-        `);
-        stmt.run(numero, operadora || '', nome || '', finalBaseId || null, status || 'desconhecido', function(err) {
-            stmt.finalize();
-            if (err) {
-                return res.status(500).json({ error: err.message });
-            }
-            res.json({ 
-                success: true, 
-                id: this.lastID,
-                base_id: finalBaseId,
-                message: recursoExistente ? 'Recurso atualizado' : 'Recurso cadastrado com base automática'
-            });
-        });
-    });
-});
-
-app.get('/api/recursos', (req, res) => {
-    db.all('SELECT * FROM recursos ORDER BY numero', (err, rows) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json(rows);
-    });
-});
-
-app.get('/api/recursos/:id', (req, res) => {
-    const { id } = req.params;
-    db.get('SELECT * FROM recursos WHERE id = ?', [id], (err, row) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        if (!row) {
-            return res.status(404).json({ error: 'Recurso não encontrado' });
-        }
-        res.json(row);
-    });
-});
-
-app.get('/api/recursos/numero/:numero', (req, res) => {
-    const { numero } = req.params;
-    db.get('SELECT * FROM recursos WHERE numero = ?', [numero], (err, row) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        if (!row) {
-            return res.status(404).json({ error: 'Recurso não encontrado' });
-        }
-        res.json(row);
-    });
-});
-
-app.put('/api/recursos/:id/mover', (req, res) => {
-    const { id } = req.params;
-    const { base_id } = req.body;
-    if (base_id === undefined) {
-        return res.status(400).json({ error: 'base_id é obrigatório' });
-    }
-
-    const stmt = db.prepare('UPDATE recursos SET base_id = ? WHERE id = ?');
-    stmt.run(base_id, id, function(err) {
-        stmt.finalize();
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json({ success: true, updated: this.changes });
-    });
-});
-
-app.delete('/api/recursos/:id', (req, res) => {
-    const { id } = req.params;
-    db.run('DELETE FROM recursos WHERE id = ?', [id], function(err) {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json({ success: true, deleted: this.changes });
-    });
-});
-
-// ============================================================
-// ROTAS PARA FILTROS INTELIGENTES
-// ============================================================
-
-app.post('/api/filtros', (req, res) => {
-    const { nome, tag, operadora, uf, municipio, base_id, distancia_max, horario_inicio, horario_fim, notificar, ativo } = req.body;
-    if (!nome) {
-        return res.status(400).json({ error: 'Nome do filtro é obrigatório' });
-    }
-
-    const stmt = db.prepare(`
-        INSERT INTO filtros (
-            \`nome\`, \`tag\`, \`operadora\`, \`uf\`, \`municipio\`, \`base_id\`,
-            \`distancia_max\`, \`horario_inicio\`, \`horario_fim\`, \`notificar\`, \`ativo\`
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    stmt.run(
-        nome, tag || null, operadora || null, uf || null, municipio || null, base_id || null,
-        distancia_max || null, horario_inicio || null, horario_fim || null,
-        notificar !== undefined ? notificar : 1,
-        ativo !== undefined ? ativo : 1,
-        function(err) {
-            stmt.finalize();
-            if (err) {
-                return res.status(500).json({ error: err.message });
-            }
-            res.json({ success: true, id: this.lastID });
-        }
-    );
-});
-
-app.get('/api/filtros', (req, res) => {
-    db.all('SELECT * FROM filtros ORDER BY nome', (err, rows) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json(rows);
-    });
-});
-
-app.get('/api/filtros/:id', (req, res) => {
-    const { id } = req.params;
-    db.get('SELECT * FROM filtros WHERE id = ?', [id], (err, row) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        if (!row) {
-            return res.status(404).json({ error: 'Filtro não encontrado' });
-        }
-        res.json(row);
-    });
-});
-
-app.put('/api/filtros/:id', (req, res) => {
-    const { id } = req.params;
-    const { nome, tag, operadora, uf, municipio, base_id, distancia_max, horario_inicio, horario_fim, notificar, ativo } = req.body;
-
-    const stmt = db.prepare(`
-        UPDATE filtros SET
-            \`nome\` = ?, \`tag\` = ?, \`operadora\` = ?, \`uf\` = ?, \`municipio\` = ?,
-            \`base_id\` = ?, \`distancia_max\` = ?, \`horario_inicio\` = ?, \`horario_fim\` = ?,
-            \`notificar\` = ?, \`ativo\` = ?
-        WHERE id = ?
-    `);
-    stmt.run(
-        nome, tag || null, operadora || null, uf || null, municipio || null,
-        base_id || null, distancia_max || null, horario_inicio || null, horario_fim || null,
-        notificar !== undefined ? notificar : 1,
-        ativo !== undefined ? ativo : 1,
-        id,
-        function(err) {
-            stmt.finalize();
-            if (err) {
-                return res.status(500).json({ error: err.message });
-            }
-            res.json({ success: true, updated: this.changes });
-        }
-    );
-});
-
-app.delete('/api/filtros/:id', (req, res) => {
-    const { id } = req.params;
-    db.run('DELETE FROM filtros WHERE id = ?', [id], function(err) {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json({ success: true, deleted: this.changes });
-    });
-});
-
-// ============================================================
-// ROTAS PARA HISTÓRICO
-// ============================================================
-
-app.get('/api/historico', (req, res) => {
-    db.all(`
-        SELECT h.*, e.\`operadora\`, e.\`municipio\`, e.\`uf\`
-        FROM historico h
-        LEFT JOIN estacoes e ON h.\`estacao_id\` = e.\`id_estacao\`
-        ORDER BY h.\`data_consulta\` DESC
-        LIMIT 100
-    `, (err, rows) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json(rows);
-    });
-});
-
-app.post('/api/historico', (req, res) => {
-    const { numero, estacao_id, distancia } = req.body;
-    if (!numero || !estacao_id) {
-        return res.status(400).json({ error: 'Número e estacao_id são obrigatórios' });
-    }
-
-    const stmt = db.prepare(`
-        INSERT INTO historico (\`numero\`, \`estacao_id\`, \`distancia\`)
-        VALUES (?, ?, ?)
-    `);
-    stmt.run(numero, estacao_id, distancia || null, function(err) {
-        stmt.finalize();
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json({ success: true, id: this.lastID });
-    });
-});
-
-// ============================================================
-// ROTAS PARA HISTÓRICO DE LOCALIZAÇÃO (INTELIGÊNCIA PREDITIVA)
-// ============================================================
-
-app.post('/api/historico-localizacao', (req, res) => {
-    const { numero, latitude, longitude, estacao_id } = req.body;
-    if (!numero || latitude === undefined || longitude === undefined) {
-        return res.status(400).json({ error: 'Número, latitude e longitude são obrigatórios' });
-    }
-
-    const stmt = db.prepare(`
-        INSERT INTO historico_localizacao (\`numero\`, \`latitude\`, \`longitude\`, \`estacao_id\`)
-        VALUES (?, ?, ?, ?)
-    `);
-    stmt.run(numero, latitude, longitude, estacao_id || null, function(err) {
-        stmt.finalize();
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json({ success: true, id: this.lastID });
-    });
-});
-
-// ============================================================
-// ROTA: ANÁLISE DE PADRÕES (INTELIGÊNCIA PREDITIVA)
-// ============================================================
-app.get('/api/analise-padroes', (req, res) => {
-    const { numero } = req.query;
-
-    if (!numero) {
-        return res.status(400).json({ error: 'Número é obrigatório' });
-    }
-
-    db.all(`
-        SELECT 
-            \`latitude\`, 
-            \`longitude\`, 
-            COUNT(*) AS frequencia,
-            DATE(\`data_hora\`) AS data,
-            strftime('%H', \`data_hora\`) AS hora
-        FROM historico_localizacao
-        WHERE \`numero\` = ?
-        GROUP BY \`latitude\`, \`longitude\`, DATE(\`data_hora\`), strftime('%H', \`data_hora\`)
-        ORDER BY \`data_hora\` DESC
-        LIMIT 100
-    `, [numero], (err, rows) => {
-        if (err) {
-            console.error('❌ Erro ao buscar histórico:', err.message);
-            return res.status(500).json({ error: err.message });
-        }
-
-        if (rows.length === 0) {
-            return res.json({ pattern: 'Sem dados suficientes' });
-        }
-
-        // Encontra a localização mais frequente
-        const locationCount = {};
-        rows.forEach(row => {
-            const key = `${row.latitude},${row.longitude}`;
-            locationCount[key] = (locationCount[key] || 0) + row.frequencia;
-        });
-
-        let mostFrequent = null;
-        let maxCount = 0;
-        for (const [key, count] of Object.entries(locationCount)) {
-            if (count > maxCount) {
-                maxCount = count;
-                mostFrequent = key;
-            }
-        }
-
-        const [lat, lon] = mostFrequent ? mostFrequent.split(',').map(Number) : [null, null];
-
-        // Encontra o horário mais frequente
-        const hourCount = {};
-        rows.forEach(row => {
-            const hora = row.hora;
-            hourCount[hora] = (hourCount[hora] || 0) + 1;
-        });
-
-        let mostFrequentHour = null;
-        let maxHourCount = 0;
-        for (const [hora, count] of Object.entries(hourCount)) {
-            if (count > maxHourCount) {
-                maxHourCount = count;
-                mostFrequentHour = hora;
-            }
-        }
-
-        res.json({
-            pattern: {
-                localizacao_mais_frequente: { latitude: lat, longitude: lon },
-                horario_mais_frequente: mostFrequentHour,
-                total_registros: rows.length
-            }
-        });
-    });
-});
-
-// ============================================================
-// ROTA: ALERTAS PREDITIVOS (INTELIGÊNCIA PREDITIVA)
-// ============================================================
-app.get('/api/alertas', (req, res) => {
-    const { numero } = req.query;
-
-    if (!numero) {
-        return res.status(400).json({ error: 'Número é obrigatório' });
-    }
-
-    db.all(`
-        SELECT 
-            \`latitude\`, 
-            \`longitude\`, 
-            \`data_hora\`
-        FROM historico_localizacao
-        WHERE \`numero\` = ?
-        ORDER BY \`data_hora\` DESC
-        LIMIT 10
-    `, [numero], (err, rows) => {
-        if (err) {
-            console.error('❌ Erro ao buscar localizações:', err.message);
-            return res.status(500).json({ error: err.message });
-        }
-
-        if (rows.length < 3) {
-            return res.json({ alerta: 'Sem dados suficientes para alertas' });
-        }
-
-        let distanciaTotal = 0;
-        let intervalos = 0;
-
-        for (let i = 0; i < rows.length - 1; i++) {
-            const lat1 = rows[i].latitude;
-            const lon1 = rows[i].longitude;
-            const lat2 = rows[i+1].latitude;
-            const lon2 = rows[i+1].longitude;
-
-            const dist = Math.sqrt(Math.pow(lat2 - lat1, 2) + Math.pow(lon2 - lon1, 2)) * 111;
-            distanciaTotal += dist;
-            intervalos++;
-        }
-
-        const velocidadeMedia = intervalos > 0 ? distanciaTotal / intervalos : 0;
-
-        if (velocidadeMedia > 50) {
-            res.json({ 
-                alerta: `🚨 Movimento suspeito detectado (${velocidadeMedia.toFixed(1)} km/h). Últimas localizações indicam deslocamento rápido.` 
-            });
-        } else if (velocidadeMedia > 20) {
-            res.json({ 
-                alerta: `⚠️ Movimento moderado detectado (${velocidadeMedia.toFixed(1)} km/h).` 
-            });
-        } else {
-            res.json({ 
-                alerta: `✅ Padrão normal (${velocidadeMedia.toFixed(1)} km/h).` 
-            });
-        }
-    });
-});
-
-// ============================================================
-// ROTA: ESTATÍSTICAS
-// ============================================================
-
-app.get('/api/estatisticas', (req, res) => {
-    db.all(`
-        SELECT 
-            (SELECT COUNT(*) FROM estacoes) AS total_estacoes,
-            (SELECT COUNT(DISTINCT \`operadora\`) FROM estacoes) AS total_operadoras,
-            (SELECT COUNT(DISTINCT \`uf\`) FROM estacoes) AS total_ufs,
-            (SELECT COUNT(*) FROM numeros) AS total_numeros,
-            (SELECT COUNT(*) FROM alvos) AS total_alvos,
-            (SELECT COUNT(*) FROM bases) AS total_bases,
-            (SELECT COUNT(*) FROM recursos) AS total_recursos,
-            (SELECT COUNT(*) FROM filtros) AS total_filtros,
-            (SELECT COUNT(*) FROM historico_localizacao) AS total_localizacoes
-    `, (err, rows) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json(rows[0]);
-    });
-});
-
-// ============================================================
-// INICIALIZAÇÃO DO SERVIDOR
-// ============================================================
-
-(async () => {
-    await importarERBs();
-    console.log('✅ ORION pronto para uso.');
-})();
-
-app.listen(port, () => {
-    console.log(`🚀 ORION rodando na porta ${port}`);
-});
-
-process.on('SIGINT', () => {
-    db.close(() => {
-        console.log('👋 ORION encerrado.');
-        process.exit(0);
-    });
-});
+                console.log(`
