@@ -6,7 +6,7 @@
     <title>ORION AI-DEPOM</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        /* Estilos */
+        /* Estilos mantidos */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0a0a1a; color: #00ff88; display: flex; flex-direction: column; height: 100vh; }
         #header { background: #1a1a2e; padding: 15px 20px; border-bottom: 1px solid #00ff88; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; z-index: 1000; }
@@ -28,8 +28,9 @@
         #resultado.show { display: block; }
         #resultado .close { float: right; cursor: pointer; color: #ff6666; font-weight: bold; }
         .leaflet-popup-content { color: #0a0a1a; }
+        .btn-geo { background: #ffaa00; color: #0a0a1a; }
+        .btn-geo:hover { background: #ffcc44; }
         .status-location { font-size: 0.8em; margin-left: 10px; color: #88ffbb; }
-        .separator { color: #446655; padding: 0 5px; }
         @media (max-width: 768px) {
             #header { flex-direction: column; align-items: flex-start; }
             #controls { flex-direction: column; align-items: stretch; }
@@ -127,6 +128,10 @@
 
         let markerLayer = L.layerGroup().addTo(map);
         let markers = {};
+        let minhaLocalizacaoMarker = null;
+        let usuarioLat = null;
+        let usuarioLon = null;
+        let localizacaoObtida = false;
 
         // ============================================================
         // FUNÇÕES DE MAPA
@@ -166,125 +171,122 @@
             }
         }
 
+        function adicionarMinhaLocalizacao(lat, lon) {
+            if (minhaLocalizacaoMarker) map.removeLayer(minhaLocalizacaoMarker);
+            const icon = L.divIcon({
+                className: 'custom-div-icon',
+                html: '<div style="background-color:#ff4444; width: 16px; height: 16px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 10px rgba(255,68,68,0.8);"></div>',
+                iconSize: [20, 20],
+                iconAnchor: [10, 10]
+            });
+            minhaLocalizacaoMarker = L.marker([lat, lon], { icon }).addTo(map);
+            minhaLocalizacaoMarker.bindPopup('📍 Sua localização atual');
+            usuarioLat = lat;
+            usuarioLon = lon;
+            localizacaoObtida = true;
+            map.setView([lat, lon], 12);
+            document.getElementById('statusLocation').textContent = `📍 Localização: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+            mostrarResultado(`📍 Localização atual: ${lat.toFixed(4)}, ${lon.toFixed(4)}`);
+        }
+
+        // ============================================================
+        // FUNÇÃO PARA OBTER DADOS DE SINAL E ENVIAR PARA O ORION
+        // ============================================================
+        async function coletarDadosSinal(numero, estacao, latitude, longitude) {
+            try {
+                // Tenta obter dados de sinal do navegador (se disponível)
+                let rsrp = null, sinr = null, ta = null;
+
+                // Simulação: valores estimados (em produção, seriam capturados de uma API nativa)
+                if (navigator.connection) {
+                    // Exemplo de estimativa: quanto pior a conexão, pior o sinal
+                    const tipoConexao = navigator.connection.effectiveType;
+                    if (tipoConexao === '4g') {
+                        rsrp = -75;
+                        sinr = 20;
+                        ta = 0;
+                    } else if (tipoConexao === '3g') {
+                        rsrp = -85;
+                        sinr = 15;
+                        ta = 1;
+                    } else {
+                        rsrp = -95;
+                        sinr = 10;
+                        ta = 2;
+                    }
+                }
+
+                // Se não conseguiu obter dados reais, usa valores estimados com base na distância
+                if (rsrp === null) {
+                    // Estima a distância da ERB (quanto mais longe, pior o sinal)
+                    const distKm = estacao.distancia || 0; // Usar a distância retornada pela API
+                    rsrp = -70 - distKm * 10;
+                    sinr = 25 - distKm * 2;
+                    ta = Math.round(distKm * 5);
+                }
+
+                const data = {
+                    numero: numero,
+                    estacao_id: estacao.id_estacao || estacao,
+                    latitude: latitude,
+                    longitude: longitude,
+                    rsrp: rsrp,
+                    sinr: sinr,
+                    ta: ta
+                };
+
+                const response = await fetch(`${API_URL}/api/coletar-sinal-auto`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const result = await response.json();
+                console.log('📡 Dados de sinal coletados:', result);
+                return result;
+            } catch (error) {
+                console.error('❌ Erro ao coletar dados de sinal:', error);
+                return null;
+            }
+        }
+
+        // ============================================================
+        // FUNÇÃO DE LOCALIZAÇÃO REAL
+        // ============================================================
+        function obterLocalizacao() {
+            return new Promise((resolve) => {
+                if (!navigator.geolocation) {
+                    document.getElementById('statusLocation').textContent = '❌ Geolocalização não suportada';
+                    mostrarResultado('❌ Seu navegador não suporta geolocalização.');
+                    resolve(null);
+                    return;
+                }
+
+                document.getElementById('statusLocation').textContent = '⏳ Solicitando permissão de localização...';
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        const { latitude, longitude } = position.coords;
+                        document.getElementById('statusLocation').textContent = `✅ Localização obtida!`;
+                        resolve({ lat: latitude, lon: longitude });
+                    },
+                    (error) => {
+                        let msg = '';
+                        switch (error.code) {
+                            case error.PERMISSION_DENIED: msg = 'Permissão negada pelo usuário.'; break;
+                            case error.POSITION_UNAVAILABLE: msg = 'Localização indisponível.'; break;
+                            case error.TIMEOUT: msg = 'Tempo limite excedido.'; break;
+                            default: msg = error.message;
+                        }
+                        document.getElementById('statusLocation').textContent = `❌ Erro: ${msg}`;
+                        mostrarResultado(`❌ Erro de localização: ${msg}`);
+                        resolve(null);
+                    },
+                    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+                );
+            });
+        }
+
         // ============================================================
         // FUNÇÕES DE INTERFACE
         // ============================================================
         function mostrarResultado(mensagem) {
-            const el = document.getElementById('resultado');
-            const conteudo = document.getElementById('resultadoConteudo');
-            conteudo.textContent = typeof mensagem === 'object' ? JSON.stringify(mensagem, null, 2) : mensagem;
-            el.classList.add('show');
-        }
-
-        document.getElementById('closeResultado').addEventListener('click', () => {
-            document.getElementById('resultado').classList.remove('show');
-        });
-
-        // ============================================================
-        // EVENTO: CADASTRAR RÁPIDO
-        // ============================================================
-        document.getElementById('btnCadastrar').addEventListener('click', async () => {
-            const numero = document.getElementById('novoNumero').value.trim();
-            const operadora = document.getElementById('novaOperadora').value;
-            const nome = document.getElementById('novoNome').value.trim();
-
-            if (!numero) {
-                mostrarResultado('❌ Número de celular é obrigatório.');
-                return;
-            }
-
-            try {
-                const data = await apiRequest('/api/recursos', {
-                    method: 'POST',
-                    body: JSON.stringify({ numero, operadora, nome, base_id: null, status: 'desconhecido' })
-                });
-                if (data.success) {
-                    mostrarResultado(`✅ Número ${numero} cadastrado com sucesso!`);
-                    document.getElementById('novoNumero').value = '';
-                    document.getElementById('novoNome').value = '';
-                    document.getElementById('status').textContent = '🟢 Conectado';
-                } else {
-                    mostrarResultado(`❌ Erro ao cadastrar: ${data.error}`);
-                }
-            } catch (error) {
-                mostrarResultado(`❌ Erro ao cadastrar: ${error.message}`);
-                document.getElementById('status').textContent = '🔴 Erro de conexão';
-            }
-        });
-
-        // ============================================================
-        // EVENTO: LOCALIZAR POR NÚMERO
-        // ============================================================
-        document.getElementById('btnLocalizar').addEventListener('click', async () => {
-            const numero = document.getElementById('numero').value.trim();
-
-            if (!numero) {
-                mostrarResultado('❌ Número de celular é obrigatório.');
-                return;
-            }
-
-            try {
-                // Busca o recurso
-                let recurso;
-                try {
-                    recurso = await apiRequest(`/api/recursos/numero/${numero}`);
-                } catch (e) {
-                    if (e.message.includes('404')) {
-                        mostrarResultado(`❌ Número ${numero} não encontrado. Cadastre-o primeiro.`);
-                        document.getElementById('statusLocation').textContent = '📍 Número não cadastrado';
-                        return;
-                    }
-                    throw e;
-                }
-
-                if (!recurso || !recurso.base_id) {
-                    mostrarResultado(`❌ Número ${numero} não possui uma base associada.`);
-                    document.getElementById('statusLocation').textContent = '📍 Sem base associada';
-                    return;
-                }
-
-                // Busca a base
-                const base = await apiRequest(`/api/bases/${recurso.base_id}`);
-                if (!base || !base.latitude || !base.longitude) {
-                    mostrarResultado(`❌ Base associada não possui coordenadas.`);
-                    document.getElementById('statusLocation').textContent = '📍 Coordenadas não disponíveis';
-                    return;
-                }
-
-                const lat = base.latitude;
-                const lon = base.longitude;
-                document.getElementById('statusLocation').textContent = `📍 Localização: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
-
-                // Busca a ERB mais próxima
-                const estacao = await apiRequest(`/api/estacoes/mais-proxima?lat=${lat}&lon=${lon}`);
-                if (!estacao) {
-                    mostrarResultado(`❌ Nenhuma ERB encontrada nas proximidades.`);
-                    return;
-                }
-
-                adicionarMarcadores([estacao]);
-                mostrarResultado(`✅ ERB mais próxima: ${estacao.id_estacao} (${estacao.distancia.toFixed(2)} km)`);
-                document.getElementById('status').textContent = '🟢 Conectado';
-
-            } catch (error) {
-                mostrarResultado(`❌ Erro ao localizar: ${error.message}`);
-                document.getElementById('status').textContent = '🔴 Erro de conexão';
-            }
-        });
-
-        // ============================================================
-        // INICIALIZAÇÃO
-        // ============================================================
-        (async function init() {
-            try {
-                const data = await apiRequest('/api/estatisticas');
-                document.getElementById('status').textContent = '🟢 Conectado';
-                mostrarResultado(`✅ Sistema conectado. ${data.total_estacoes || 0} estações disponíveis.`);
-            } catch (error) {
-                document.getElementById('status').textContent = '🔴 Erro de conexão';
-                mostrarResultado(`❌ Erro de conexão com o servidor: ${error.message}`);
-            }
-        })();
-    </script>
-</body>
-</html>
+            const el = document
