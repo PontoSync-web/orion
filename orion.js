@@ -822,7 +822,7 @@ app.delete('/api/bases/:id', (req, res) => {
 });
 
 // ============================================================
-// ROTAS PARA RECURSOS
+// ROTAS PARA RECURSOS (COM CRIAÇÃO AUTOMÁTICA DE BASE)
 // ============================================================
 
 async function criarBaseAutomatica(numero, lat = -15.8, lon = -47.9) {
@@ -867,4 +867,460 @@ app.post('/api/recursos', (req, res) => {
         }
 
         const stmt = db.prepare(`
-            INSERT OR REPLACE INTO recursos (\`numero\`, \`oper
+            INSERT OR REPLACE INTO recursos (\`numero\`, \`operadora\`, \`nome\`, \`base_id\`, \`status\`)
+            VALUES (?, ?, ?, ?, ?)
+        `);
+        stmt.run(numero, operadora || '', nome || '', finalBaseId || null, status || 'desconhecido', function(err) {
+            stmt.finalize();
+            if (err) {
+                return res.status(500).json({ error: err.message });
+            }
+            res.json({ 
+                success: true, 
+                id: this.lastID,
+                base_id: finalBaseId,
+                message: recursoExistente ? 'Recurso atualizado' : 'Recurso cadastrado com base automática'
+            });
+        });
+    });
+});
+
+app.get('/api/recursos', (req, res) => {
+    db.all('SELECT * FROM recursos ORDER BY numero', (err, rows) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json(rows);
+    });
+});
+
+app.get('/api/recursos/:id', (req, res) => {
+    const { id } = req.params;
+    db.get('SELECT * FROM recursos WHERE id = ?', [id], (err, row) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        if (!row) {
+            return res.status(404).json({ error: 'Recurso não encontrado' });
+        }
+        res.json(row);
+    });
+});
+
+app.get('/api/recursos/numero/:numero', (req, res) => {
+    const { numero } = req.params;
+    db.get('SELECT * FROM recursos WHERE numero = ?', [numero], (err, row) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        if (!row) {
+            return res.status(404).json({ error: 'Recurso não encontrado' });
+        }
+        res.json(row);
+    });
+});
+
+app.put('/api/recursos/:id/mover', (req, res) => {
+    const { id } = req.params;
+    const { base_id } = req.body;
+    if (base_id === undefined) {
+        return res.status(400).json({ error: 'base_id é obrigatório' });
+    }
+
+    const stmt = db.prepare('UPDATE recursos SET base_id = ? WHERE id = ?');
+    stmt.run(base_id, id, function(err) {
+        stmt.finalize();
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ success: true, updated: this.changes });
+    });
+});
+
+app.delete('/api/recursos/:id', (req, res) => {
+    const { id } = req.params;
+    db.run('DELETE FROM recursos WHERE id = ?', [id], function(err) {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ success: true, deleted: this.changes });
+    });
+});
+
+// ============================================================
+// ROTAS PARA FILTROS INTELIGENTES
+// ============================================================
+
+app.post('/api/filtros', (req, res) => {
+    const { nome, tag, operadora, uf, municipio, base_id, distancia_max, horario_inicio, horario_fim, notificar, ativo } = req.body;
+    if (!nome) {
+        return res.status(400).json({ error: 'Nome do filtro é obrigatório' });
+    }
+
+    const stmt = db.prepare(`
+        INSERT INTO filtros (
+            \`nome\`, \`tag\`, \`operadora\`, \`uf\`, \`municipio\`, \`base_id\`,
+            \`distancia_max\`, \`horario_inicio\`, \`horario_fim\`, \`notificar\`, \`ativo\`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+        nome, tag || null, operadora || null, uf || null, municipio || null, base_id || null,
+        distancia_max || null, horario_inicio || null, horario_fim || null,
+        notificar !== undefined ? notificar : 1,
+        ativo !== undefined ? ativo : 1,
+        function(err) {
+            stmt.finalize();
+            if (err) {
+                return res.status(500).json({ error: err.message });
+            }
+            res.json({ success: true, id: this.lastID });
+        }
+    );
+});
+
+app.get('/api/filtros', (req, res) => {
+    db.all('SELECT * FROM filtros ORDER BY nome', (err, rows) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json(rows);
+    });
+});
+
+app.get('/api/filtros/:id', (req, res) => {
+    const { id } = req.params;
+    db.get('SELECT * FROM filtros WHERE id = ?', [id], (err, row) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        if (!row) {
+            return res.status(404).json({ error: 'Filtro não encontrado' });
+        }
+        res.json(row);
+    });
+});
+
+app.put('/api/filtros/:id', (req, res) => {
+    const { id } = req.params;
+    const { nome, tag, operadora, uf, municipio, base_id, distancia_max, horario_inicio, horario_fim, notificar, ativo } = req.body;
+
+    const stmt = db.prepare(`
+        UPDATE filtros SET
+            \`nome\` = ?, \`tag\` = ?, \`operadora\` = ?, \`uf\` = ?, \`municipio\` = ?,
+            \`base_id\` = ?, \`distancia_max\` = ?, \`horario_inicio\` = ?, \`horario_fim\` = ?,
+            \`notificar\` = ?, \`ativo\` = ?
+        WHERE id = ?
+    `);
+    stmt.run(
+        nome, tag || null, operadora || null, uf || null, municipio || null,
+        base_id || null, distancia_max || null, horario_inicio || null, horario_fim || null,
+        notificar !== undefined ? notificar : 1,
+        ativo !== undefined ? ativo : 1,
+        id,
+        function(err) {
+            stmt.finalize();
+            if (err) {
+                return res.status(500).json({ error: err.message });
+            }
+            res.json({ success: true, updated: this.changes });
+        }
+    );
+});
+
+app.delete('/api/filtros/:id', (req, res) => {
+    const { id } = req.params;
+    db.run('DELETE FROM filtros WHERE id = ?', [id], function(err) {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ success: true, deleted: this.changes });
+    });
+});
+
+// ============================================================
+// ROTAS PARA HISTÓRICO E INTELIGÊNCIA PREDITIVA
+// ============================================================
+
+app.get('/api/historico', (req, res) => {
+    db.all(`
+        SELECT h.*, e.\`operadora\`, e.\`municipio\`, e.\`uf\`
+        FROM historico h
+        LEFT JOIN estacoes e ON h.\`estacao_id\` = e.\`id_estacao\`
+        ORDER BY h.\`data_consulta\` DESC
+        LIMIT 100
+    `, (err, rows) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json(rows);
+    });
+});
+
+app.post('/api/historico', (req, res) => {
+    const { numero, estacao_id, distancia } = req.body;
+    if (!numero || !estacao_id) {
+        return res.status(400).json({ error: 'Número e estacao_id são obrigatórios' });
+    }
+
+    const stmt = db.prepare(`
+        INSERT INTO historico (\`numero\`, \`estacao_id\`, \`distancia\`)
+        VALUES (?, ?, ?)
+    `);
+    stmt.run(numero, estacao_id, distancia || null, function(err) {
+        stmt.finalize();
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ success: true, id: this.lastID });
+    });
+});
+
+app.post('/api/historico-localizacao', (req, res) => {
+    const { numero, latitude, longitude, estacao_id } = req.body;
+    if (!numero || latitude === undefined || longitude === undefined) {
+        return res.status(400).json({ error: 'Número, latitude e longitude são obrigatórios' });
+    }
+
+    const stmt = db.prepare(`
+        INSERT INTO historico_localizacao (\`numero\`, \`latitude\`, \`longitude\`, \`estacao_id\`)
+        VALUES (?, ?, ?, ?)
+    `);
+    stmt.run(numero, latitude, longitude, estacao_id || null, function(err) {
+        stmt.finalize();
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ success: true, id: this.lastID });
+    });
+});
+
+app.get('/api/analise-padroes', (req, res) => {
+    const { numero } = req.query;
+
+    if (!numero) {
+        return res.status(400).json({ error: 'Número é obrigatório' });
+    }
+
+    db.all(`
+        SELECT 
+            \`latitude\`, 
+            \`longitude\`, 
+            COUNT(*) AS frequencia,
+            DATE(\`data_hora\`) AS data,
+            strftime('%H', \`data_hora\`) AS hora
+        FROM historico_localizacao
+        WHERE \`numero\` = ?
+        GROUP BY \`latitude\`, \`longitude\`, DATE(\`data_hora\`), strftime('%H', \`data_hora\`)
+        ORDER BY \`data_hora\` DESC
+        LIMIT 100
+    `, [numero], (err, rows) => {
+        if (err) {
+            console.error('❌ Erro ao buscar histórico:', err.message);
+            return res.status(500).json({ error: err.message });
+        }
+
+        if (rows.length === 0) {
+            return res.json({ pattern: 'Sem dados suficientes' });
+        }
+
+        const locationCount = {};
+        rows.forEach(row => {
+            const key = `${row.latitude},${row.longitude}`;
+            locationCount[key] = (locationCount[key] || 0) + row.frequencia;
+        });
+
+        let mostFrequent = null;
+        let maxCount = 0;
+        for (const [key, count] of Object.entries(locationCount)) {
+            if (count > maxCount) {
+                maxCount = count;
+                mostFrequent = key;
+            }
+        }
+
+        const [lat, lon] = mostFrequent ? mostFrequent.split(',').map(Number) : [null, null];
+
+        const hourCount = {};
+        rows.forEach(row => {
+            const hora = row.hora;
+            hourCount[hora] = (hourCount[hora] || 0) + 1;
+        });
+
+        let mostFrequentHour = null;
+        let maxHourCount = 0;
+        for (const [hora, count] of Object.entries(hourCount)) {
+            if (count > maxHourCount) {
+                maxHourCount = count;
+                mostFrequentHour = hora;
+            }
+        }
+
+        res.json({
+            pattern: {
+                localizacao_mais_frequente: { latitude: lat, longitude: lon },
+                horario_mais_frequente: mostFrequentHour,
+                total_registros: rows.length
+            }
+        });
+    });
+});
+
+app.get('/api/alertas', (req, res) => {
+    const { numero } = req.query;
+
+    if (!numero) {
+        return res.status(400).json({ error: 'Número é obrigatório' });
+    }
+
+    db.all(`
+        SELECT 
+            \`latitude\`, 
+            \`longitude\`, 
+            \`data_hora\`
+        FROM historico_localizacao
+        WHERE \`numero\` = ?
+        ORDER BY \`data_hora\` DESC
+        LIMIT 10
+    `, [numero], (err, rows) => {
+        if (err) {
+            console.error('❌ Erro ao buscar localizações:', err.message);
+            return res.status(500).json({ error: err.message });
+        }
+
+        if (rows.length < 3) {
+            return res.json({ alerta: 'Sem dados suficientes para alertas' });
+        }
+
+        let distanciaTotal = 0;
+        let intervalos = 0;
+
+        for (let i = 0; i < rows.length - 1; i++) {
+            const lat1 = rows[i].latitude;
+            const lon1 = rows[i].longitude;
+            const lat2 = rows[i+1].latitude;
+            const lon2 = rows[i+1].longitude;
+
+            const dist = Math.sqrt(Math.pow(lat2 - lat1, 2) + Math.pow(lon2 - lon1, 2)) * 111;
+            distanciaTotal += dist;
+            intervalos++;
+        }
+
+        const velocidadeMedia = intervalos > 0 ? distanciaTotal / intervalos : 0;
+
+        if (velocidadeMedia > 50) {
+            res.json({ 
+                alerta: `🚨 Movimento suspeito detectado (${velocidadeMedia.toFixed(1)} km/h). Últimas localizações indicam deslocamento rápido.` 
+            });
+        } else if (velocidadeMedia > 20) {
+            res.json({ 
+                alerta: `⚠️ Movimento moderado detectado (${velocidadeMedia.toFixed(1)} km/h).` 
+            });
+        } else {
+            res.json({ 
+                alerta: `✅ Padrão normal (${velocidadeMedia.toFixed(1)} km/h).` 
+            });
+        }
+    });
+});
+
+// ============================================================
+// ROTAS PARA COLETAR DADOS DE SINAL E ML
+// ============================================================
+
+app.post('/api/coletar-sinal', (req, res) => {
+    const { numero, estacao_id, latitude, longitude, rsrp, sinr, ta } = req.body;
+
+    if (!numero || !estacao_id || latitude === undefined || longitude === undefined) {
+        return res.status(400).json({ error: 'Número, estacao_id, latitude e longitude são obrigatórios' });
+    }
+
+    const stmt = db.prepare(`
+        INSERT INTO dados_sinal (\`numero\`, \`estacao_id\`, \`latitude\`, \`longitude\`, \`rsrp\`, \`sinr\`, \`ta\`)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(numero, estacao_id, latitude, longitude, rsrp || null, sinr || null, ta || null, function(err) {
+        stmt.finalize();
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json({ success: true, id: this.lastID, message: 'Dados de sinal coletados com sucesso.' });
+    });
+});
+
+app.post('/api/treinar-modelo', async (req, res) => {
+    try {
+        const result = await treinarModeloKNN();
+        res.json({ success: true, message: `Modelo treinado com ${result.total_registros} registros.` });
+    } catch (error) {
+        res.status(500).json({ error: error });
+    }
+});
+
+app.get('/api/predizer-localizacao', (req, res) => {
+    const { estacao_id, rsrp, sinr, ta, k } = req.query;
+
+    if (!estacao_id) {
+        return res.status(400).json({ error: 'estacao_id é obrigatório' });
+    }
+
+    const kValue = parseInt(k) || 3;
+
+    predizerLocalizacaoKNN(estacao_id, parseFloat(rsrp), parseFloat(sinr), parseFloat(ta), kValue)
+        .then(result => {
+            res.json({
+                success: true,
+                latitude: result.latitude,
+                longitude: result.longitude,
+                k: result.k,
+                metodo: 'KNN'
+            });
+        })
+        .catch(error => {
+            res.status(500).json({ error: error });
+        });
+});
+
+// ============================================================
+// ROTA PARA ESTATÍSTICAS
+// ============================================================
+
+app.get('/api/estatisticas', (req, res) => {
+    db.all(`
+        SELECT 
+            (SELECT COUNT(*) FROM estacoes) AS total_estacoes,
+            (SELECT COUNT(DISTINCT \`operadora\`) FROM estacoes) AS total_operadoras,
+            (SELECT COUNT(DISTINCT \`uf\`) FROM estacoes) AS total_ufs,
+            (SELECT COUNT(*) FROM numeros) AS total_numeros,
+            (SELECT COUNT(*) FROM alvos) AS total_alvos,
+            (SELECT COUNT(*) FROM bases) AS total_bases,
+            (SELECT COUNT(*) FROM recursos) AS total_recursos,
+            (SELECT COUNT(*) FROM filtros) AS total_filtros,
+            (SELECT COUNT(*) FROM historico_localizacao) AS total_localizacoes,
+            (SELECT COUNT(*) FROM dados_sinal) AS total_dados_sinal
+    `, (err, rows) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+        res.json(rows[0]);
+    });
+});
+
+// ============================================================
+// INICIALIZAÇÃO DO SERVIDOR
+// ============================================================
+
+(async () => {
+    await importarERBs();
+    console.log('✅ ORION pronto para uso.');
+})();
+
+app.listen(port, () => {
+    console.log(`🚀 ORION rodando na porta ${port}`);
+});
+
+process.on('SIGINT', () => {
+    db.close(() => {
+        console.log('👋 ORION encerrado.');
+        process.exit(0);
+    });
+});
