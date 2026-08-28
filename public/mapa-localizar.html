@@ -272,7 +272,7 @@
         });
 
         // ============================================================
-        // EVENTO: LOCALIZAR POR NÚMERO (CORRIGIDO - USA BASE DO NÚMERO)
+        // EVENTO: LOCALIZAR POR NÚMERO (COM ML - CORRIGIDO)
         // ============================================================
         document.getElementById('btnLocalizar').addEventListener('click', async () => {
             const numero = document.getElementById('numero').value.trim();
@@ -297,72 +297,89 @@
                 }
 
                 let lat, lon;
+                let fonte = '';
 
-                if (!recurso || !recurso.base_id) {
-                    // Fallback: usa a localização do usuário se o número não tiver base
-                    mostrarResultado(`⚠️ Número ${numero} não possui base associada. Usando sua localização como fallback.`);
+                // 2. Se o número tem base, usa a base
+                if (recurso && recurso.base_id) {
+                    const base = await apiRequest(`/api/bases/${recurso.base_id}`);
+                    if (base && base.latitude && base.longitude) {
+                        lat = base.latitude;
+                        lon = base.longitude;
+                        fonte = 'Base';
+                        document.getElementById('statusLocation').textContent = `📍 Base: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+                    }
+                }
+
+                // 3. Se NÃO tem base ou a base não tem coordenadas, usa ML para predizer
+                if (!lat || !lon) {
+                    mostrarResultado(`⏳ Número ${numero} sem base. Usando ML para predizer localização...`);
+                    
+                    // Obtém a ERB mais próxima da localização atual (para estimar sinal)
                     if (!localizacaoObtida) {
                         const pos = await obterLocalizacao();
-                        if (pos) {
-                            adicionarMinhaLocalizacao(pos.lat, pos.lon);
-                        } else {
-                            mostrarResultado('❌ Não foi possível obter sua localização.');
+                        if (pos) adicionarMinhaLocalizacao(pos.lat, pos.lon);
+                        else {
+                            mostrarResultado('❌ Não foi possível obter sua localização para estimar o sinal.');
                             return;
                         }
                     }
-                    lat = usuarioLat;
-                    lon = usuarioLon;
-                } else {
-                    // 2. Busca a base associada para obter as coordenadas
-                    const base = await apiRequest(`/api/bases/${recurso.base_id}`);
-                    if (!base || !base.latitude || !base.longitude) {
-                        mostrarResultado(`❌ Base associada ao número ${numero} não possui coordenadas.`);
-                        document.getElementById('statusLocation').textContent = '📍 Coordenadas não disponíveis';
+
+                    const estacao = await apiRequest(`/api/estacoes/mais-proxima?lat=${usuarioLat}&lon=${usuarioLon}`);
+                    if (!estacao) {
+                        mostrarResultado('❌ Nenhuma ERB encontrada para estimar o sinal.');
                         return;
                     }
-                    lat = base.latitude;
-                    lon = base.longitude;
-                    document.getElementById('statusLocation').textContent = `📍 Localização do número: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+
+                    // Estima dados de sinal com base na distância
+                    const rsrp = -70 - estacao.distancia * 10;
+                    const sinr = 25 - estacao.distancia * 2;
+                    const ta = Math.round(estacao.distancia * 5);
+
+                    // Usa o ML para predizer a localização
+                    try {
+                        const mlResult = await apiRequest(`/api/predizer-localizacao?estacao_id=${estacao.id_estacao}&rsrp=${rsrp}&sinr=${sinr}&ta=${ta}&k=3`);
+                        if (mlResult && mlResult.success) {
+                            lat = mlResult.latitude;
+                            lon = mlResult.longitude;
+                            fonte = 'ML (KNN)';
+                            document.getElementById('statusLocation').textContent = `📍 ML prediz: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+                        } else {
+                            throw new Error('ML não retornou uma predição válida.');
+                        }
+                    } catch (mlError) {
+                        // Fallback: usa a localização do usuário se o ML falhar
+                        mostrarResultado(`⚠️ ML indisponível. Usando sua localização como fallback.`);
+                        if (localizacaoObtida) {
+                            lat = usuarioLat;
+                            lon = usuarioLon;
+                            fonte = 'Fallback (usuário)';
+                        } else {
+                            mostrarResultado('❌ Não foi possível obter localização.');
+                            return;
+                        }
+                    }
                 }
 
-                // 3. Busca a ERB mais próxima (para obter estacao_id e estimar sinal)
+                // 4. Busca a ERB mais próxima da localização predita
                 const estacao = await apiRequest(`/api/estacoes/mais-proxima?lat=${lat}&lon=${lon}`);
                 if (!estacao) {
                     mostrarResultado('❌ Nenhuma ERB encontrada nas proximidades.');
                     return;
                 }
 
-                // 4. Estima dados de sinal com base na distância
-                const rsrp = -70 - estacao.distancia * 10;
-                const sinr = 25 - estacao.distancia * 2;
-                const ta = Math.round(estacao.distancia * 5);
-
-                // 5. Tenta usar a predição do ML (KNN)
-                try {
-                    const mlResult = await apiRequest(`/api/predizer-localizacao?estacao_id=${estacao.id_estacao}&rsrp=${rsrp}&sinr=${sinr}&ta=${ta}&k=3`);
-                    if (mlResult && mlResult.success) {
-                        adicionarMarcadores([{
-                            latitude: mlResult.latitude,
-                            longitude: mlResult.longitude,
-                            id_estacao: 'ML-Prediction',
-                            operadora: 'ML',
-                            uf: 'Predição',
-                            municipio: 'KNN',
-                            tecnologias: 'Machine Learning',
-                            frequencias: 'k=3',
-                            distancia: 0
-                        }]);
-                        mostrarResultado(`✅ Localização predita para o número ${numero}: ${mlResult.latitude.toFixed(4)}, ${mlResult.longitude.toFixed(4)}`);
-                        document.getElementById('status').textContent = '🟢 Conectado (ML)';
-                        return;
-                    }
-                } catch (mlError) {
-                    console.log('⚠️ ML não disponível, usando fallback:', mlError.message);
-                }
-
-                // 6. Fallback: ERB mais próxima
-                adicionarMarcadores([estacao]);
-                mostrarResultado(`✅ ERB mais próxima do número ${numero}: ${estacao.id_estacao} (${estacao.distancia.toFixed(2)} km)`);
+                // 5. Exibe no mapa
+                adicionarMarcadores([{
+                    latitude: lat,
+                    longitude: lon,
+                    id_estacao: 'ML-Prediction',
+                    operadora: 'ML',
+                    uf: 'Predição',
+                    municipio: fonte,
+                    tecnologias: 'Machine Learning',
+                    frequencias: 'k=3',
+                    distancia: 0
+                }]);
+                mostrarResultado(`✅ Localização para o número ${numero}: ${lat.toFixed(4)}, ${lon.toFixed(4)} (fonte: ${fonte})`);
                 document.getElementById('status').textContent = '🟢 Conectado';
 
             } catch (error) {
