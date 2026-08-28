@@ -121,7 +121,7 @@
         // ============================================================
         // INICIALIZAÇÃO DO MAPA
         // ============================================================
-        const map = L.map('map').setView([-15.8, -47.9], 4);
+        const map = L.map('map').setView([-12.9714, -38.5014], 12); // Salvador como fallback visual
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         }).addTo(map);
@@ -184,19 +184,19 @@
             usuarioLat = lat;
             usuarioLon = lon;
             localizacaoObtida = true;
-            map.setView([lat, lon], 12);
+            map.setView([lat, lon], 14);
             document.getElementById('statusLocation').textContent = `📍 Localização: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
             mostrarResultado(`📍 Localização atual: ${lat.toFixed(4)}, ${lon.toFixed(4)}`);
         }
 
         // ============================================================
-        // FUNÇÃO DE LOCALIZAÇÃO REAL (para fallback)
+        // FUNÇÃO DE LOCALIZAÇÃO REAL (SEM FALLBACK PARA BRASÍLIA)
         // ============================================================
         function obterLocalizacao() {
             return new Promise((resolve) => {
                 if (!navigator.geolocation) {
                     document.getElementById('statusLocation').textContent = '❌ Geolocalização não suportada';
-                    mostrarResultado('❌ Seu navegador não suporta geolocalização.');
+                    mostrarResultado('❌ Seu navegador não suporta geolocalização. Por favor, use um navegador compatível.');
                     resolve(null);
                     return;
                 }
@@ -211,10 +211,17 @@
                     (error) => {
                         let msg = '';
                         switch (error.code) {
-                            case error.PERMISSION_DENIED: msg = 'Permissão negada pelo usuário.'; break;
-                            case error.POSITION_UNAVAILABLE: msg = 'Localização indisponível.'; break;
-                            case error.TIMEOUT: msg = 'Tempo limite excedido.'; break;
-                            default: msg = error.message;
+                            case error.PERMISSION_DENIED: 
+                                msg = 'Permissão negada pelo usuário. Por favor, permita o acesso à localização.';
+                                break;
+                            case error.POSITION_UNAVAILABLE: 
+                                msg = 'Localização indisponível. Verifique se o GPS está ativo.';
+                                break;
+                            case error.TIMEOUT: 
+                                msg = 'Tempo limite excedido. Tente novamente.';
+                                break;
+                            default: 
+                                msg = error.message;
                         }
                         document.getElementById('statusLocation').textContent = `❌ Erro: ${msg}`;
                         mostrarResultado(`❌ Erro de localização: ${msg}`);
@@ -282,8 +289,20 @@
                 return;
             }
 
+            // FORÇA A OBTENÇÃO DA LOCALIZAÇÃO REAL
+            if (!localizacaoObtida) {
+                mostrarResultado('⏳ Obtendo sua localização real...');
+                const pos = await obterLocalizacao();
+                if (pos) {
+                    adicionarMinhaLocalizacao(pos.lat, pos.lon);
+                } else {
+                    mostrarResultado('❌ Não foi possível obter sua localização. Verifique as permissões do navegador.');
+                    return;
+                }
+            }
+
             try {
-                // 1. Busca o recurso (número) para obter a base_id
+                // 1. Busca o recurso (número)
                 let recurso;
                 try {
                     recurso = await apiRequest(`/api/recursos/numero/${numero}`);
@@ -310,20 +329,11 @@
                     }
                 }
 
-                // 3. Se NÃO tem base ou a base não tem coordenadas, usa ML para predizer
+                // 3. Se NÃO tem base, usa ML com a localização REAL
                 if (!lat || !lon) {
-                    mostrarResultado(`⏳ Número ${numero} sem base. Usando ML para predizer localização...`);
+                    mostrarResultado(`⏳ Número ${numero} sem base. Usando ML com sua localização real...`);
                     
-                    // Obtém a ERB mais próxima da localização atual (para estimar sinal)
-                    if (!localizacaoObtida) {
-                        const pos = await obterLocalizacao();
-                        if (pos) adicionarMinhaLocalizacao(pos.lat, pos.lon);
-                        else {
-                            mostrarResultado('❌ Não foi possível obter sua localização para estimar o sinal.');
-                            return;
-                        }
-                    }
-
+                    // Obtém a ERB mais próxima da localização REAL
                     const estacao = await apiRequest(`/api/estacoes/mais-proxima?lat=${usuarioLat}&lon=${usuarioLon}`);
                     if (!estacao) {
                         mostrarResultado('❌ Nenhuma ERB encontrada para estimar o sinal.');
@@ -347,12 +357,12 @@
                             throw new Error('ML não retornou uma predição válida.');
                         }
                     } catch (mlError) {
-                        // Fallback: usa a localização do usuário se o ML falhar
-                        mostrarResultado(`⚠️ ML indisponível. Usando sua localização como fallback.`);
+                        // Fallback: usa a localização REAL do usuário
+                        mostrarResultado(`⚠️ ML indisponível. Usando sua localização real como fallback.`);
                         if (localizacaoObtida) {
                             lat = usuarioLat;
                             lon = usuarioLon;
-                            fonte = 'Fallback (usuário)';
+                            fonte = 'Fallback (localização real)';
                         } else {
                             mostrarResultado('❌ Não foi possível obter localização.');
                             return;
@@ -360,7 +370,7 @@
                     }
                 }
 
-                // 4. Busca a ERB mais próxima da localização predita
+                // 4. Busca a ERB mais próxima da localização
                 const estacao = await apiRequest(`/api/estacoes/mais-proxima?lat=${lat}&lon=${lon}`);
                 if (!estacao) {
                     mostrarResultado('❌ Nenhuma ERB encontrada nas proximidades.');
@@ -401,12 +411,12 @@
                 mostrarResultado(`❌ Erro de conexão com o servidor: ${error.message}`);
             }
 
-            // Tenta obter localização automaticamente (para fallback)
+            // FORÇA A OBTENÇÃO DA LOCALIZAÇÃO REAL ao carregar a página
             const pos = await obterLocalizacao();
             if (pos) {
                 adicionarMinhaLocalizacao(pos.lat, pos.lon);
             } else {
-                document.getElementById('statusLocation').textContent = '⚠️ Localização não disponível';
+                document.getElementById('statusLocation').textContent = '⚠️ Localização não disponível - clique em "Minha Localização"';
             }
         })();
     </script>
