@@ -1247,6 +1247,55 @@ app.post('/api/coletar-sinal', (req, res) => {
     });
 });
 
+// ============================================================
+// ROTA PARA COLETAR DADOS DE SINAL AUTOMATICAMENTE (COM TREINAMENTO)
+// ============================================================
+app.post('/api/coletar-sinal-auto', (req, res) => {
+    const { numero, estacao_id, latitude, longitude, rsrp, sinr, ta } = req.body;
+
+    if (!numero || !estacao_id || latitude === undefined || longitude === undefined) {
+        return res.status(400).json({ error: 'Número, estacao_id, latitude e longitude são obrigatórios' });
+    }
+
+    // 1. Insere os dados de sinal
+    const stmt = db.prepare(`
+        INSERT INTO dados_sinal (\`numero\`, \`estacao_id\`, \`latitude\`, \`longitude\`, \`rsrp\`, \`sinr\`, \`ta\`)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(numero, estacao_id, latitude, longitude, rsrp || null, sinr || null, ta || null, function(err) {
+        stmt.finalize();
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+
+        // 2. Verifica se há dados suficientes para treinar
+        db.get('SELECT COUNT(*) AS total FROM dados_sinal', (err, row) => {
+            if (err) {
+                return res.status(500).json({ error: err.message });
+            }
+
+            const total = row.total;
+            // 3. Se houver 10 ou mais registros, treina o modelo automaticamente
+            if (total >= 10) {
+                treinarModeloKNN()
+                    .then(result => {
+                        console.log(`✅ Modelo treinado automaticamente com ${result.total_registros} registros.`);
+                    })
+                    .catch(error => {
+                        console.error('❌ Erro ao treinar modelo automaticamente:', error);
+                    });
+            }
+
+            res.json({ 
+                success: true, 
+                id: this.lastID, 
+                message: 'Dados de sinal coletados com sucesso.',
+                total_registros: total
+            });
+        });
+    });
+});
+
 app.post('/api/treinar-modelo', async (req, res) => {
     try {
         const result = await treinarModeloKNN();
