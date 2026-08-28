@@ -546,10 +546,6 @@ function predizerLocalizacaoKNN(estacao_id, rsrp, sinr, ta, k = 3) {
 }
 
 // ============================================================
-// FUNÇÃO PARA ENVIAR MENSAGEM AO TELEGRAM (OPCIONAL)
-// ============================================================
-
-// ============================================================
 // ROTAS DA API
 // ============================================================
 
@@ -864,4 +860,11 @@ app.post('/api/recursos', (req, res) => {
         if (!recursoExistente && !base_id) {
             try {
                 finalBaseId = await criarBaseAutomatica(numero, coordenadasUsadas.lat, coordenadasUsadas.lon);
-                console.log(`
+                console.log(`✅ Base automática criada para o número ${numero} (ID: ${finalBaseId})`);
+            } catch (error) {
+                return res.status(500).json({ error: 'Erro ao criar base automática: ' + error.message });
+            }
+        }
+
+        const stmt = db.prepare(`
+            INSERT OR REPLACE INTO recursos (\`numero\`, \`oper
