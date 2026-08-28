@@ -239,6 +239,20 @@ db.serialize(() => {
         if (err) console.error('❌ Erro ao criar tabela dados_sinal:', err.message);
         else console.log('✅ Tabela dados_sinal criada/verificada com sucesso.');
     });
+
+    // ============================================================
+    // TABELA 12: modelos (para salvar o modelo KNN persistentemente)
+    // ============================================================
+    db.run(`CREATE TABLE IF NOT EXISTS modelos (
+        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
+        \`nome\` TEXT NOT NULL,
+        \`modelo\` BLOB,
+        \`total_registros\` INTEGER,
+        \`data_criacao\` DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`, (err) => {
+        if (err) console.error('❌ Erro ao criar tabela modelos:', err.message);
+        else console.log('✅ Tabela modelos criada/verificada com sucesso.');
+    });
 });
 
 // ============================================================
@@ -448,9 +462,59 @@ async function importarERBs() {
 }
 
 // ============================================================
-// FUNÇÃO PARA TREINAR O MODELO KNN
+// FUNÇÃO PARA SALVAR O MODELO NO BANCO DE DADOS
 // ============================================================
+function salvarModeloNoBanco(features, labels, totalRegistros) {
+    return new Promise((resolve, reject) => {
+        const modelData = { features, labels };
+        const modelJSON = JSON.stringify(modelData);
+        const modeloBuffer = Buffer.from(modelJSON, 'utf8');
 
+        const stmt = db.prepare(`
+            INSERT OR REPLACE INTO modelos (\`nome\`, \`modelo\`, \`total_registros\`)
+            VALUES (?, ?, ?)
+        `);
+        stmt.run('knn_model', modeloBuffer, totalRegistros, function(err) {
+            stmt.finalize();
+            if (err) {
+                reject(err);
+            } else {
+                console.log(`✅ Modelo salvo no banco de dados (${totalRegistros} registros).`);
+                resolve(this.lastID);
+            }
+        });
+    });
+}
+
+// ============================================================
+// FUNÇÃO PARA CARREGAR O MODELO DO BANCO DE DADOS
+// ============================================================
+function carregarModeloDoBanco() {
+    return new Promise((resolve, reject) => {
+        db.get('SELECT * FROM modelos WHERE nome = ? ORDER BY data_criacao DESC LIMIT 1', ['knn_model'], (err, row) => {
+            if (err) {
+                reject('Erro ao carregar modelo: ' + err.message);
+                return;
+            }
+            if (!row) {
+                reject('Modelo não encontrado no banco de dados.');
+                return;
+            }
+
+            try {
+                const modelJSON = row.modelo.toString('utf8');
+                const modelData = JSON.parse(modelJSON);
+                resolve(modelData);
+            } catch (e) {
+                reject('Erro ao parsear modelo: ' + e.message);
+            }
+        });
+    });
+}
+
+// ============================================================
+// FUNÇÃO PARA TREINAR O MODELO KNN (SALVANDO NO BANCO)
+// ============================================================
 function treinarModeloKNN() {
     return new Promise((resolve, reject) => {
         db.all('SELECT * FROM dados_sinal', (err, rows) => {
@@ -479,69 +543,63 @@ function treinarModeloKNN() {
                 labels.push([row.latitude, row.longitude]);
             });
 
-            const modelData = { features, labels };
-            const fs = require('fs');
-            const modelPath = path.join(__dirname, 'models', 'knn_model.json');
-
-            const modelsDir = path.join(__dirname, 'models');
-            if (!fs.existsSync(modelsDir)) {
-                fs.mkdirSync(modelsDir);
-            }
-
-            fs.writeFileSync(modelPath, JSON.stringify(modelData, null, 2));
-            resolve({ total_registros: rows.length });
+            // Salva o modelo no banco de dados
+            salvarModeloNoBanco(features, labels, rows.length)
+                .then(id => {
+                    resolve({ total_registros: rows.length, id: id });
+                })
+                .catch(error => {
+                    reject(error);
+                });
         });
     });
 }
 
 // ============================================================
-// FUNÇÃO PARA PREDIZER LOCALIZAÇÃO COM KNN
+// FUNÇÃO PARA PREDIZER LOCALIZAÇÃO COM KNN (CARREGANDO DO BANCO)
 // ============================================================
-
 function predizerLocalizacaoKNN(estacao_id, rsrp, sinr, ta, k = 3) {
     return new Promise((resolve, reject) => {
-        const fs = require('fs');
-        const modelPath = path.join(__dirname, 'models', 'knn_model.json');
+        // Carrega o modelo do banco
+        carregarModeloDoBanco()
+            .then(modelData => {
+                const { features, labels } = modelData;
 
-        if (!fs.existsSync(modelPath)) {
-            reject('Modelo não encontrado. Treine o modelo primeiro.');
-            return;
-        }
+                if (features.length === 0) {
+                    reject('Modelo vazio.');
+                    return;
+                }
 
-        const modelData = JSON.parse(fs.readFileSync(modelPath, 'utf8'));
-        const { features, labels } = modelData;
+                const query = [estacao_id, rsrp || 0, sinr || 0, ta || 0];
 
-        if (features.length === 0) {
-            reject('Modelo vazio. Treine o modelo primeiro.');
-            return;
-        }
+                const distances = features.map((feature, index) => {
+                    const dist = Math.sqrt(
+                        Math.pow(feature[0] - query[0], 2) +
+                        Math.pow(feature[1] - query[1], 2) +
+                        Math.pow(feature[2] - query[2], 2) +
+                        Math.pow(feature[3] - query[3], 2)
+                    );
+                    return { index, distance: dist };
+                });
 
-        const query = [estacao_id, rsrp || 0, sinr || 0, ta || 0];
+                distances.sort((a, b) => a.distance - b.distance);
+                const kNearest = distances.slice(0, k);
 
-        const distances = features.map((feature, index) => {
-            const dist = Math.sqrt(
-                Math.pow(feature[0] - query[0], 2) +
-                Math.pow(feature[1] - query[1], 2) +
-                Math.pow(feature[2] - query[2], 2) +
-                Math.pow(feature[3] - query[3], 2)
-            );
-            return { index, distance: dist };
-        });
+                let sumLat = 0;
+                let sumLon = 0;
+                kNearest.forEach(neighbor => {
+                    sumLat += labels[neighbor.index][0];
+                    sumLon += labels[neighbor.index][1];
+                });
 
-        distances.sort((a, b) => a.distance - b.distance);
-        const kNearest = distances.slice(0, k);
+                const predLat = sumLat / k;
+                const predLon = sumLon / k;
 
-        let sumLat = 0;
-        let sumLon = 0;
-        kNearest.forEach(neighbor => {
-            sumLat += labels[neighbor.index][0];
-            sumLon += labels[neighbor.index][1];
-        });
-
-        const predLat = sumLat / k;
-        const predLon = sumLon / k;
-
-        resolve({ latitude: predLat, longitude: predLon, k: k });
+                resolve({ latitude: predLat, longitude: predLon, k: k });
+            })
+            .catch(error => {
+                reject('Erro ao carregar modelo: ' + error);
+            });
     });
 }
 
@@ -1385,7 +1443,8 @@ app.get('/api/estatisticas', (req, res) => {
             (SELECT COUNT(*) FROM recursos) AS total_recursos,
             (SELECT COUNT(*) FROM filtros) AS total_filtros,
             (SELECT COUNT(*) FROM historico_localizacao) AS total_localizacoes,
-            (SELECT COUNT(*) FROM dados_sinal) AS total_dados_sinal
+            (SELECT COUNT(*) FROM dados_sinal) AS total_dados_sinal,
+            (SELECT COUNT(*) FROM modelos) AS total_modelos
     `, (err, rows) => {
         if (err) {
             return res.status(500).json({ error: err.message });
