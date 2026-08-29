@@ -1,28 +1,15 @@
 // ============================================================
-// ORION - SISTEMA DE GERENCIAMENTO DE ERBs (VERSÃO COMPLETA COM ML)
+// ORION - SISTEMA DE GERENCIAMENTO DE ERBs (VERSÃO SUPABASE)
 // ============================================================
-// Este arquivo é o coração do sistema ORION. Ele gerencia:
-// 1. Importação de dados de ERBs a partir de arquivos CSV
-// 2. API REST para consulta de estações próximas
-// 3. Cadastro e gerenciamento de números de telefone
-// 4. Histórico de consultas
-// 5. Gestão de alvos (números de interesse)
-// 6. Gestão de bases (setores/instalações)
-// 7. Gestão de recursos (números associados a bases)
-// 8. Filtros inteligentes para alertas
-// 9. Inteligência preditiva (análise de padrões e alertas)
-// 10. Machine Learning para localização (KNN)
-// ============================================================
-
-// ============================================================
-// IMPORTAÇÃO DE MÓDULOS
+// Este arquivo é o coração do sistema ORION, adaptado para PostgreSQL
+// no Supabase, garantindo persistência dos dados.
 // ============================================================
 
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 const readline = require('readline');
+const { Pool } = require('pg');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -32,7 +19,27 @@ const port = process.env.PORT || 3000;
 // ============================================================
 
 const DATA_DIR = path.join(__dirname, 'data');
-const DB_PATH = path.join(__dirname, 'orion.db');
+
+// ============================================================
+// CONEXÃO COM O BANCO DE DADOS (SUPABASE - POSTGRESQL)
+// ============================================================
+
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+        rejectUnauthorized: false // Necessário para conexões com Supabase
+    }
+});
+
+// Testa a conexão
+pool.connect((err, client, release) => {
+    if (err) {
+        console.error('❌ Erro ao conectar ao Supabase:', err.message);
+    } else {
+        console.log('✅ Conectado ao Supabase (PostgreSQL) com sucesso!');
+        release();
+    }
+});
 
 // ============================================================
 // MIDDLEWARE
@@ -47,213 +54,216 @@ app.use((req, res, next) => {
 });
 
 // ============================================================
-// BANCO DE DADOS (COM CRASES PARA ESCAPAR NOMES DE COLUNAS)
+// INICIALIZAÇÃO DO BANCO DE DADOS (CRIAÇÃO DE TABELAS)
 // ============================================================
 
-const db = new sqlite3.Database(DB_PATH);
+async function initDatabase() {
+    try {
+        // ============================================================
+        // TABELA 1: estacoes (ERBs)
+        // ============================================================
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS estacoes (
+                id_estacao TEXT PRIMARY KEY,
+                operadora TEXT,
+                uf TEXT,
+                municipio TEXT,
+                bairro TEXT,
+                endereco TEXT,
+                codigo_municipio_ibge TEXT,
+                latitude REAL,
+                longitude REAL,
+                tecnologias TEXT,
+                frequencias TEXT,
+                azimutes TEXT,
+                emissoes TEXT,
+                fonte TEXT,
+                opencellid_radio TEXT,
+                opencellid_cell TEXT,
+                opencellid_correspondencia TEXT,
+                anatel_correspondencia TEXT,
+                data_importacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        console.log('✅ Tabela estacoes criada/verificada com sucesso.');
 
-db.serialize(() => {
-    // ============================================================
-    // TABELA 1: estacoes (ERBs)
-    // ============================================================
-    db.run(`CREATE TABLE IF NOT EXISTS estacoes (
-        \`id_estacao\` TEXT PRIMARY KEY,
-        \`operadora\` TEXT,
-        \`uf\` TEXT,
-        \`municipio\` TEXT,
-        \`bairro\` TEXT,
-        \`endereco\` TEXT,
-        \`codigo_municipio_ibge\` TEXT,
-        \`latitude\` REAL,
-        \`longitude\` REAL,
-        \`tecnologias\` TEXT,
-        \`frequencias\` TEXT,
-        \`azimutes\` TEXT,
-        \`emissoes\` TEXT,
-        \`fonte\` TEXT,
-        \`opencellid_radio\` TEXT,
-        \`opencellid_cell\` TEXT,
-        \`opencellid_correspondencia\` TEXT,
-        \`anatel_correspondencia\` TEXT,
-        \`data_importacao\` DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`, (err) => {
-        if (err) console.error('❌ Erro ao criar tabela estacoes:', err.message);
-        else console.log('✅ Tabela estacoes criada/verificada com sucesso.');
-    });
+        // ============================================================
+        // TABELA 2: numeros
+        // ============================================================
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS numeros (
+                id SERIAL PRIMARY KEY,
+                numero TEXT UNIQUE,
+                operadora TEXT,
+                uf TEXT,
+                municipio TEXT,
+                latitude REAL,
+                longitude REAL,
+                data_cadastro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
 
-    // ============================================================
-    // TABELA 2: numeros
-    // ============================================================
-    db.run(`CREATE TABLE IF NOT EXISTS numeros (
-        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
-        \`numero\` TEXT UNIQUE,
-        \`operadora\` TEXT,
-        \`uf\` TEXT,
-        \`municipio\` TEXT,
-        \`latitude\` REAL,
-        \`longitude\` REAL,
-        \`data_cadastro\` DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`, (err) => {
-        if (err) console.error('❌ Erro ao criar tabela numeros:', err.message);
-    });
+        // ============================================================
+        // TABELA 3: historico
+        // ============================================================
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS historico (
+                id SERIAL PRIMARY KEY,
+                numero TEXT,
+                estacao_id TEXT,
+                distancia REAL,
+                data_consulta TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
 
-    // ============================================================
-    // TABELA 3: historico
-    // ============================================================
-    db.run(`CREATE TABLE IF NOT EXISTS historico (
-        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
-        \`numero\` TEXT,
-        \`estacao_id\` TEXT,
-        \`distancia\` REAL,
-        \`data_consulta\` DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`, (err) => {
-        if (err) console.error('❌ Erro ao criar tabela historico:', err.message);
-    });
+        // ============================================================
+        // TABELA 4: importacao_log
+        // ============================================================
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS importacao_log (
+                id SERIAL PRIMARY KEY,
+                arquivo TEXT,
+                registros_lidos INTEGER,
+                registros_importados INTEGER,
+                data_importacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
 
-    // ============================================================
-    // TABELA 4: importacao_log
-    // ============================================================
-    db.run(`CREATE TABLE IF NOT EXISTS importacao_log (
-        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
-        \`arquivo\` TEXT,
-        \`registros_lidos\` INTEGER,
-        \`registros_importados\` INTEGER,
-        \`data_importacao\` DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`, (err) => {
-        if (err) console.error('❌ Erro ao criar tabela importacao_log:', err.message);
-    });
+        // ============================================================
+        // TABELA 5: alvos
+        // ============================================================
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS alvos (
+                id SERIAL PRIMARY KEY,
+                numero TEXT UNIQUE,
+                operadora TEXT,
+                uf TEXT,
+                municipio TEXT,
+                tag TEXT,
+                nome TEXT,
+                data_cadastro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
 
-    // ============================================================
-    // TABELA 5: alvos
-    // ============================================================
-    db.run(`CREATE TABLE IF NOT EXISTS alvos (
-        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
-        \`numero\` TEXT UNIQUE,
-        \`operadora\` TEXT,
-        \`uf\` TEXT,
-        \`municipio\` TEXT,
-        \`tag\` TEXT,
-        \`nome\` TEXT,
-        \`data_cadastro\` DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`, (err) => {
-        if (err) console.error('❌ Erro ao criar tabela alvos:', err.message);
-    });
+        // ============================================================
+        // TABELA 6: bases
+        // ============================================================
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS bases (
+                id SERIAL PRIMARY KEY,
+                nome TEXT NOT NULL,
+                uf TEXT,
+                municipio TEXT,
+                latitude REAL,
+                longitude REAL,
+                descricao TEXT
+            )
+        `);
 
-    // ============================================================
-    // TABELA 6: bases
-    // ============================================================
-    db.run(`CREATE TABLE IF NOT EXISTS bases (
-        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
-        \`nome\` TEXT NOT NULL,
-        \`uf\` TEXT,
-        \`municipio\` TEXT,
-        \`latitude\` REAL,
-        \`longitude\` REAL,
-        \`descricao\` TEXT
-    )`, (err) => {
-        if (err) console.error('❌ Erro ao criar tabela bases:', err.message);
-    });
+        // ============================================================
+        // TABELA 7: recursos
+        // ============================================================
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS recursos (
+                id SERIAL PRIMARY KEY,
+                numero TEXT UNIQUE,
+                operadora TEXT,
+                nome TEXT,
+                base_id INTEGER,
+                status TEXT DEFAULT 'desconhecido',
+                FOREIGN KEY (base_id) REFERENCES bases(id)
+            )
+        `);
 
-    // ============================================================
-    // TABELA 7: recursos
-    // ============================================================
-    db.run(`CREATE TABLE IF NOT EXISTS recursos (
-        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
-        \`numero\` TEXT UNIQUE,
-        \`operadora\` TEXT,
-        \`nome\` TEXT,
-        \`base_id\` INTEGER,
-        \`status\` TEXT DEFAULT 'desconhecido',
-        FOREIGN KEY (\`base_id\`) REFERENCES \`bases\`(\`id\`)
-    )`, (err) => {
-        if (err) console.error('❌ Erro ao criar tabela recursos:', err.message);
-    });
+        // ============================================================
+        // TABELA 8: alocacoes (histórico de movimentações)
+        // ============================================================
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS alocacoes (
+                id SERIAL PRIMARY KEY,
+                recurso_id INTEGER,
+                base_id INTEGER,
+                data_inicio TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                data_fim TIMESTAMP,
+                FOREIGN KEY (recurso_id) REFERENCES recursos(id),
+                FOREIGN KEY (base_id) REFERENCES bases(id)
+            )
+        `);
 
-    // ============================================================
-    // TABELA 8: alocacoes (histórico de movimentações)
-    // ============================================================
-    db.run(`CREATE TABLE IF NOT EXISTS alocacoes (
-        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
-        \`recurso_id\` INTEGER,
-        \`base_id\` INTEGER,
-        \`data_inicio\` DATETIME DEFAULT CURRENT_TIMESTAMP,
-        \`data_fim\` DATETIME,
-        FOREIGN KEY (\`recurso_id\`) REFERENCES \`recursos\`(\`id\`),
-        FOREIGN KEY (\`base_id\`) REFERENCES \`bases\`(\`id\`)
-    )`, (err) => {
-        if (err) console.error('❌ Erro ao criar tabela alocacoes:', err.message);
-    });
+        // ============================================================
+        // TABELA 9: filtros inteligentes
+        // ============================================================
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS filtros (
+                id SERIAL PRIMARY KEY,
+                nome TEXT NOT NULL,
+                tag TEXT,
+                operadora TEXT,
+                uf TEXT,
+                municipio TEXT,
+                base_id INTEGER,
+                distancia_max REAL,
+                horario_inicio TEXT,
+                horario_fim TEXT,
+                notificar INTEGER DEFAULT 1,
+                ativo INTEGER DEFAULT 1,
+                data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        console.log('✅ Tabela filtros criada/verificada com sucesso.');
 
-    // ============================================================
-    // TABELA 9: filtros inteligentes
-    // ============================================================
-    db.run(`CREATE TABLE IF NOT EXISTS filtros (
-        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
-        \`nome\` TEXT NOT NULL,
-        \`tag\` TEXT,
-        \`operadora\` TEXT,
-        \`uf\` TEXT,
-        \`municipio\` TEXT,
-        \`base_id\` INTEGER,
-        \`distancia_max\` REAL,
-        \`horario_inicio\` TEXT,
-        \`horario_fim\` TEXT,
-        \`notificar\` INTEGER DEFAULT 1,
-        \`ativo\` INTEGER DEFAULT 1,
-        \`data_criacao\` DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`, (err) => {
-        if (err) console.error('❌ Erro ao criar tabela filtros:', err.message);
-        else console.log('✅ Tabela filtros criada/verificada com sucesso.');
-    });
+        // ============================================================
+        // TABELA 10: historico_localizacao (para inteligência preditiva)
+        // ============================================================
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS historico_localizacao (
+                id SERIAL PRIMARY KEY,
+                numero TEXT,
+                latitude REAL,
+                longitude REAL,
+                estacao_id TEXT,
+                data_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (numero) REFERENCES recursos(numero)
+            )
+        `);
+        console.log('✅ Tabela historico_localizacao criada/verificada com sucesso.');
 
-    // ============================================================
-    // TABELA 10: historico_localizacao (para inteligência preditiva)
-    // ============================================================
-    db.run(`CREATE TABLE IF NOT EXISTS historico_localizacao (
-        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
-        \`numero\` TEXT,
-        \`latitude\` REAL,
-        \`longitude\` REAL,
-        \`estacao_id\` TEXT,
-        \`data_hora\` DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (\`numero\`) REFERENCES \`recursos\`(\`numero\`)
-    )`, (err) => {
-        if (err) console.error('❌ Erro ao criar tabela historico_localizacao:', err.message);
-        else console.log('✅ Tabela historico_localizacao criada/verificada com sucesso.');
-    });
+        // ============================================================
+        // TABELA 11: dados_sinal (para Machine Learning)
+        // ============================================================
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS dados_sinal (
+                id SERIAL PRIMARY KEY,
+                numero TEXT,
+                estacao_id TEXT,
+                latitude REAL,
+                longitude REAL,
+                rsrp REAL,
+                sinr REAL,
+                ta REAL,
+                data_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        console.log('✅ Tabela dados_sinal criada/verificada com sucesso.');
 
-    // ============================================================
-    // TABELA 11: dados_sinal (para Machine Learning)
-    // ============================================================
-    db.run(`CREATE TABLE IF NOT EXISTS dados_sinal (
-        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
-        \`numero\` TEXT,
-        \`estacao_id\` TEXT,
-        \`latitude\` REAL,
-        \`longitude\` REAL,
-        \`rsrp\` REAL,
-        \`sinr\` REAL,
-        \`ta\` REAL,
-        \`data_hora\` DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`, (err) => {
-        if (err) console.error('❌ Erro ao criar tabela dados_sinal:', err.message);
-        else console.log('✅ Tabela dados_sinal criada/verificada com sucesso.');
-    });
+        // ============================================================
+        // TABELA 12: modelos (para salvar o modelo KNN persistentemente)
+        // ============================================================
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS modelos (
+                id SERIAL PRIMARY KEY,
+                nome TEXT NOT NULL,
+                modelo BYTEA,
+                total_registros INTEGER,
+                data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        console.log('✅ Tabela modelos criada/verificada com sucesso.');
 
-    // ============================================================
-    // TABELA 12: modelos (para salvar o modelo KNN persistentemente)
-    // ============================================================
-    db.run(`CREATE TABLE IF NOT EXISTS modelos (
-        \`id\` INTEGER PRIMARY KEY AUTOINCREMENT,
-        \`nome\` TEXT NOT NULL,
-        \`modelo\` BLOB,
-        \`total_registros\` INTEGER,
-        \`data_criacao\` DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`, (err) => {
-        if (err) console.error('❌ Erro ao criar tabela modelos:', err.message);
-        else console.log('✅ Tabela modelos criada/verificada com sucesso.');
-    });
-});
+    } catch (err) {
+        console.error('❌ Erro ao criar tabelas:', err.message);
+    }
+}
 
 // ============================================================
 // FUNÇÃO PARA PARSEAR LINHA CSV
@@ -386,68 +396,66 @@ async function importarERBs() {
                 }
             });
 
-            rl.on('close', () => {
+            rl.on('close', async () => {
                 const qtd = Object.keys(estacoes).length;
                 console.log(`✅ ${arquivo}: ${linhaAtual} linhas lidas, ${qtd} estações importadas.`);
                 console.log(`   ⚠️ ${ignorados} linhas ignoradas, ${erros} erros.`);
 
                 if (qtd > 0) {
-                    const stmt = db.prepare(`
-                        INSERT OR REPLACE INTO estacoes (
-                            \`id_estacao\`, \`operadora\`, \`uf\`, \`municipio\`, \`bairro\`, \`endereco\`,
-                            \`codigo_municipio_ibge\`, \`latitude\`, \`longitude\`, \`tecnologias\`,
-                            \`frequencias\`, \`azimutes\`, \`emissoes\`, \`fonte\`,
-                            \`opencellid_radio\`, \`opencellid_cell\`, \`opencellid_correspondencia\`, \`anatel_correspondencia\`
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    `);
-
-                    db.serialize(() => {
-                        db.run('BEGIN TRANSACTION');
-                        let count = 0;
-                        let errosInsercao = 0;
+                    try {
+                        await pool.query('BEGIN');
 
                         for (const id in estacoes) {
                             const e = estacoes[id];
-                            try {
-                                stmt.run(
-                                    e.id_estacao, e.operadora, e.uf, e.municipio, e.bairro, e.endereco,
-                                    e.codigo_municipio_ibge, e.latitude, e.longitude, e.tecnologias,
-                                    e.frequencias, e.azimutes, e.emissoes, e.fonte,
-                                    e.opencellid_radio, e.opencellid_cell, e.opencellid_correspondencia, e.anatel_correspondencia
-                                );
-                                count++;
-                                if (count % 5000 === 0) {
-                                    console.log(`   ⏳ ${count} estações inseridas...`);
-                                }
-                            } catch (insertErr) {
-                                errosInsercao++;
-                                if (errosInsercao <= 5) {
-                                    console.error(`   ❌ Erro ao inserir estação ${e.id_estacao}: ${insertErr.message}`);
-                                }
-                            }
+                            await pool.query(`
+                                INSERT INTO estacoes (
+                                    id_estacao, operadora, uf, municipio, bairro, endereco,
+                                    codigo_municipio_ibge, latitude, longitude, tecnologias,
+                                    frequencias, azimutes, emissoes, fonte,
+                                    opencellid_radio, opencellid_cell, opencellid_correspondencia, anatel_correspondencia
+                                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+                                ON CONFLICT (id_estacao) DO UPDATE SET
+                                    operadora = EXCLUDED.operadora,
+                                    uf = EXCLUDED.uf,
+                                    municipio = EXCLUDED.municipio,
+                                    bairro = EXCLUDED.bairro,
+                                    endereco = EXCLUDED.endereco,
+                                    codigo_municipio_ibge = EXCLUDED.codigo_municipio_ibge,
+                                    latitude = EXCLUDED.latitude,
+                                    longitude = EXCLUDED.longitude,
+                                    tecnologias = EXCLUDED.tecnologias,
+                                    frequencias = EXCLUDED.frequencias,
+                                    azimutes = EXCLUDED.azimutes,
+                                    emissoes = EXCLUDED.emissoes,
+                                    fonte = EXCLUDED.fonte,
+                                    opencellid_radio = EXCLUDED.opencellid_radio,
+                                    opencellid_cell = EXCLUDED.opencellid_cell,
+                                    opencellid_correspondencia = EXCLUDED.opencellid_correspondencia,
+                                    anatel_correspondencia = EXCLUDED.anatel_correspondencia
+                            `, [
+                                e.id_estacao, e.operadora, e.uf, e.municipio, e.bairro, e.endereco,
+                                e.codigo_municipio_ibge, e.latitude, e.longitude, e.tecnologias,
+                                e.frequencias, e.azimutes, e.emissoes, e.fonte,
+                                e.opencellid_radio, e.opencellid_cell, e.opencellid_correspondencia, e.anatel_correspondencia
+                            ]);
                         }
-                        stmt.finalize();
 
-                        db.run('COMMIT', (err) => {
-                            if (err) {
-                                console.error('❌ Erro no COMMIT da transação:', err.message);
-                                db.run('ROLLBACK');
-                            } else {
-                                console.log(`   ✅ ${count} estações inseridas com sucesso.`);
-                                if (errosInsercao > 0) {
-                                    console.log(`   ⚠️ ${errosInsercao} estações tiveram erro na inserção.`);
-                                }
-                            }
-                        });
-                    });
+                        await pool.query('COMMIT');
+                        console.log(`   ✅ ${qtd} estações inseridas com sucesso.`);
+                    } catch (err) {
+                        await pool.query('ROLLBACK');
+                        console.error(`   ❌ Erro ao inserir estações:`, err.message);
+                    }
                 }
 
-                const logStmt = db.prepare(`
-                    INSERT INTO importacao_log (\`arquivo\`, \`registros_lidos\`, \`registros_importados\`)
-                    VALUES (?, ?, ?)
-                `);
-                logStmt.run(arquivo, linhaAtual, qtd);
-                logStmt.finalize();
+                try {
+                    await pool.query(`
+                        INSERT INTO importacao_log (arquivo, registros_lidos, registros_importados)
+                        VALUES ($1, $2, $3)
+                    `, [arquivo, linhaAtual, qtd]);
+                } catch (err) {
+                    console.error('❌ Erro ao registrar log:', err.message);
+                }
 
                 resolve();
             });
@@ -464,160 +472,141 @@ async function importarERBs() {
 // ============================================================
 // FUNÇÃO PARA SALVAR O MODELO NO BANCO DE DADOS
 // ============================================================
-function salvarModeloNoBanco(features, labels, totalRegistros) {
-    return new Promise((resolve, reject) => {
+async function salvarModeloNoBanco(features, labels, totalRegistros) {
+    try {
         const modelData = { features, labels };
         const modelJSON = JSON.stringify(modelData);
         const modeloBuffer = Buffer.from(modelJSON, 'utf8');
 
-        const stmt = db.prepare(`
-            INSERT OR REPLACE INTO modelos (\`nome\`, \`modelo\`, \`total_registros\`)
-            VALUES (?, ?, ?)
-        `);
-        stmt.run('knn_model', modeloBuffer, totalRegistros, function(err) {
-            stmt.finalize();
-            if (err) {
-                reject(err);
-            } else {
-                console.log(`✅ Modelo salvo no banco de dados (${totalRegistros} registros).`);
-                resolve(this.lastID);
-            }
-        });
-    });
+        await pool.query(`
+            INSERT INTO modelos (nome, modelo, total_registros)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (nome) DO UPDATE SET
+                modelo = EXCLUDED.modelo,
+                total_registros = EXCLUDED.total_registros,
+                data_criacao = CURRENT_TIMESTAMP
+        `, ['knn_model', modeloBuffer, totalRegistros]);
+
+        console.log(`✅ Modelo salvo no banco de dados (${totalRegistros} registros).`);
+        return { success: true };
+    } catch (err) {
+        console.error('❌ Erro ao salvar modelo:', err.message);
+        throw err;
+    }
 }
 
 // ============================================================
 // FUNÇÃO PARA CARREGAR O MODELO DO BANCO DE DADOS
 // ============================================================
-function carregarModeloDoBanco() {
-    return new Promise((resolve, reject) => {
-        db.get('SELECT * FROM modelos WHERE nome = ? ORDER BY data_criacao DESC LIMIT 1', ['knn_model'], (err, row) => {
-            if (err) {
-                reject('Erro ao carregar modelo: ' + err.message);
-                return;
-            }
-            if (!row) {
-                reject('Modelo não encontrado no banco de dados.');
-                return;
-            }
+async function carregarModeloDoBanco() {
+    try {
+        const result = await pool.query(`
+            SELECT * FROM modelos WHERE nome = $1 ORDER BY data_criacao DESC LIMIT 1
+        `, ['knn_model']);
 
-            try {
-                const modelJSON = row.modelo.toString('utf8');
-                const modelData = JSON.parse(modelJSON);
-                resolve(modelData);
-            } catch (e) {
-                reject('Erro ao parsear modelo: ' + e.message);
-            }
-        });
-    });
+        if (result.rows.length === 0) {
+            throw new Error('Modelo não encontrado no banco de dados.');
+        }
+
+        const row = result.rows[0];
+        const modelJSON = row.modelo.toString('utf8');
+        const modelData = JSON.parse(modelJSON);
+        return modelData;
+    } catch (err) {
+        throw new Error('Erro ao carregar modelo: ' + err.message);
+    }
 }
 
 // ============================================================
 // FUNÇÃO PARA TREINAR O MODELO KNN (SALVANDO NO BANCO)
 // ============================================================
-function treinarModeloKNN() {
-    return new Promise((resolve, reject) => {
-        db.all('SELECT * FROM dados_sinal', (err, rows) => {
-            if (err) {
-                reject('Erro ao buscar dados de sinal: ' + err.message);
-                return;
-            }
+async function treinarModeloKNN() {
+    try {
+        const result = await pool.query('SELECT * FROM dados_sinal');
+        const rows = result.rows;
 
-            if (rows.length < 10) {
-                reject('Dados insuficientes para treinar o modelo (mínimo 10 registros).');
-                return;
-            }
+        if (rows.length < 10) {
+            throw new Error('Dados insuficientes para treinar o modelo (mínimo 10 registros).');
+        }
 
-            // Prepara os dados para o modelo
-            const features = [];
-            const labels = [];
+        const features = [];
+        const labels = [];
 
-            rows.forEach(row => {
-                const feature = [
-                    row.estacao_id,
-                    row.rsrp || 0,
-                    row.sinr || 0,
-                    row.ta || 0
-                ];
-                features.push(feature);
-                labels.push([row.latitude, row.longitude]);
-            });
-
-            // Salva o modelo no banco de dados
-            salvarModeloNoBanco(features, labels, rows.length)
-                .then(id => {
-                    resolve({ total_registros: rows.length, id: id });
-                })
-                .catch(error => {
-                    reject(error);
-                });
+        rows.forEach(row => {
+            const feature = [
+                row.estacao_id,
+                row.rsrp || 0,
+                row.sinr || 0,
+                row.ta || 0
+            ];
+            features.push(feature);
+            labels.push([row.latitude, row.longitude]);
         });
-    });
+
+        await salvarModeloNoBanco(features, labels, rows.length);
+        return { total_registros: rows.length };
+    } catch (err) {
+        throw new Error('Erro ao treinar modelo: ' + err.message);
+    }
 }
 
 // ============================================================
 // FUNÇÃO PARA PREDIZER LOCALIZAÇÃO COM KNN (CARREGANDO DO BANCO)
 // ============================================================
-function predizerLocalizacaoKNN(estacao_id, rsrp, sinr, ta, k = 3) {
-    return new Promise((resolve, reject) => {
-        // Carrega o modelo do banco
-        carregarModeloDoBanco()
-            .then(modelData => {
-                const { features, labels } = modelData;
+async function predizerLocalizacaoKNN(estacao_id, rsrp, sinr, ta, k = 3) {
+    try {
+        const modelData = await carregarModeloDoBanco();
+        const { features, labels } = modelData;
 
-                if (features.length === 0) {
-                    reject('Modelo vazio.');
-                    return;
-                }
+        if (features.length === 0) {
+            throw new Error('Modelo vazio.');
+        }
 
-                const query = [estacao_id, rsrp || 0, sinr || 0, ta || 0];
+        const query = [estacao_id, rsrp || 0, sinr || 0, ta || 0];
 
-                const distances = features.map((feature, index) => {
-                    const dist = Math.sqrt(
-                        Math.pow(feature[0] - query[0], 2) +
-                        Math.pow(feature[1] - query[1], 2) +
-                        Math.pow(feature[2] - query[2], 2) +
-                        Math.pow(feature[3] - query[3], 2)
-                    );
-                    return { index, distance: dist };
-                });
+        const distances = features.map((feature, index) => {
+            const dist = Math.sqrt(
+                Math.pow(feature[0] - query[0], 2) +
+                Math.pow(feature[1] - query[1], 2) +
+                Math.pow(feature[2] - query[2], 2) +
+                Math.pow(feature[3] - query[3], 2)
+            );
+            return { index, distance: dist };
+        });
 
-                distances.sort((a, b) => a.distance - b.distance);
-                const kNearest = distances.slice(0, k);
+        distances.sort((a, b) => a.distance - b.distance);
+        const kNearest = distances.slice(0, k);
 
-                let sumLat = 0;
-                let sumLon = 0;
-                kNearest.forEach(neighbor => {
-                    sumLat += labels[neighbor.index][0];
-                    sumLon += labels[neighbor.index][1];
-                });
+        let sumLat = 0;
+        let sumLon = 0;
+        kNearest.forEach(neighbor => {
+            sumLat += labels[neighbor.index][0];
+            sumLon += labels[neighbor.index][1];
+        });
 
-                const predLat = sumLat / k;
-                const predLon = sumLon / k;
+        const predLat = sumLat / k;
+        const predLon = sumLon / k;
 
-                resolve({ latitude: predLat, longitude: predLon, k: k });
-            })
-            .catch(error => {
-                reject('Erro ao carregar modelo: ' + error);
-            });
-    });
+        return { latitude: predLat, longitude: predLon, k: k };
+    } catch (err) {
+        throw new Error('Erro ao predizer localização: ' + err.message);
+    }
 }
 
 // ============================================================
-// ROTAS DA API
+// ROTAS DA API (ADAPTADAS PARA POSTGRESQL)
 // ============================================================
 
 // ============================================================
 // ROTAS PARA ESTAÇÕES (ERBs)
 // ============================================================
 
-app.get('/api/estacoes/mais-proxima', (req, res) => {
+app.get('/api/estacoes/mais-proxima', async (req, res) => {
     const { lat, lon } = req.query;
-    
-    // NÃO USA FALLBACK - retorna erro se não houver coordenadas
+
     if (!lat || !lon) {
-        return res.status(400).json({ 
-            error: 'Latitude e longitude são obrigatórias. Nenhum fallback será usado.' 
+        return res.status(400).json({
+            error: 'Latitude e longitude são obrigatórias. Nenhum fallback será usado.'
         });
     }
 
@@ -625,850 +614,330 @@ app.get('/api/estacoes/mais-proxima', (req, res) => {
     const longitude = parseFloat(lon);
 
     if (isNaN(latitude) || isNaN(longitude)) {
-        return res.status(400).json({ 
-            error: 'Latitude e longitude devem ser números válidos.' 
+        return res.status(400).json({
+            error: 'Latitude e longitude devem ser números válidos.'
         });
     }
 
-    const sql = `
-        SELECT *,
-            (6371 * acos( cos(radians(?)) * cos(radians(\`latitude\`)) *
-                cos(radians(\`longitude\`) - radians(?)) + sin(radians(?)) *
-                sin(radians(\`latitude\`)) )) AS distancia
-        FROM estacoes
-        WHERE \`latitude\` IS NOT NULL AND \`longitude\` IS NOT NULL
-        ORDER BY distancia ASC
-        LIMIT 1
-    `;
+    try {
+        const result = await pool.query(`
+            SELECT *,
+                (6371 * acos( cos(radians($1)) * cos(radians(latitude)) *
+                    cos(radians(longitude) - radians($2)) + sin(radians($1)) *
+                    sin(radians(latitude)) )) AS distancia
+            FROM estacoes
+            WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+            ORDER BY distancia ASC
+            LIMIT 1
+        `, [latitude, longitude]);
 
-    db.get(sql, [latitude, longitude, latitude], (err, row) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        if (!row) {
-            return res.status(404).json({ 
-                error: 'Nenhuma ERB encontrada nas proximidades. Verifique se a localização está correta.' 
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                error: 'Nenhuma ERB encontrada nas proximidades.'
             });
         }
-        res.json(row);
-    });
+        res.json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.get('/api/estacoes/proximas', (req, res) => {
+app.get('/api/estacoes/proximas', async (req, res) => {
     const { lat, lon, raio } = req.query;
     if (!lat || !lon) {
         return res.status(400).json({ error: 'Latitude e longitude são obrigatórias' });
     }
 
     const raioKm = parseFloat(raio) || 10;
-    const sql = `
-        SELECT *,
-            (6371 * acos( cos(radians(?)) * cos(radians(\`latitude\`)) *
-                cos(radians(\`longitude\`) - radians(?)) + sin(radians(?)) *
-                sin(radians(\`latitude\`)) )) AS distancia
-        FROM estacoes
-        WHERE \`latitude\` IS NOT NULL AND \`longitude\` IS NOT NULL
-        AND (6371 * acos( cos(radians(?)) * cos(radians(\`latitude\`)) *
-                cos(radians(\`longitude\`) - radians(?)) + sin(radians(?)) *
-                sin(radians(\`latitude\`)) )) <= ?
-        ORDER BY distancia
-        LIMIT 50
-    `;
+    try {
+        const result = await pool.query(`
+            SELECT *,
+                (6371 * acos( cos(radians($1)) * cos(radians(latitude)) *
+                    cos(radians(longitude) - radians($2)) + sin(radians($1)) *
+                    sin(radians(latitude)) )) AS distancia
+            FROM estacoes
+            WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+            AND (6371 * acos( cos(radians($1)) * cos(radians(latitude)) *
+                    cos(radians(longitude) - radians($2)) + sin(radians($1)) *
+                    sin(radians(latitude)) )) <= $3
+            ORDER BY distancia
+            LIMIT 50
+        `, [lat, lon, raioKm]);
 
-    db.all(sql, [lat, lon, lat, lat, lon, lat, raioKm], (err, rows) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json(rows);
-    });
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.get('/api/estacoes/:id', (req, res) => {
+app.get('/api/estacoes/:id', async (req, res) => {
     const { id } = req.params;
-    db.get('SELECT * FROM estacoes WHERE `id_estacao` = ?', [id], (err, row) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        if (!row) {
+    try {
+        const result = await pool.query('SELECT * FROM estacoes WHERE id_estacao = $1', [id]);
+        if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Estação não encontrada' });
         }
-        res.json(row);
-    });
+        res.json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.get('/api/estacoes/uf/:uf', (req, res) => {
+app.get('/api/estacoes/uf/:uf', async (req, res) => {
     const { uf } = req.params;
-    db.all('SELECT * FROM estacoes WHERE `uf` = ? ORDER BY `municipio`', [uf.toUpperCase()], (err, rows) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json(rows);
-    });
+    try {
+        const result = await pool.query('SELECT * FROM estacoes WHERE uf = $1 ORDER BY municipio', [uf.toUpperCase()]);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.get('/api/estacoes/operadora/:operadora', (req, res) => {
+app.get('/api/estacoes/operadora/:operadora', async (req, res) => {
     const { operadora } = req.params;
-    db.all('SELECT * FROM estacoes WHERE `operadora` LIKE ? ORDER BY `uf`, `municipio`', [`%${operadora}%`], (err, rows) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json(rows);
-    });
+    try {
+        const result = await pool.query('SELECT * FROM estacoes WHERE operadora LIKE $1 ORDER BY uf, municipio', [`%${operadora}%`]);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // ============================================================
 // ROTAS PARA NÚMEROS
 // ============================================================
 
-app.post('/api/numeros', (req, res) => {
+app.post('/api/numeros', async (req, res) => {
     const { numero, operadora, uf, municipio } = req.body;
     if (!numero) {
         return res.status(400).json({ error: 'Número é obrigatório' });
     }
 
-    const stmt = db.prepare(`
-        INSERT OR REPLACE INTO numeros (\`numero\`, \`operadora\`, \`uf\`, \`municipio\`)
-        VALUES (?, ?, ?, ?)
-    `);
-    stmt.run(numero, operadora || '', uf || '', municipio || '', function(err) {
-        stmt.finalize();
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json({ success: true, id: this.lastID });
-    });
+    try {
+        await pool.query(`
+            INSERT INTO numeros (numero, operadora, uf, municipio)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (numero) DO UPDATE SET
+                operadora = EXCLUDED.operadora,
+                uf = EXCLUDED.uf,
+                municipio = EXCLUDED.municipio
+        `, [numero, operadora || '', uf || '', municipio || '']);
+
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.post('/api/numeros/localizacao', (req, res) => {
+app.post('/api/numeros/localizacao', async (req, res) => {
     const { numero, latitude, longitude, uf, municipio } = req.body;
     if (!numero || latitude === undefined || longitude === undefined) {
         return res.status(400).json({ error: 'Número, latitude e longitude são obrigatórios' });
     }
 
-    const stmt = db.prepare(`
-        INSERT OR REPLACE INTO numeros (\`numero\`, \`uf\`, \`municipio\`, \`latitude\`, \`longitude\`)
-        VALUES (?, ?, ?, ?, ?)
-    `);
-    stmt.run(numero, uf || '', municipio || '', latitude, longitude, function(err) {
-        stmt.finalize();
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
+    try {
+        await pool.query(`
+            INSERT INTO numeros (numero, uf, municipio, latitude, longitude)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (numero) DO UPDATE SET
+                uf = EXCLUDED.uf,
+                municipio = EXCLUDED.municipio,
+                latitude = EXCLUDED.latitude,
+                longitude = EXCLUDED.longitude
+        `, [numero, uf || '', municipio || '', latitude, longitude]);
+
         res.json({ success: true, message: `Localização do número ${numero} atualizada` });
-    });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.get('/api/numeros', (req, res) => {
-    db.all('SELECT * FROM numeros ORDER BY `data_cadastro` DESC', (err, rows) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json(rows);
-    });
+app.get('/api/numeros', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM numeros ORDER BY data_cadastro DESC');
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.get('/api/numeros/:numero', (req, res) => {
+app.get('/api/numeros/:numero', async (req, res) => {
     const { numero } = req.params;
-    db.get('SELECT * FROM numeros WHERE `numero` = ?', [numero], (err, row) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        if (!row) {
+    try {
+        const result = await pool.query('SELECT * FROM numeros WHERE numero = $1', [numero]);
+        if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Número não encontrado' });
         }
-        res.json(row);
-    });
+        res.json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // ============================================================
 // ROTAS PARA ALVOS
 // ============================================================
 
-app.post('/api/alvos', (req, res) => {
+app.post('/api/alvos', async (req, res) => {
     const { numero, operadora, uf, municipio, tag, nome } = req.body;
     if (!numero) {
         return res.status(400).json({ error: 'Número é obrigatório' });
     }
 
-    const stmt = db.prepare(`
-        INSERT OR REPLACE INTO alvos (\`numero\`, \`operadora\`, \`uf\`, \`municipio\`, \`tag\`, \`nome\`)
-        VALUES (?, ?, ?, ?, ?, ?)
-    `);
-    stmt.run(numero, operadora || '', uf || '', municipio || '', tag || '', nome || '', function(err) {
-        stmt.finalize();
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json({ success: true, id: this.lastID });
-    });
+    try {
+        await pool.query(`
+            INSERT INTO alvos (numero, operadora, uf, municipio, tag, nome)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (numero) DO UPDATE SET
+                operadora = EXCLUDED.operadora,
+                uf = EXCLUDED.uf,
+                municipio = EXCLUDED.municipio,
+                tag = EXCLUDED.tag,
+                nome = EXCLUDED.nome
+        `, [numero, operadora || '', uf || '', municipio || '', tag || '', nome || '']);
+
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.get('/api/alvos', (req, res) => {
-    db.all('SELECT * FROM alvos ORDER BY data_cadastro DESC', (err, rows) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json(rows);
-    });
+app.get('/api/alvos', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM alvos ORDER BY data_cadastro DESC');
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.get('/api/alvos/tag/:tag', (req, res) => {
+app.get('/api/alvos/tag/:tag', async (req, res) => {
     const { tag } = req.params;
-    db.all('SELECT * FROM alvos WHERE tag = ? ORDER BY data_cadastro DESC', [tag], (err, rows) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json(rows);
-    });
+    try {
+        const result = await pool.query('SELECT * FROM alvos WHERE tag = $1 ORDER BY data_cadastro DESC', [tag]);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.delete('/api/alvos/:id', (req, res) => {
+app.delete('/api/alvos/:id', async (req, res) => {
     const { id } = req.params;
-    db.run('DELETE FROM alvos WHERE id = ?', [id], function(err) {
-        if (err) {
-            return res.status(500).json({ error: err.message });
+    try {
+        const result = await pool.query('DELETE FROM alvos WHERE id = $1', [id]);
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Alvo não encontrado' });
         }
-        res.json({ success: true, deleted: this.changes });
-    });
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // ============================================================
 // ROTAS PARA BASES
 // ============================================================
 
-app.post('/api/bases', (req, res) => {
+app.post('/api/bases', async (req, res) => {
     const { nome, uf, municipio, latitude, longitude, descricao } = req.body;
     if (!nome || latitude === undefined || longitude === undefined) {
         return res.status(400).json({ error: 'Nome, latitude e longitude são obrigatórios' });
     }
 
-    const stmt = db.prepare(`
-        INSERT INTO bases (\`nome\`, \`uf\`, \`municipio\`, \`latitude\`, \`longitude\`, \`descricao\`)
-        VALUES (?, ?, ?, ?, ?, ?)
-    `);
-    stmt.run(nome, uf || '', municipio || '', latitude, longitude, descricao || '', function(err) {
-        stmt.finalize();
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json({ success: true, id: this.lastID });
-    });
+    try {
+        const result = await pool.query(`
+            INSERT INTO bases (nome, uf, municipio, latitude, longitude, descricao)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id
+        `, [nome, uf || '', municipio || '', latitude, longitude, descricao || '']);
+
+        res.json({ success: true, id: result.rows[0].id });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.get('/api/bases', (req, res) => {
-    db.all('SELECT * FROM bases ORDER BY nome', (err, rows) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json(rows);
-    });
+app.get('/api/bases', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM bases ORDER BY nome');
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.get('/api/bases/:id', (req, res) => {
+app.get('/api/bases/:id', async (req, res) => {
     const { id } = req.params;
-    db.get('SELECT * FROM bases WHERE id = ?', [id], (err, row) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        if (!row) {
+    try {
+        const result = await pool.query('SELECT * FROM bases WHERE id = $1', [id]);
+        if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Base não encontrada' });
         }
-        res.json(row);
-    });
+        res.json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.delete('/api/bases/:id', (req, res) => {
+app.delete('/api/bases/:id', async (req, res) => {
     const { id } = req.params;
-    db.run('DELETE FROM bases WHERE id = ?', [id], function(err) {
-        if (err) {
-            return res.status(500).json({ error: err.message });
+    try {
+        const result = await pool.query('DELETE FROM bases WHERE id = $1', [id]);
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Base não encontrada' });
         }
-        res.json({ success: true, deleted: this.changes });
-    });
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // ============================================================
-// ROTAS PARA RECURSOS (COM CRIAÇÃO AUTOMÁTICA DE BASE USANDO LOCALIZAÇÃO REAL)
+// ROTAS PARA RECURSOS
 // ============================================================
 
-/**
- * Cria uma base automática usando coordenadas reais (sem fallback para Brasília)
- * @param {string} numero - Número do recurso
- * @param {number} lat - Latitude real
- * @param {number} lon - Longitude real
- * @returns {Promise<number|null>} ID da base criada ou null se não houver coordenadas
- */
 async function criarBaseAutomatica(numero, lat = null, lon = null) {
-    // Se não houver coordenadas fornecidas, NÃO CRIA a base
     if (lat === null || lon === null) {
         console.log(`⚠️ Número ${numero}: coordenadas não fornecidas. Base NÃO criada.`);
         return null;
     }
-    
+
     const nomeBase = `Base Automática - ${numero}`;
-    return new Promise((resolve, reject) => {
-        const stmt = db.prepare(`
-            INSERT INTO bases (\`nome\`, \`uf\`, \`municipio\`, \`latitude\`, \`longitude\`, \`descricao\`)
-            VALUES (?, ?, ?, ?, ?, ?)
-        `);
-        stmt.run(nomeBase, '', '', lat, lon, 'Base criada automaticamente pelo ORION', function(err) {
-            stmt.finalize();
-            if (err) {
-                reject(err);
-            } else {
-                console.log(`✅ Base automática criada para o número ${numero} com coordenadas reais (${lat}, ${lon})`);
-                resolve(this.lastID);
-            }
-        });
-    });
+    try {
+        const result = await pool.query(`
+            INSERT INTO bases (nome, uf, municipio, latitude, longitude, descricao)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id
+        `, [nomeBase, '', '', lat, lon, 'Base criada automaticamente pelo ORION']);
+
+        console.log(`✅ Base automática criada para o número ${numero} com coordenadas reais (${lat}, ${lon})`);
+        return result.rows[0].id;
+    } catch (err) {
+        console.error('❌ Erro ao criar base automática:', err.message);
+        return null;
+    }
 }
 
-app.post('/api/recursos', (req, res) => {
+app.post('/api/recursos', async (req, res) => {
     const { numero, operadora, nome, base_id, status, latitude, longitude } = req.body;
     if (!numero) {
         return res.status(400).json({ error: 'Número é obrigatório' });
     }
 
-    db.get('SELECT * FROM recursos WHERE numero = ?', [numero], async (err, recursoExistente) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-
+    try {
+        const recursoExistente = await pool.query('SELECT * FROM recursos WHERE numero = $1', [numero]);
         let finalBaseId = base_id;
 
-        // Se não houver base_id e o número for novo, tenta criar com coordenadas reais
-        if (!recursoExistente && !base_id) {
-            // Só cria base se houver coordenadas fornecidas
+        if (recursoExistente.rows.length === 0 && !base_id) {
             if (latitude && longitude) {
-                try {
-                    finalBaseId = await criarBaseAutomatica(numero, latitude, longitude);
-                } catch (error) {
-                    return res.status(500).json({ error: 'Erro ao criar base automática: ' + error.message });
-                }
+                finalBaseId = await criarBaseAutomatica(numero, latitude, longitude);
             } else {
-                // Se não houver coordenadas, NÃO cria base - o número ficará sem base
                 console.log(`⚠️ Número ${numero} cadastrado sem coordenadas. Base NÃO criada.`);
             }
         }
 
-        const stmt = db.prepare(`
-            INSERT OR REPLACE INTO recursos (\`numero\`, \`operadora\`, \`nome\`, \`base_id\`, \`status\`)
-            VALUES (?, ?, ?, ?, ?)
-        `);
-        stmt.run(numero, operadora || '', nome || '', finalBaseId || null, status || 'desconhecido', function(err) {
-            stmt.finalize();
-            if (err) {
-                return res.status(500).json({ error: err.message });
-            }
-            res.json({
-                success: true,
-                id: this.lastID,
-                base_id: finalBaseId,
-                message: recursoExistente ? 'Recurso atualizado' : 'Recurso cadastrado' + (finalBaseId ? ' com base automática' : ' sem base')
-            });
-        });
-    });
-});
-
-app.get('/api/recursos', (req, res) => {
-    db.all('SELECT * FROM recursos ORDER BY numero', (err, rows) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json(rows);
-    });
-});
-
-app.get('/api/recursos/:id', (req, res) => {
-    const { id } = req.params;
-    db.get('SELECT * FROM recursos WHERE id = ?', [id], (err, row) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        if (!row) {
-            return res.status(404).json({ error: 'Recurso não encontrado' });
-        }
-        res.json(row);
-    });
-});
-
-app.get('/api/recursos/numero/:numero', (req, res) => {
-    const { numero } = req.params;
-    db.get('SELECT * FROM recursos WHERE numero = ?', [numero], (err, row) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        if (!row) {
-            return res.status(404).json({ error: 'Recurso não encontrado' });
-        }
-        res.json(row);
-    });
-});
-
-app.put('/api/recursos/:id/mover', (req, res) => {
-    const { id } = req.params;
-    const { base_id } = req.body;
-    if (base_id === undefined) {
-        return res.status(400).json({ error: 'base_id é obrigatório' });
-    }
-
-    const stmt = db.prepare('UPDATE recursos SET base_id = ? WHERE id = ?');
-    stmt.run(base_id, id, function(err) {
-        stmt.finalize();
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json({ success: true, updated: this.changes });
-    });
-});
-
-app.delete('/api/recursos/:id', (req, res) => {
-    const { id } = req.params;
-    db.run('DELETE FROM recursos WHERE id = ?', [id], function(err) {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json({ success: true, deleted: this.changes });
-    });
-});
-
-// ============================================================
-// ROTAS PARA FILTROS INTELIGENTES
-// ============================================================
-
-app.post('/api/filtros', (req, res) => {
-    const { nome, tag, operadora, uf, municipio, base_id, distancia_max, horario_inicio, horario_fim, notificar, ativo } = req.body;
-    if (!nome) {
-        return res.status(400).json({ error: 'Nome do filtro é obrigatório' });
-    }
-
-    const stmt = db.prepare(`
-        INSERT INTO filtros (
-            \`nome\`, \`tag\`, \`operadora\`, \`uf\`, \`municipio\`, \`base_id\`,
-            \`distancia_max\`, \`horario_inicio\`, \`horario_fim\`, \`notificar\`, \`ativo\`
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    stmt.run(
-        nome, tag || null, operadora || null, uf || null, municipio || null, base_id || null,
-        distancia_max || null, horario_inicio || null, horario_fim || null,
-        notificar !== undefined ? notificar : 1,
-        ativo !== undefined ? ativo : 1,
-        function(err) {
-            stmt.finalize();
-            if (err) {
-                return res.status(500).json({ error: err.message });
-            }
-            res.json({ success: true, id: this.lastID });
-        }
-    );
-});
-
-app.get('/api/filtros', (req, res) => {
-    db.all('SELECT * FROM filtros ORDER BY nome', (err, rows) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json(rows);
-    });
-});
-
-app.get('/api/filtros/:id', (req, res) => {
-    const { id } = req.params;
-    db.get('SELECT * FROM filtros WHERE id = ?', [id], (err, row) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        if (!row) {
-            return res.status(404).json({ error: 'Filtro não encontrado' });
-        }
-        res.json(row);
-    });
-});
-
-app.put('/api/filtros/:id', (req, res) => {
-    const { id } = req.params;
-    const { nome, tag, operadora, uf, municipio, base_id, distancia_max, horario_inicio, horario_fim, notificar, ativo } = req.body;
-
-    const stmt = db.prepare(`
-        UPDATE filtros SET
-            \`nome\` = ?, \`tag\` = ?, \`operadora\` = ?, \`uf\` = ?, \`municipio\` = ?,
-            \`base_id\` = ?, \`distancia_max\` = ?, \`horario_inicio\` = ?, \`horario_fim\` = ?,
-            \`notificar\` = ?, \`ativo\` = ?
-        WHERE id = ?
-    `);
-    stmt.run(
-        nome, tag || null, operadora || null, uf || null, municipio || null,
-        base_id || null, distancia_max || null, horario_inicio || null, horario_fim || null,
-        notificar !== undefined ? notificar : 1,
-        ativo !== undefined ? ativo : 1,
-        id,
-        function(err) {
-            stmt.finalize();
-            if (err) {
-                return res.status(500).json({ error: err.message });
-            }
-            res.json({ success: true, updated: this.changes });
-        }
-    );
-});
-
-app.delete('/api/filtros/:id', (req, res) => {
-    const { id } = req.params;
-    db.run('DELETE FROM filtros WHERE id = ?', [id], function(err) {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json({ success: true, deleted: this.changes });
-    });
-});
-
-// ============================================================
-// ROTAS PARA HISTÓRICO E INTELIGÊNCIA PREDITIVA
-// ============================================================
-
-app.get('/api/historico', (req, res) => {
-    db.all(`
-        SELECT h.*, e.\`operadora\`, e.\`municipio\`, e.\`uf\`
-        FROM historico h
-        LEFT JOIN estacoes e ON h.\`estacao_id\` = e.\`id_estacao\`
-        ORDER BY h.\`data_consulta\` DESC
-        LIMIT 100
-    `, (err, rows) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json(rows);
-    });
-});
-
-app.post('/api/historico', (req, res) => {
-    const { numero, estacao_id, distancia } = req.body;
-    if (!numero || !estacao_id) {
-        return res.status(400).json({ error: 'Número e estacao_id são obrigatórios' });
-    }
-
-    const stmt = db.prepare(`
-        INSERT INTO historico (\`numero\`, \`estacao_id\`, \`distancia\`)
-        VALUES (?, ?, ?)
-    `);
-    stmt.run(numero, estacao_id, distancia || null, function(err) {
-        stmt.finalize();
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json({ success: true, id: this.lastID });
-    });
-});
-
-app.post('/api/historico-localizacao', (req, res) => {
-    const { numero, latitude, longitude, estacao_id } = req.body;
-    if (!numero || latitude === undefined || longitude === undefined) {
-        return res.status(400).json({ error: 'Número, latitude e longitude são obrigatórios' });
-    }
-
-    const stmt = db.prepare(`
-        INSERT INTO historico_localizacao (\`numero\`, \`latitude\`, \`longitude\`, \`estacao_id\`)
-        VALUES (?, ?, ?, ?)
-    `);
-    stmt.run(numero, latitude, longitude, estacao_id || null, function(err) {
-        stmt.finalize();
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json({ success: true, id: this.lastID });
-    });
-});
-
-app.get('/api/analise-padroes', (req, res) => {
-    const { numero } = req.query;
-
-    if (!numero) {
-        return res.status(400).json({ error: 'Número é obrigatório' });
-    }
-
-    db.all(`
-        SELECT
-            \`latitude\`,
-            \`longitude\`,
-            COUNT(*) AS frequencia,
-            DATE(\`data_hora\`) AS data,
-            strftime('%H', \`data_hora\`) AS hora
-        FROM historico_localizacao
-        WHERE \`numero\` = ?
-        GROUP BY \`latitude\`, \`longitude\`, DATE(\`data_hora\`), strftime('%H', \`data_hora\`)
-        ORDER BY \`data_hora\` DESC
-        LIMIT 100
-    `, [numero], (err, rows) => {
-        if (err) {
-            console.error('❌ Erro ao buscar histórico:', err.message);
-            return res.status(500).json({ error: err.message });
-        }
-
-        if (rows.length === 0) {
-            return res.json({ pattern: 'Sem dados suficientes' });
-        }
-
-        const locationCount = {};
-        rows.forEach(row => {
-            const key = `${row.latitude},${row.longitude}`;
-            locationCount[key] = (locationCount[key] || 0) + row.frequencia;
-        });
-
-        let mostFrequent = null;
-        let maxCount = 0;
-        for (const [key, count] of Object.entries(locationCount)) {
-            if (count > maxCount) {
-                maxCount = count;
-                mostFrequent = key;
-            }
-        }
-
-        const [lat, lon] = mostFrequent ? mostFrequent.split(',').map(Number) : [null, null];
-
-        const hourCount = {};
-        rows.forEach(row => {
-            const hora = row.hora;
-            hourCount[hora] = (hourCount[hora] || 0) + 1;
-        });
-
-        let mostFrequentHour = null;
-        let maxHourCount = 0;
-        for (const [hora, count] of Object.entries(hourCount)) {
-            if (count > maxHourCount) {
-                maxHourCount = count;
-                mostFrequentHour = hora;
-            }
-        }
-
-        res.json({
-            pattern: {
-                localizacao_mais_frequente: { latitude: lat, longitude: lon },
-                horario_mais_frequente: mostFrequentHour,
-                total_registros: rows.length
-            }
-        });
-    });
-});
-
-app.get('/api/alertas', (req, res) => {
-    const { numero } = req.query;
-
-    if (!numero) {
-        return res.status(400).json({ error: 'Número é obrigatório' });
-    }
-
-    db.all(`
-        SELECT
-            \`latitude\`,
-            \`longitude\`,
-            \`data_hora\`
-        FROM historico_localizacao
-        WHERE \`numero\` = ?
-        ORDER BY \`data_hora\` DESC
-        LIMIT 10
-    `, [numero], (err, rows) => {
-        if (err) {
-            console.error('❌ Erro ao buscar localizações:', err.message);
-            return res.status(500).json({ error: err.message });
-        }
-
-        if (rows.length < 3) {
-            return res.json({ alerta: 'Sem dados suficientes para alertas' });
-        }
-
-        let distanciaTotal = 0;
-        let intervalos = 0;
-
-        for (let i = 0; i < rows.length - 1; i++) {
-            const lat1 = rows[i].latitude;
-            const lon1 = rows[i].longitude;
-            const lat2 = rows[i+1].latitude;
-            const lon2 = rows[i+1].longitude;
-
-            const dist = Math.sqrt(Math.pow(lat2 - lat1, 2) + Math.pow(lon2 - lon1, 2)) * 111;
-            distanciaTotal += dist;
-            intervalos++;
-        }
-
-        const velocidadeMedia = intervalos > 0 ? distanciaTotal / intervalos : 0;
-
-        if (velocidadeMedia > 50) {
-            res.json({
-                alerta: `🚨 Movimento suspeito detectado (${velocidadeMedia.toFixed(1)} km/h). Últimas localizações indicam deslocamento rápido.`
-            });
-        } else if (velocidadeMedia > 20) {
-            res.json({
-                alerta: `⚠️ Movimento moderado detectado (${velocidadeMedia.toFixed(1)} km/h).`
-            });
-        } else {
-            res.json({
-                alerta: `✅ Padrão normal (${velocidadeMedia.toFixed(1)} km/h).`
-            });
-        }
-    });
-});
-
-// ============================================================
-// ROTAS PARA COLETAR DADOS DE SINAL E ML
-// ============================================================
-
-/**
- * Rota para coletar dados de sinal manualmente
- * @route POST /api/coletar-sinal
- */
-app.post('/api/coletar-sinal', (req, res) => {
-    const { numero, estacao_id, latitude, longitude, rsrp, sinr, ta } = req.body;
-
-    if (!numero || !estacao_id || latitude === undefined || longitude === undefined) {
-        return res.status(400).json({ error: 'Número, estacao_id, latitude e longitude são obrigatórios' });
-    }
-
-    const stmt = db.prepare(`
-        INSERT INTO dados_sinal (\`numero\`, \`estacao_id\`, \`latitude\`, \`longitude\`, \`rsrp\`, \`sinr\`, \`ta\`)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-    stmt.run(numero, estacao_id, latitude, longitude, rsrp || null, sinr || null, ta || null, function(err) {
-        stmt.finalize();
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json({ success: true, id: this.lastID, message: 'Dados de sinal coletados com sucesso.' });
-    });
-});
-
-/**
- * Rota para coletar dados de sinal automaticamente com treinamento do modelo KNN
- * @route POST /api/coletar-sinal-auto
- */
-app.post('/api/coletar-sinal-auto', (req, res) => {
-    const { numero, estacao_id, latitude, longitude, rsrp, sinr, ta } = req.body;
-
-    if (!numero || !estacao_id || latitude === undefined || longitude === undefined) {
-        return res.status(400).json({ error: 'Número, estacao_id, latitude e longitude são obrigatórios' });
-    }
-
-    // 1. Insere os dados de sinal
-    const stmt = db.prepare(`
-        INSERT INTO dados_sinal (\`numero\`, \`estacao_id\`, \`latitude\`, \`longitude\`, \`rsrp\`, \`sinr\`, \`ta\`)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-    stmt.run(numero, estacao_id, latitude, longitude, rsrp || null, sinr || null, ta || null, function(err) {
-        stmt.finalize();
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-
-        // 2. Verifica se há dados suficientes para treinar
-        db.get('SELECT COUNT(*) AS total FROM dados_sinal', (err, row) => {
-            if (err) {
-                return res.status(500).json({ error: err.message });
-            }
-
-            const total = row.total;
-            // 3. Se houver 10 ou mais registros, treina o modelo automaticamente
-            if (total >= 10) {
-                treinarModeloKNN()
-                    .then(result => {
-                        console.log(`✅ Modelo treinado automaticamente com ${result.total_registros} registros.`);
-                    })
-                    .catch(error => {
-                        console.error('❌ Erro ao treinar modelo automaticamente:', error);
-                    });
-            }
-
-            res.json({
-                success: true,
-                id: this.lastID,
-                message: 'Dados de sinal coletados com sucesso.',
-                total_registros: total
-            });
-        });
-    });
-});
-
-/**
- * Rota para treinar o modelo KNN manualmente
- * @route POST /api/treinar-modelo
- */
-app.post('/api/treinar-modelo', async (req, res) => {
-    try {
-        const result = await treinarModeloKNN();
-        res.json({ success: true, message: `Modelo treinado com ${result.total_registros} registros.` });
-    } catch (error) {
-        res.status(500).json({ error: error });
-    }
-});
-
-/**
- * Rota para predizer a localização com base em dados de sinal usando KNN
- * @route GET /api/predizer-localizacao
- */
-app.get('/api/predizer-localizacao', (req, res) => {
-    const { estacao_id, rsrp, sinr, ta, k } = req.query;
-
-    if (!estacao_id) {
-        return res.status(400).json({ error: 'estacao_id é obrigatório' });
-    }
-
-    const kValue = parseInt(k) || 3;
-
-    predizerLocalizacaoKNN(estacao_id, parseFloat(rsrp), parseFloat(sinr), parseFloat(ta), kValue)
-        .then(result => {
-            res.json({
-                success: true,
-                latitude: result.latitude,
-                longitude: result.longitude,
-                k: result.k,
-                metodo: 'KNN'
-            });
-        })
-        .catch(error => {
-            res.status(500).json({ error: error });
-        });
-});
-
-// ============================================================
-// ROTA PARA ESTATÍSTICAS
-// ============================================================
-
-app.get('/api/estatisticas', (req, res) => {
-    db.all(`
-        SELECT
-            (SELECT COUNT(*) FROM estacoes) AS total_estacoes,
-            (SELECT COUNT(DISTINCT \`operadora\`) FROM estacoes) AS total_operadoras,
-            (SELECT COUNT(DISTINCT \`uf\`) FROM estacoes) AS total_ufs,
-            (SELECT COUNT(*) FROM numeros) AS total_numeros,
-            (SELECT COUNT(*) FROM alvos) AS total_alvos,
-            (SELECT COUNT(*) FROM bases) AS total_bases,
-            (SELECT COUNT(*) FROM recursos) AS total_recursos,
-            (SELECT COUNT(*) FROM filtros) AS total_filtros,
-            (SELECT COUNT(*) FROM historico_localizacao) AS total_localizacoes,
-            (SELECT COUNT(*) FROM dados_sinal) AS total_dados_sinal,
-            (SELECT COUNT(*) FROM modelos) AS total_modelos
-    `, (err, rows) => {
-        if (err) {
-            return res.status(500).json({ error: err.message });
-        }
-        res.json(rows[0]);
-    });
-});
-
-// ============================================================
-// INICIALIZAÇÃO DO SERVIDOR
-// ============================================================
-
-(async () => {
-    await importarERBs();
-    console.log('✅ ORION pronto para uso.');
-})();
-
-app.listen(port, () => {
-    console.log(`🚀 ORION rodando na porta ${port}`);
-});
-
-process.on('SIGINT', () => {
-    db.close(() => {
-        console.log('👋 ORION encerrado.');
-        process.exit(0);
-    });
-});
+        await pool.query(`
+            INSERT INTO recursos (numero, operadora, nome, base_id, status)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (numero) DO UPDATE SET
+               
