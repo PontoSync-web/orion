@@ -338,7 +338,6 @@ app.get('/api/estacoes/mais-proxima', async (req, res) => {
     }
 
     try {
-        // Busca todas as estações e calcula a distância no código
         const { data: estacoes, error } = await supabase
             .from('estacoes')
             .select('*')
@@ -354,7 +353,7 @@ app.get('/api/estacoes/mais-proxima', async (req, res) => {
             const dist = Math.sqrt(
                 Math.pow(estacao.latitude - latitude, 2) +
                 Math.pow(estacao.longitude - longitude, 2)
-            ) * 111; // Aproximação de 1 grau ≈ 111 km
+            ) * 111;
 
             if (dist < menorDistancia) {
                 menorDistancia = dist;
@@ -714,7 +713,6 @@ app.post('/api/recursos', async (req, res) => {
     }
 
     try {
-        // Verifica se o recurso já existe
         const { data: recursoExistente, error: findError } = await supabase
             .from('recursos')
             .select('*')
@@ -726,7 +724,6 @@ app.post('/api/recursos', async (req, res) => {
         let finalBaseId = base_id;
         let coordenadasUsadas = { lat: latitude || -15.8, lon: longitude || -47.9 };
 
-        // Se não existir recurso e não houver base_id, cria base automaticamente
         if (!recursoExistente && !base_id) {
             try {
                 finalBaseId = await criarBaseAutomatica(numero, coordenadasUsadas.lat, coordenadasUsadas.lon);
@@ -1033,7 +1030,6 @@ app.get('/api/analise-padroes', async (req, res) => {
             return res.json({ pattern: 'Sem dados suficientes' });
         }
 
-        // Encontra a localização mais frequente
         const locationCount = {};
         rows.forEach(row => {
             const key = `${row.latitude},${row.longitude}`;
@@ -1051,7 +1047,6 @@ app.get('/api/analise-padroes', async (req, res) => {
 
         const [lat, lon] = mostFrequent ? mostFrequent.split(',').map(Number) : [null, null];
 
-        // Encontra o horário mais frequente
         const hourCount = {};
         rows.forEach(row => {
             const hora = new Date(row.data_hora).getHours().toString();
@@ -1166,7 +1161,6 @@ app.post('/api/coletar-sinal-auto', async (req, res) => {
     }
 
     try {
-        // 1. Insere os dados de sinal
         const { data, error } = await supabase
             .from('dados_sinal')
             .insert({ numero, estacao_id, latitude, longitude, rsrp: rsrp || null, sinr: sinr || null, ta: ta || null })
@@ -1174,14 +1168,12 @@ app.post('/api/coletar-sinal-auto', async (req, res) => {
 
         if (error) throw error;
 
-        // 2. Verifica se há dados suficientes para treinar
         const { count, error: countError } = await supabase
             .from('dados_sinal')
             .select('*', { count: 'exact', head: true });
 
         if (countError) throw countError;
 
-        // 3. Se houver 10 ou mais registros, treina o modelo automaticamente
         if (count >= 10) {
             treinarModeloKNN()
                 .then(result => {
@@ -1242,7 +1234,6 @@ app.get('/api/predizer-localizacao', (req, res) => {
 
 app.get('/api/estatisticas', async (req, res) => {
     try {
-        // Consulta todas as tabelas em paralelo para performance
         const [
             estacoesResult,
             numerosResult,
@@ -1263,7 +1254,6 @@ app.get('/api/estatisticas', async (req, res) => {
             supabase.from('dados_sinal').select('*', { count: 'exact', head: true })
         ]);
 
-        // Busca operadoras e UFs distintas
         const { data: operadoras } = await supabase
             .from('estacoes')
             .select('operadora', { count: 'exact', head: false })
