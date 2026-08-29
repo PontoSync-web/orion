@@ -1,18 +1,29 @@
 {
   "name": "orion",
   "version": "2.0.0",
-  "description": "Sistema ORION para geolocalização de ERBs",
+  "description": "Sistema ORION para geolocalização de ERBs com ML e Supabase",
   "main": "orion.js",
   "scripts": {
     "start": "node orion.js",
-    "dev": "node orion.js"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
     "express": "^4.18.2",
     "sqlite3": "^5.1.6",
-    "csv-parser": "^3.0.0"
+    "csv-parser": "^3.0.0",
+    "pg": "^8.11.3"
   },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "keywords": [
+    "orion",
+    "erb",
+    "anatel",
+    "geolocalizacao",
+    "machine-learning",
+    "supabase"
+  ],
+  "author": "Comandante ORION",
+  "license": "MIT"
 }
