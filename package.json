@@ -1,14 +1,13 @@
 {
   "name": "orion",
-  "version": "2.0.0",
-  "description": "Sistema ORION para geolocalização de ERBs com Supabase",
+  "version": "2.1.0",
+  "description": "Sistema Orion de localização inteligente",
   "main": "orion.js",
   "scripts": {
     "start": "node orion.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "csv-parser": "^3.0.0",
     "@supabase/supabase-js": "^2.39.0"
   },
   "engines": {
