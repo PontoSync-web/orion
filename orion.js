@@ -1,353 +1,1664 @@
-/**
- * ====================================================================
- * ARQUIVO: server.js
- * DATA: 2026-08-29
- * HORA: 17:00 BRT
- * DESCRIÇÃO: Servidor backend completo + Servir Frontend Estático
- * ====================================================================
- */
+// ============================================================
+// ORION - SISTEMA DE GERENCIAMENTO DE ERBs (VERSÃO SUPABASE)
+// ============================================================
+// Este arquivo é o coração do sistema ORION. Ele gerencia:
+// 1. Importação de dados de ERBs a partir de arquivos CSV
+// 2. API REST para consulta de estações próximas
+// 3. Cadastro e gerenciamento de números de telefone
+// 4. Histórico de consultas
+// 5. Gestão de alvos (números de interesse)
+// 6. Gestão de bases (setores/instalações)
+// 7. Gestão de recursos (números associados a bases)
+// 8. Filtros inteligentes para alertas
+// 9. Inteligência preditiva (análise de padrões e alertas)
+// 10. Machine Learning para localização (KNN)
+// 11. Integração com Supabase (PostgreSQL)
+// ============================================================
+// 
+// NOVIDADES ADICIONADAS EM 2026-08-29:
+// 12. Localização inteligente com média ponderada por RSRP
+// 13. Filtro de Kalman para suavização de trajetória
+// 14. Feedback do usuário com recalibração automática de viés
+// 15. Cálculo de raio de incerteza (precisão)
+// 16. Correção por Timing Advance (TA)
+// 17. Migração automática de dados antigos para histórico
+// 18. Rota /api/localizar-inteligente (estilo Google)
+// 19. Rota /api/feedback
+// ============================================================
 
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
+const fs = require('fs');
+const readline = require('readline');
+const { createClient } = require('@supabase/supabase-js');
+
 const app = express();
-const PORT = process.env.PORT || 3000;
+const port = process.env.PORT || 3000;
 
-// Middleware para JSON
+// ============================================================
+// CONFIGURAÇÕES INICIAIS
+// ============================================================
+
+const DATA_DIR = path.join(__dirname, 'data');
+
+// ============================================================
+// CONFIGURAÇÃO DO SUPABASE
+// ============================================================
+
+const supabaseUrl = process.env.SUPABASE_URL || 'https://apjjuocqpqxaehbcagwt.supabase.co';
+const supabaseKey = process.env.SUPABASE_KEY || 'sb_publishable_lt3FYlhpvS0QMLsdZH3_9g_NgJxsraJ';
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+console.log('🔗 Conectado ao Supabase');
+
+// ============================================================
+// MIDDLEWARE
+// ============================================================
+
 app.use(express.json());
-
-// ============================================================
-// NOVO: Servir arquivos estáticos (HTML, CSS, JS da interface)
-// ============================================================
-// Coloque seu arquivo mapa-localizar.html dentro da pasta /public
 app.use(express.static('public'));
-
-// ====================================================================
-// BANCO DE DADOS SQLITE - CRIAÇÃO DE TODAS AS TABELAS
-// ====================================================================
-const db = new sqlite3.Database('./orion.db');
-
-// Tabela 1: Coletas
-db.run(`
-  CREATE TABLE IF NOT EXISTS coletas (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    numero TEXT,
-    estacao_id TEXT,
-    latitude REAL,
-    longitude REAL,
-    rsrp INTEGER,
-    sinr INTEGER,
-    ta INTEGER,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`);
-
-// Tabela 2: Estações
-db.run(`
-  CREATE TABLE IF NOT EXISTS estacoes (
-    id TEXT PRIMARY KEY,
-    latitude REAL,
-    longitude REAL,
-    nome TEXT
-  )
-`);
-
-// Tabela 3: Feedback
-db.run(`
-  CREATE TABLE IF NOT EXISTS feedback (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    numero TEXT,
-    lat_real REAL,
-    lon_real REAL,
-    lat_mostrada REAL,
-    lon_mostrada REAL,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`);
-
-// Tabela 4: Usuários
-db.run(`
-  CREATE TABLE IF NOT EXISTS usuarios (
-    numero TEXT PRIMARY KEY,
-    vies_lat REAL DEFAULT 0,
-    vies_lon REAL DEFAULT 0,
-    ultima_atualizacao DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`);
-
-// Tabela 5: Histórico de posições
-db.run(`
-  CREATE TABLE IF NOT EXISTS posicoes_historicas (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    numero TEXT,
-    latitude REAL,
-    longitude REAL,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`);
-
-// ====================================================================
-// MIGRAÇÃO AUTOMÁTICA (DADOS ANTIGOS)
-// ====================================================================
-function migrarDadosAntigos() {
-  console.log('🔄 Verificando necessidade de migração...');
-  db.get(`SELECT COUNT(*) as total FROM posicoes_historicas`, (err, row) => {
-    if (err) { console.error(err); return; }
-    if (row.total > 0) {
-      console.log(`✅ Histórico já possui ${row.total} registros.`);
-      return;
-    }
-    console.log('📥 Populando histórico com dados antigos...');
-    db.run(`
-      INSERT INTO posicoes_historicas (numero, latitude, longitude, timestamp)
-      SELECT c.numero, c.latitude, c.longitude, c.timestamp
-      FROM coletas c
-      INNER JOIN (
-        SELECT numero, MAX(timestamp) as ultimo_timestamp
-        FROM coletas
-        GROUP BY numero
-      ) ultima ON c.numero = ultima.numero AND c.timestamp = ultima.ultimo_timestamp
-    `, function(err) {
-      if (err) console.error('❌ Erro:', err);
-      else console.log(`✅ Migração concluída! ${this.changes} registros.`);
-    });
-  });
-}
-
-// ====================================================================
-// ROTA 1: COLETA (POST /api/coletar-sinal-auto)
-// ====================================================================
-app.post('/api/coletar-sinal-auto', async (req, res) => {
-  try {
-    const { numero, estacao_id, latitude, longitude, rsrp, sinr, ta } = req.body;
-    if (!numero || !estacao_id || latitude === undefined || longitude === undefined) {
-      return res.status(400).json({ erro: 'Campos obrigatórios faltando' });
-    }
-
-    await new Promise((resolve, reject) => {
-      db.run(
-        `INSERT INTO coletas (numero, estacao_id, latitude, longitude, rsrp, sinr, ta)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [numero, estacao_id, latitude, longitude, rsrp, sinr, ta],
-        function (err) { if (err) reject(err); else resolve(this.lastID); }
-      );
-    });
-
-    let latFinal = latitude;
-    let lonFinal = longitude;
-
-    const estacao = await new Promise((resolve, reject) => {
-      db.get('SELECT latitude, longitude FROM estacoes WHERE id = ?', [estacao_id], (err, row) => {
-        if (err) reject(err);
-        else resolve(row);
-      });
-    });
-
-    if (estacao && ta) {
-      const raioMaximoKm = (ta * 78.12) / 1000;
-      const distAtual = haversine(latitude, longitude, estacao.latitude, estacao.longitude);
-      if (distAtual > raioMaximoKm) {
-        const proporcao = raioMaximoKm / distAtual;
-        latFinal = estacao.latitude + (latitude - estacao.latitude) * proporcao;
-        lonFinal = estacao.longitude + (longitude - estacao.longitude) * proporcao;
-      }
-    }
-
-    res.status(201).json({
-      mensagem: 'Leitura registrada com sucesso',
-      latitude_corrigida: latFinal,
-      longitude_corrigida: lonFinal
-    });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ erro: 'Erro interno' });
-  }
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+    next();
 });
 
-// ====================================================================
-// ROTA 2: LOCALIZAÇÃO (GET /api/localizar)
-// ====================================================================
-app.get('/api/localizar', async (req, res) => {
-  const { numero } = req.query;
-  if (!numero) return res.status(400).json({ erro: 'Número não informado' });
+// ============================================================
+// FUNÇÃO PARA PARSEAR LINHA CSV
+// ============================================================
 
-  try {
-    const leituras = await new Promise((resolve, reject) => {
-      db.all(
-        `SELECT latitude, longitude, rsrp, timestamp FROM coletas 
-         WHERE numero = ? ORDER BY timestamp DESC LIMIT 15`,
-        [numero],
-        (err, rows) => { if (err) reject(err); else resolve(rows); }
-      );
-    });
-
-    if (!leituras || leituras.length === 0) {
-      return res.status(404).json({ erro: 'Nenhuma localização encontrada' });
+function parseCSVLine(line, linhaNumero) {
+    line = line.trimEnd();
+    if (line.startsWith('"') && line.endsWith('"')) {
+        line = line.substring(1, line.length - 1);
     }
 
-    const { lat: latPonderada, lon: lonPonderada } = calcularMediaPonderada(leituras);
+    const valores = [];
+    let campoAtual = '';
+    let dentroAspas = false;
+    let i = 0;
 
-    const historico = await new Promise((resolve, reject) => {
-      db.all(
-        `SELECT latitude, longitude FROM posicoes_historicas 
-         WHERE numero = ? ORDER BY timestamp DESC LIMIT 5`,
-        [numero],
-        (err, rows) => { if (err) reject(err); else resolve(rows || []); }
-      );
-    });
+    while (i < line.length) {
+        const char = line[i];
+        if (char === '"') {
+            if (i + 1 < line.length && line[i + 1] === '"') {
+                campoAtual += '"';
+                i += 2;
+                continue;
+            }
+            dentroAspas = !dentroAspas;
+        } else if (char === ',' && !dentroAspas) {
+            valores.push(campoAtual);
+            campoAtual = '';
+        } else {
+            campoAtual += char;
+        }
+        i++;
+    }
+    valores.push(campoAtual);
 
-    let latFinal = latPonderada;
-    let lonFinal = lonPonderada;
-    if (historico.length > 0) {
-      const ultima = historico[0];
-      latFinal = ultima.latitude * 0.3 + latPonderada * 0.7;
-      lonFinal = ultima.longitude * 0.3 + lonPonderada * 0.7;
+    if (linhaNumero <= 3) {
+        console.log(`   🔎 Linha ${linhaNumero} (campos): ${valores.length} campos encontrados.`);
+        console.log(`   🔎 ID (campo 0): "${valores[0] || 'VAZIO'}"`);
+        console.log(`   🔎 Lat (campo 12): "${valores[12] || 'VAZIO'}"`);
+        console.log(`   🔎 Lon (campo 13): "${valores[13] || 'VAZIO'}"`);
     }
 
-    const usuario = await new Promise((resolve, reject) => {
-      db.get('SELECT vies_lat, vies_lon FROM usuarios WHERE numero = ?', [numero], (err, row) => {
-        if (err) reject(err);
-        else resolve(row);
-      });
-    });
-    if (usuario) {
-      latFinal += usuario.vies_lat;
-      lonFinal += usuario.vies_lon;
+    return valores;
+}
+
+// ============================================================
+// FUNÇÃO PARA IMPORTAR ERBs
+// ============================================================
+
+async function importarERBs() {
+    if (!fs.existsSync(DATA_DIR)) {
+        console.log('⚠️ Pasta /data não encontrada.');
+        return;
     }
 
-    const raioMetros = calcularRaioIncerteza(leituras);
-
-    db.run(
-      `INSERT INTO posicoes_historicas (numero, latitude, longitude, timestamp)
-       VALUES (?, ?, ?, ?)`,
-      [numero, latFinal, lonFinal, new Date().toISOString()]
+    const arquivos = fs.readdirSync(DATA_DIR).filter(f =>
+        f.startsWith('erb_consolidado_final_part') && f.endsWith('.csv')
     );
 
-    res.json({
-      numero,
-      latitude: latFinal,
-      longitude: lonFinal,
-      raio_incerteza_metros: Math.round(raioMetros),
-      precisao: raioMetros < 100 ? 'Alta' : raioMetros < 300 ? 'Média' : 'Baixa',
-      total_amostras: leituras.length,
-      ultima_atualizacao: leituras[0]?.timestamp || null,
-      metodo: 'Ponderado por RSRP + Filtro Kalman + Correção de Viés'
-    });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ erro: 'Erro ao consultar localização' });
-  }
-});
-
-// ====================================================================
-// ROTA 3: FEEDBACK (POST /api/feedback)
-// ====================================================================
-app.post('/api/feedback', async (req, res) => {
-  try {
-    const { numero, lat_real, lon_real, lat_mostrada, lon_mostrada } = req.body;
-    if (!numero || lat_real === undefined || lon_real === undefined) {
-      return res.status(400).json({ erro: 'Campos obrigatórios' });
+    if (arquivos.length === 0) {
+        console.log('⚠️ Nenhum arquivo ERB encontrado.');
+        return;
     }
 
-    await new Promise((resolve, reject) => {
-      db.run(
-        `INSERT INTO feedback (numero, lat_real, lon_real, lat_mostrada, lon_mostrada)
-         VALUES (?, ?, ?, ?, ?)`,
-        [numero, lat_real, lon_real, lat_mostrada || 0, lon_mostrada || 0],
-        function (err) { if (err) reject(err); else resolve(); }
-      );
-    });
+    console.log(`📂 Encontrados ${arquivos.length} arquivos.`);
 
-    const vies = await new Promise((resolve, reject) => {
-      db.all(
-        `SELECT AVG(lat_real - lat_mostrada) as vies_lat,
-                AVG(lon_real - lon_mostrada) as vies_lon
-         FROM feedback WHERE numero = ? ORDER BY timestamp DESC LIMIT 5`,
-        [numero],
-        (err, rows) => { if (err) reject(err); else resolve(rows[0]); }
-      );
-    });
+    for (const arquivo of arquivos.sort()) {
+        const caminho = path.join(DATA_DIR, arquivo);
+        console.log(`🔍 Lendo ${arquivo}...`);
 
-    if (vies && vies.vies_lat !== null) {
-      await new Promise((resolve, reject) => {
-        db.run(
-          `INSERT INTO usuarios (numero, vies_lat, vies_lon, ultima_atualizacao)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT(numero) DO UPDATE SET
-             vies_lat = ?, vies_lon = ?, ultima_atualizacao = ?`,
-          [numero, vies.vies_lat, vies.vies_lon, new Date().toISOString(),
-           vies.vies_lat, vies.vies_lon, new Date().toISOString()],
-          (err) => { if (err) reject(err); else resolve(); }
-        );
-      });
+        let estacoes = [];
+        let linhaAtual = 0;
+        let erros = 0;
+        let ignorados = 0;
+
+        await new Promise((resolve, reject) => {
+            const rl = readline.createInterface({
+                input: fs.createReadStream(caminho, { encoding: 'utf8' }),
+                crlfDelay: Infinity
+            });
+
+            rl.on('line', (line) => {
+                linhaAtual++;
+                if (!line.trim()) { ignorados++; return; }
+                if (line.toLowerCase().includes('id_estacao')) { ignorados++; return; }
+
+                try {
+                    const valores = parseCSVLine(line, linhaAtual);
+                    if (valores.length < 10) { erros++; return; }
+
+                    const id = valores[0] || '';
+                    if (!id) { erros++; return; }
+
+                    const lat = parseFloat(valores[12] || 0);
+                    const lon = parseFloat(valores[13] || 0);
+                    if (isNaN(lat) || isNaN(lon)) { erros++; return; }
+
+                    estacoes.push({
+                        id_estacao: id,
+                        operadora: valores[1] || '',
+                        uf: valores[2] || '',
+                        municipio: valores[3] || '',
+                        bairro: valores[4] || '',
+                        endereco: valores[5] || '',
+                        codigo_municipio_ibge: valores[6] || '',
+                        latitude: lat,
+                        longitude: lon,
+                        tecnologias: valores[10] || '',
+                        frequencias: valores[11] || '',
+                        azimutes: '',
+                        emissoes: valores[25] || '',
+                        fonte: 'OpenCellID + Anatel',
+                        opencellid_radio: valores[14] || '',
+                        opencellid_cell: valores[18] || '',
+                        opencellid_correspondencia: valores[23] || '',
+                        anatel_correspondencia: valores[29] || ''
+                    });
+
+                    if (linhaAtual % 5000 === 0) {
+                        console.log(`   ⏳ Processadas ${linhaAtual} linhas...`);
+                    }
+
+                } catch (err) {
+                    erros++;
+                    if (erros <= 5) {
+                        console.log(`   ❌ Erro crítico na linha ${linhaAtual}: ${err.message}`);
+                    }
+                }
+            });
+
+            rl.on('close', async () => {
+                const qtd = estacoes.length;
+                console.log(`✅ ${arquivo}: ${linhaAtual} linhas lidas, ${qtd} estações importadas.`);
+                console.log(`   ⚠️ ${ignorados} linhas ignoradas, ${erros} erros.`);
+
+                if (qtd > 0) {
+                    // Insere em lotes (batch) no Supabase
+                    const batchSize = 1000;
+                    for (let i = 0; i < estacoes.length; i += batchSize) {
+                        const batch = estacoes.slice(i, i + batchSize);
+                        const { error } = await supabase
+                            .from('estacoes')
+                            .upsert(batch, { onConflict: 'id_estacao' });
+                        if (error) {
+                            console.error(`❌ Erro ao inserir lote ${i}:`, error.message);
+                        } else {
+                            console.log(`   ✅ ${batch.length} estações inseridas...`);
+                        }
+                    }
+                }
+
+                resolve();
+            });
+
+            rl.on('error', (err) => {
+                console.error(`❌ Erro ao ler ${arquivo}:`, err);
+                reject(err);
+            });
+        });
     }
-
-    res.status(201).json({
-      mensagem: 'Feedback recebido! Obrigado por melhorar o Orion.',
-      viés_aplicado: vies
-    });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ erro: 'Erro interno' });
-  }
-});
-
-// ====================================================================
-// FUNÇÕES AUXILIARES
-// ====================================================================
-function calcularMediaPonderada(leituras) {
-  const validas = leituras.filter(l => l.rsrp > -110);
-  if (validas.length === 0) {
-    const latMedia = leituras.reduce((s, l) => s + l.latitude, 0) / leituras.length;
-    const lonMedia = leituras.reduce((s, l) => s + l.longitude, 0) / leituras.length;
-    return { lat: latMedia, lon: lonMedia };
-  }
-  const pesos = validas.map(l => Math.pow(10, l.rsrp / 10));
-  const somaPesos = pesos.reduce((a, b) => a + b, 0);
-  let latFinal = 0, lonFinal = 0;
-  validas.forEach((l, i) => {
-    latFinal += l.latitude * (pesos[i] / somaPesos);
-    lonFinal += l.longitude * (pesos[i] / somaPesos);
-  });
-  return { lat: latFinal, lon: lonFinal };
+    console.log('✅ Importação concluída.');
 }
 
+// ============================================================
+// FUNÇÃO PARA TREINAR O MODELO KNN
+// ============================================================
+
+async function treinarModeloKNN() {
+    try {
+        const { data: rows, error } = await supabase
+            .from('dados_sinal')
+            .select('*');
+
+        if (error) throw error;
+
+        if (!rows || rows.length < 10) {
+            throw new Error('Dados insuficientes para treinar o modelo (mínimo 10 registros).');
+        }
+
+        // Prepara os dados para o modelo
+        const features = [];
+        const labels = [];
+
+        rows.forEach(row => {
+            const feature = [
+                row.estacao_id,
+                row.rsrp || 0,
+                row.sinr || 0,
+                row.ta || 0
+            ];
+            features.push(feature);
+            labels.push([row.latitude, row.longitude]);
+        });
+
+        const modelData = { features, labels };
+        const fs = require('fs');
+        const modelPath = path.join(__dirname, 'models', 'knn_model.json');
+
+        const modelsDir = path.join(__dirname, 'models');
+        if (!fs.existsSync(modelsDir)) {
+            fs.mkdirSync(modelsDir);
+        }
+
+        fs.writeFileSync(modelPath, JSON.stringify(modelData, null, 2));
+        return { total_registros: rows.length };
+    } catch (error) {
+        throw new Error('Erro ao treinar modelo: ' + error.message);
+    }
+}
+
+// ============================================================
+// FUNÇÃO PARA PREDIZER LOCALIZAÇÃO COM KNN
+// ============================================================
+
+function predizerLocalizacaoKNN(estacao_id, rsrp, sinr, ta, k = 3) {
+    return new Promise((resolve, reject) => {
+        const fs = require('fs');
+        const modelPath = path.join(__dirname, 'models', 'knn_model.json');
+
+        if (!fs.existsSync(modelPath)) {
+            reject('Modelo não encontrado. Treine o modelo primeiro.');
+            return;
+        }
+
+        const modelData = JSON.parse(fs.readFileSync(modelPath, 'utf8'));
+        const { features, labels } = modelData;
+
+        if (features.length === 0) {
+            reject('Modelo vazio. Treine o modelo primeiro.');
+            return;
+        }
+
+        const query = [estacao_id, rsrp || 0, sinr || 0, ta || 0];
+
+        const distances = features.map((feature, index) => {
+            const dist = Math.sqrt(
+                Math.pow(feature[0] - query[0], 2) +
+                Math.pow(feature[1] - query[1], 2) +
+                Math.pow(feature[2] - query[2], 2) +
+                Math.pow(feature[3] - query[3], 2)
+            );
+            return { index, distance: dist };
+        });
+
+        distances.sort((a, b) => a.distance - b.distance);
+        const kNearest = distances.slice(0, k);
+
+        let sumLat = 0;
+        let sumLon = 0;
+        kNearest.forEach(neighbor => {
+            sumLat += labels[neighbor.index][0];
+            sumLon += labels[neighbor.index][1];
+        });
+
+        const predLat = sumLat / k;
+        const predLon = sumLon / k;
+
+        resolve({ latitude: predLat, longitude: predLon, k: k });
+    });
+}
+
+// ============================================================
+// ===== NOVAS FUNÇÕES AUXILIARES PARA LOCALIZAÇÃO INTELIGENTE =====
+// ============================================================
+
+// Média ponderada por RSRP (quanto maior o RSRP, maior o peso)
+function calcularMediaPonderada(leituras) {
+    const validas = leituras.filter(l => l.rsrp > -110);
+    if (validas.length === 0) {
+        const latMedia = leituras.reduce((s, l) => s + l.latitude, 0) / leituras.length;
+        const lonMedia = leituras.reduce((s, l) => s + l.longitude, 0) / leituras.length;
+        return { lat: latMedia, lon: lonMedia };
+    }
+    const pesos = validas.map(l => Math.pow(10, l.rsrp / 10));
+    const somaPesos = pesos.reduce((a, b) => a + b, 0);
+    let latFinal = 0, lonFinal = 0;
+    validas.forEach((l, i) => {
+        latFinal += l.latitude * (pesos[i] / somaPesos);
+        lonFinal += l.longitude * (pesos[i] / somaPesos);
+    });
+    return { lat: latFinal, lon: lonFinal };
+}
+
+// Raio de incerteza baseado no desvio padrão
 function calcularRaioIncerteza(leituras) {
-  if (leituras.length < 2) return 300;
-  const lats = leituras.map(l => l.latitude);
-  const lons = leituras.map(l => l.longitude);
-  const desvioLat = desvioPadrao(lats);
-  const desvioLon = desvioPadrao(lons);
-  const raioMetros = Math.max(desvioLat, desvioLon) * 111000;
-  return Math.min(Math.max(raioMetros, 20), 1000);
+    if (leituras.length < 2) return 300;
+    const lats = leituras.map(l => l.latitude);
+    const lons = leituras.map(l => l.longitude);
+    const desvioLat = desvioPadrao(lats);
+    const desvioLon = desvioPadrao(lons);
+    const raioMetros = Math.max(desvioLat, desvioLon) * 111000;
+    return Math.min(Math.max(raioMetros, 20), 1000);
 }
 
 function desvioPadrao(values) {
-  const n = values.length;
-  if (n === 0) return 0;
-  const media = values.reduce((s, v) => s + v, 0) / n;
-  const somaQuad = values.reduce((s, v) => s + (v - media) ** 2, 0);
-  return Math.sqrt(somaQuad / n);
+    const n = values.length;
+    if (n === 0) return 0;
+    const media = values.reduce((s, v) => s + v, 0) / n;
+    const somaQuad = values.reduce((s, v) => s + (v - media) ** 2, 0);
+    return Math.sqrt(somaQuad / n);
 }
 
+// Distância Haversine (km)
 function haversine(lat1, lon1, lat2, lon2) {
-  const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) ** 2 +
-            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-            Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// ====================================================================
-// INICIALIZAÇÃO
-// ====================================================================
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor Orion rodando na porta ${PORT}`);
-  console.log(`📅 Data/Hora: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`);
-  console.log(`📂 Frontend disponível em: http://localhost:${PORT}/mapa-localizar.html`);
-  migrarDadosAntigos();
+// ============================================================
+// MIGRAÇÃO AUTOMÁTICA (popula histórico com dados antigos)
+// ============================================================
+async function migrarDadosAntigos() {
+    console.log('🔄 Verificando necessidade de migração...');
+
+    // Verifica se já há dados em posicoes_historicas
+    const { count, error: countError } = await supabase
+        .from('posicoes_historicas')
+        .select('*', { count: 'exact', head: true });
+
+    if (countError) {
+        console.log('ℹ️ Tabela posicoes_historicas pode não existir ainda. Verifique se o SQL foi executado.');
+        return;
+    }
+
+    if (count > 0) {
+        console.log(`✅ Histórico já possui ${count} registros. Migração não necessária.`);
+        return;
+    }
+
+    console.log('📥 Populando posicoes_historicas com dados antigos...');
+
+    // Busca a última coordenada de cada número na tabela dados_sinal (ou coletas)
+    const { data, error } = await supabase
+        .from('dados_sinal')
+        .select('numero, latitude, longitude, data_hora')
+        .order('data_hora', { ascending: false });
+
+    if (error) {
+        console.error('❌ Erro ao buscar dados antigos:', error);
+        return;
+    }
+
+    if (!data || data.length === 0) {
+        console.log('ℹ️ Nenhum dado antigo para migrar.');
+        return;
+    }
+
+    // Agrupa pela última ocorrência de cada número
+    const ultimasPosicoes = {};
+    data.forEach(row => {
+        if (!ultimasPosicoes[row.numero]) {
+            ultimasPosicoes[row.numero] = {
+                numero: row.numero,
+                latitude: row.latitude,
+                longitude: row.longitude,
+                timestamp: row.data_hora
+            };
+        }
+    });
+
+    const historico = Object.values(ultimasPosicoes);
+
+    if (historico.length === 0) {
+        console.log('ℹ️ Nenhum dado antigo para migrar.');
+        return;
+    }
+
+    // Insere no histórico
+    const { error: insertError } = await supabase
+        .from('posicoes_historicas')
+        .insert(historico);
+
+    if (insertError) {
+        console.error('❌ Erro na migração:', insertError);
+    } else {
+        console.log(`✅ Migração concluída! ${historico.length} registros inseridos.`);
+    }
+}
+
+// ============================================================
+// ROTAS DA API (JÁ EXISTENTES)
+// ============================================================
+
+// ============================================================
+// ROTAS PARA ESTAÇÕES (ERBs)
+// ============================================================
+
+app.get('/api/estacoes/mais-proxima', async (req, res) => {
+    const { lat, lon } = req.query;
+    if (!lat || !lon) {
+        return res.status(400).json({ error: 'Latitude e longitude são obrigatórias' });
+    }
+
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lon);
+
+    if (isNaN(latitude) || isNaN(longitude)) {
+        return res.status(400).json({ error: 'Latitude e longitude devem ser números válidos' });
+    }
+
+    try {
+        const { data: estacoes, error } = await supabase
+            .from('estacoes')
+            .select('*')
+            .not('latitude', 'is', null)
+            .not('longitude', 'is', null);
+
+        if (error) throw error;
+
+        let maisProxima = null;
+        let menorDistancia = Infinity;
+
+        estacoes.forEach(estacao => {
+            const dist = Math.sqrt(
+                Math.pow(estacao.latitude - latitude, 2) +
+                Math.pow(estacao.longitude - longitude, 2)
+            ) * 111;
+
+            if (dist < menorDistancia) {
+                menorDistancia = dist;
+                maisProxima = { ...estacao, distancia: dist };
+            }
+        });
+
+        if (!maisProxima) {
+            return res.status(404).json({ error: 'Nenhuma ERB encontrada nas proximidades' });
+        }
+
+        res.json(maisProxima);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/estacoes/proximas', async (req, res) => {
+    const { lat, lon, raio } = req.query;
+    if (!lat || !lon) {
+        return res.status(400).json({ error: 'Latitude e longitude são obrigatórias' });
+    }
+
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lon);
+    const raioKm = parseFloat(raio) || 10;
+
+    try {
+        const { data: estacoes, error } = await supabase
+            .from('estacoes')
+            .select('*')
+            .not('latitude', 'is', null)
+            .not('longitude', 'is', null);
+
+        if (error) throw error;
+
+        const resultados = estacoes
+            .map(estacao => {
+                const dist = Math.sqrt(
+                    Math.pow(estacao.latitude - latitude, 2) +
+                    Math.pow(estacao.longitude - longitude, 2)
+                ) * 111;
+                return { ...estacao, distancia: dist };
+            })
+            .filter(item => item.distancia <= raioKm)
+            .sort((a, b) => a.distancia - b.distancia)
+            .slice(0, 50);
+
+        res.json(resultados);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/estacoes/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('estacoes')
+            .select('*')
+            .eq('id_estacao', id)
+            .single();
+
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Estação não encontrada' });
+
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/estacoes/uf/:uf', async (req, res) => {
+    const { uf } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('estacoes')
+            .select('*')
+            .eq('uf', uf.toUpperCase())
+            .order('municipio');
+
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/estacoes/operadora/:operadora', async (req, res) => {
+    const { operadora } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('estacoes')
+            .select('*')
+            .ilike('operadora', `%${operadora}%`)
+            .order('uf')
+            .order('municipio');
+
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================================
+// ROTAS PARA NÚMEROS
+// ============================================================
+
+app.post('/api/numeros', async (req, res) => {
+    const { numero, operadora, uf, municipio } = req.body;
+    if (!numero) {
+        return res.status(400).json({ error: 'Número é obrigatório' });
+    }
+
+    try {
+        const { data, error } = await supabase
+            .from('numeros')
+            .upsert({ numero, operadora: operadora || '', uf: uf || '', municipio: municipio || '' })
+            .select();
+
+        if (error) throw error;
+        res.json({ success: true, id: data[0]?.id });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/numeros/localizacao', async (req, res) => {
+    const { numero, latitude, longitude, uf, municipio } = req.body;
+    if (!numero || latitude === undefined || longitude === undefined) {
+        return res.status(400).json({ error: 'Número, latitude e longitude são obrigatórios' });
+    }
+
+    try {
+        const { error } = await supabase
+            .from('numeros')
+            .upsert({ numero, uf: uf || '', municipio: municipio || '', latitude, longitude });
+
+        if (error) throw error;
+        res.json({ success: true, message: `Localização do número ${numero} atualizada` });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/numeros', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('numeros')
+            .select('*')
+            .order('data_cadastro', { ascending: false });
+
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/numeros/:numero', async (req, res) => {
+    const { numero } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('numeros')
+            .select('*')
+            .eq('numero', numero)
+            .single();
+
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Número não encontrado' });
+
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================================
+// ROTAS PARA ALVOS
+// ============================================================
+
+app.post('/api/alvos', async (req, res) => {
+    const { numero, operadora, uf, municipio, tag, nome } = req.body;
+    if (!numero) {
+        return res.status(400).json({ error: 'Número é obrigatório' });
+    }
+
+    try {
+        const { data, error } = await supabase
+            .from('alvos')
+            .upsert({
+                numero,
+                operadora: operadora || '',
+                uf: uf || '',
+                municipio: municipio || '',
+                tag: tag || '',
+                nome: nome || ''
+            })
+            .select();
+
+        if (error) throw error;
+        res.json({ success: true, id: data[0]?.id });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/alvos', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('alvos')
+            .select('*')
+            .order('data_cadastro', { ascending: false });
+
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/alvos/tag/:tag', async (req, res) => {
+    const { tag } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('alvos')
+            .select('*')
+            .eq('tag', tag)
+            .order('data_cadastro', { ascending: false });
+
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.delete('/api/alvos/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { error } = await supabase
+            .from('alvos')
+            .delete()
+            .eq('id', id);
+
+        if (error) throw error;
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================================
+// ROTAS PARA BASES
+// ============================================================
+
+app.post('/api/bases', async (req, res) => {
+    const { nome, uf, municipio, latitude, longitude, descricao } = req.body;
+    if (!nome || latitude === undefined || longitude === undefined) {
+        return res.status(400).json({ error: 'Nome, latitude e longitude são obrigatórios' });
+    }
+
+    try {
+        const { data, error } = await supabase
+            .from('bases')
+            .insert({
+                nome,
+                uf: uf || '',
+                municipio: municipio || '',
+                latitude,
+                longitude,
+                descricao: descricao || ''
+            })
+            .select();
+
+        if (error) throw error;
+        res.json({ success: true, id: data[0]?.id });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/bases', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('bases')
+            .select('*')
+            .order('nome');
+
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/bases/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('bases')
+            .select('*')
+            .eq('id', id)
+            .single();
+
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Base não encontrada' });
+
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.delete('/api/bases/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { error } = await supabase
+            .from('bases')
+            .delete()
+            .eq('id', id);
+
+        if (error) throw error;
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================================
+// ROTAS PARA RECURSOS (COM CRIAÇÃO AUTOMÁTICA DE BASE)
+// ============================================================
+
+async function criarBaseAutomatica(numero, lat = -15.8, lon = -47.9) {
+    const nomeBase = `Base Automática - ${numero}`;
+    const { data, error } = await supabase
+        .from('bases')
+        .insert({
+            nome: nomeBase,
+            uf: '',
+            municipio: '',
+            latitude: lat,
+            longitude: lon,
+            descricao: 'Base criada automaticamente pelo ORION'
+        })
+        .select();
+
+    if (error) throw error;
+    return data[0].id;
+}
+
+app.post('/api/recursos', async (req, res) => {
+    const { numero, operadora, nome, base_id, status, latitude, longitude } = req.body;
+    if (!numero) {
+        return res.status(400).json({ error: 'Número é obrigatório' });
+    }
+
+    try {
+        const { data: recursoExistente, error: findError } = await supabase
+            .from('recursos')
+            .select('*')
+            .eq('numero', numero)
+            .maybeSingle();
+
+        if (findError) throw findError;
+
+        let finalBaseId = base_id;
+        let coordenadasUsadas = { lat: latitude || -15.8, lon: longitude || -47.9 };
+
+        if (!recursoExistente && !base_id) {
+            try {
+                finalBaseId = await criarBaseAutomatica(numero, coordenadasUsadas.lat, coordenadasUsadas.lon);
+                console.log(`✅ Base automática criada para o número ${numero} (ID: ${finalBaseId})`);
+            } catch (error) {
+                return res.status(500).json({ error: 'Erro ao criar base automática: ' + error.message });
+            }
+        }
+
+        const { data, error } = await supabase
+            .from('recursos')
+            .upsert({
+                numero,
+                operadora: operadora || '',
+                nome: nome || '',
+                base_id: finalBaseId || null,
+                status: status || 'desconhecido'
+            })
+            .select();
+
+        if (error) throw error;
+        res.json({
+            success: true,
+            id: data[0]?.id,
+            base_id: finalBaseId,
+            message: recursoExistente ? 'Recurso atualizado' : 'Recurso cadastrado com base automática'
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/recursos', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('recursos')
+            .select('*')
+            .order('numero');
+
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/recursos/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('recursos')
+            .select('*')
+            .eq('id', id)
+            .single();
+
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Recurso não encontrado' });
+
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/recursos/numero/:numero', async (req, res) => {
+    const { numero } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('recursos')
+            .select('*')
+            .eq('numero', numero)
+            .single();
+
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Recurso não encontrado' });
+
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.put('/api/recursos/:id/mover', async (req, res) => {
+    const { id } = req.params;
+    const { base_id } = req.body;
+    if (base_id === undefined) {
+        return res.status(400).json({ error: 'base_id é obrigatório' });
+    }
+
+    try {
+        const { error } = await supabase
+            .from('recursos')
+            .update({ base_id })
+            .eq('id', id);
+
+        if (error) throw error;
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.delete('/api/recursos/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { error } = await supabase
+            .from('recursos')
+            .delete()
+            .eq('id', id);
+
+        if (error) throw error;
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================================
+// ROTAS PARA FILTROS INTELIGENTES
+// ============================================================
+
+app.post('/api/filtros', async (req, res) => {
+    const { nome, tag, operadora, uf, municipio, base_id, distancia_max, horario_inicio, horario_fim, notificar, ativo } = req.body;
+    if (!nome) {
+        return res.status(400).json({ error: 'Nome do filtro é obrigatório' });
+    }
+
+    try {
+        const { data, error } = await supabase
+            .from('filtros')
+            .insert({
+                nome,
+                tag: tag || null,
+                operadora: operadora || null,
+                uf: uf || null,
+                municipio: municipio || null,
+                base_id: base_id || null,
+                distancia_max: distancia_max || null,
+                horario_inicio: horario_inicio || null,
+                horario_fim: horario_fim || null,
+                notificar: notificar !== undefined ? notificar : 1,
+                ativo: ativo !== undefined ? ativo : 1
+            })
+            .select();
+
+        if (error) throw error;
+        res.json({ success: true, id: data[0]?.id });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/filtros', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('filtros')
+            .select('*')
+            .order('nome');
+
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/filtros/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('filtros')
+            .select('*')
+            .eq('id', id)
+            .single();
+
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Filtro não encontrado' });
+
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.put('/api/filtros/:id', async (req, res) => {
+    const { id } = req.params;
+    const { nome, tag, operadora, uf, municipio, base_id, distancia_max, horario_inicio, horario_fim, notificar, ativo } = req.body;
+
+    try {
+        const { error } = await supabase
+            .from('filtros')
+            .update({
+                nome,
+                tag: tag || null,
+                operadora: operadora || null,
+                uf: uf || null,
+                municipio: municipio || null,
+                base_id: base_id || null,
+                distancia_max: distancia_max || null,
+                horario_inicio: horario_inicio || null,
+                horario_fim: horario_fim || null,
+                notificar: notificar !== undefined ? notificar : 1,
+                ativo: ativo !== undefined ? ativo : 1
+            })
+            .eq('id', id);
+
+        if (error) throw error;
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.delete('/api/filtros/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { error } = await supabase
+            .from('filtros')
+            .delete()
+            .eq('id', id);
+
+        if (error) throw error;
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================================
+// ROTAS PARA HISTÓRICO E INTELIGÊNCIA PREDITIVA
+// ============================================================
+
+app.get('/api/historico', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('historico')
+            .select('*, estacoes(operadora, municipio, uf)')
+            .order('data_consulta', { ascending: false })
+            .limit(100);
+
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/historico', async (req, res) => {
+    const { numero, estacao_id, distancia } = req.body;
+    if (!numero || !estacao_id) {
+        return res.status(400).json({ error: 'Número e estacao_id são obrigatórios' });
+    }
+
+    try {
+        const { data, error } = await supabase
+            .from('historico')
+            .insert({ numero, estacao_id, distancia: distancia || null })
+            .select();
+
+        if (error) throw error;
+        res.json({ success: true, id: data[0]?.id });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/historico-localizacao', async (req, res) => {
+    const { numero, latitude, longitude, estacao_id } = req.body;
+    if (!numero || latitude === undefined || longitude === undefined) {
+        return res.status(400).json({ error: 'Número, latitude e longitude são obrigatórios' });
+    }
+
+    try {
+        const { data, error } = await supabase
+            .from('historico_localizacao')
+            .insert({ numero, latitude, longitude, estacao_id: estacao_id || null })
+            .select();
+
+        if (error) throw error;
+        res.json({ success: true, id: data[0]?.id });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/analise-padroes', async (req, res) => {
+    const { numero } = req.query;
+
+    if (!numero) {
+        return res.status(400).json({ error: 'Número é obrigatório' });
+    }
+
+    try {
+        const { data: rows, error } = await supabase
+            .from('historico_localizacao')
+            .select('*')
+            .eq('numero', numero)
+            .order('data_hora', { ascending: false })
+            .limit(100);
+
+        if (error) throw error;
+
+        if (!rows || rows.length === 0) {
+            return res.json({ pattern: 'Sem dados suficientes' });
+        }
+
+        const locationCount = {};
+        rows.forEach(row => {
+            const key = `${row.latitude},${row.longitude}`;
+            locationCount[key] = (locationCount[key] || 0) + 1;
+        });
+
+        let mostFrequent = null;
+        let maxCount = 0;
+        for (const [key, count] of Object.entries(locationCount)) {
+            if (count > maxCount) {
+                maxCount = count;
+                mostFrequent = key;
+            }
+        }
+
+        const [lat, lon] = mostFrequent ? mostFrequent.split(',').map(Number) : [null, null];
+
+        const hourCount = {};
+        rows.forEach(row => {
+            const hora = new Date(row.data_hora).getHours().toString();
+            hourCount[hora] = (hourCount[hora] || 0) + 1;
+        });
+
+        let mostFrequentHour = null;
+        let maxHourCount = 0;
+        for (const [hora, count] of Object.entries(hourCount)) {
+            if (count > maxHourCount) {
+                maxHourCount = count;
+                mostFrequentHour = hora;
+            }
+        }
+
+        res.json({
+            pattern: {
+                localizacao_mais_frequente: { latitude: lat, longitude: lon },
+                horario_mais_frequente: mostFrequentHour,
+                total_registros: rows.length
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/alertas', async (req, res) => {
+    const { numero } = req.query;
+
+    if (!numero) {
+        return res.status(400).json({ error: 'Número é obrigatório' });
+    }
+
+    try {
+        const { data: rows, error } = await supabase
+            .from('historico_localizacao')
+            .select('*')
+            .eq('numero', numero)
+            .order('data_hora', { ascending: false })
+            .limit(10);
+
+        if (error) throw error;
+
+        if (!rows || rows.length < 3) {
+            return res.json({ alerta: 'Sem dados suficientes para alertas' });
+        }
+
+        let distanciaTotal = 0;
+        let intervalos = 0;
+
+        for (let i = 0; i < rows.length - 1; i++) {
+            const lat1 = rows[i].latitude;
+            const lon1 = rows[i].longitude;
+            const lat2 = rows[i+1].latitude;
+            const lon2 = rows[i+1].longitude;
+
+            const dist = Math.sqrt(Math.pow(lat2 - lat1, 2) + Math.pow(lon2 - lon1, 2)) * 111;
+            distanciaTotal += dist;
+            intervalos++;
+        }
+
+        const velocidadeMedia = intervalos > 0 ? distanciaTotal / intervalos : 0;
+
+        if (velocidadeMedia > 50) {
+            res.json({
+                alerta: `🚨 Movimento suspeito detectado (${velocidadeMedia.toFixed(1)} km/h). Últimas localizações indicam deslocamento rápido.`
+            });
+        } else if (velocidadeMedia > 20) {
+            res.json({
+                alerta: `⚠️ Movimento moderado detectado (${velocidadeMedia.toFixed(1)} km/h).`
+            });
+        } else {
+            res.json({
+                alerta: `✅ Padrão normal (${velocidadeMedia.toFixed(1)} km/h).`
+            });
+        }
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================================
+// ROTAS PARA COLETAR DADOS DE SINAL E ML (JÁ EXISTENTES, MODIFICADAS)
+// ============================================================
+
+// Rota original - mantida para compatibilidade
+app.post('/api/coletar-sinal', async (req, res) => {
+    const { numero, estacao_id, latitude, longitude, rsrp, sinr, ta } = req.body;
+
+    if (!numero || !estacao_id || latitude === undefined || longitude === undefined) {
+        return res.status(400).json({ error: 'Número, estacao_id, latitude e longitude são obrigatórios' });
+    }
+
+    try {
+        // Insere em dados_sinal (para ML)
+        const { data, error } = await supabase
+            .from('dados_sinal')
+            .insert({ numero, estacao_id, latitude, longitude, rsrp: rsrp || null, sinr: sinr || null, ta: ta || null })
+            .select();
+
+        if (error) throw error;
+        res.json({ success: true, id: data[0]?.id, message: 'Dados de sinal coletados com sucesso.' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Rota principal de coleta - agora com correção TA e inserção em 'coletas' (para localização inteligente)
+app.post('/api/coletar-sinal-auto', async (req, res) => {
+    const { numero, estacao_id, latitude, longitude, rsrp, sinr, ta } = req.body;
+
+    if (!numero || !estacao_id || latitude === undefined || longitude === undefined) {
+        return res.status(400).json({ error: 'Número, estacao_id, latitude e longitude são obrigatórios' });
+    }
+
+    try {
+        // --- 1. Insere na tabela dados_sinal (para ML e compatibilidade) ---
+        const { data, error } = await supabase
+            .from('dados_sinal')
+            .insert({ numero, estacao_id, latitude, longitude, rsrp: rsrp || null, sinr: sinr || null, ta: ta || null })
+            .select();
+
+        if (error) throw error;
+
+        // --- 2. Insere na tabela coletas (para localização inteligente) ---
+        const { error: insertColetaError } = await supabase
+            .from('coletas')
+            .insert([{ numero, estacao_id, latitude, longitude, rsrp, sinr, ta }]);
+
+        if (insertColetaError) {
+            console.error('Erro ao inserir em coletas:', insertColetaError);
+            // Não bloqueia a resposta, pois já inseriu em dados_sinal
+        }
+
+        // --- 3. Correção por Timing Advance (TA) ---
+        let latFinal = latitude;
+        let lonFinal = longitude;
+
+        const { data: estacao, error: estacaoError } = await supabase
+            .from('estacoes')
+            .select('latitude, longitude')
+            .eq('id_estacao', estacao_id)
+            .maybeSingle();
+
+        if (!estacaoError && estacao && ta) {
+            const raioMaximoKm = (ta * 78.12) / 1000;
+            const distAtual = haversine(latitude, longitude, estacao.latitude, estacao.longitude);
+
+            if (distAtual > raioMaximoKm) {
+                const proporcao = raioMaximoKm / distAtual;
+                latFinal = estacao.latitude + (latitude - estacao.latitude) * proporcao;
+                lonFinal = estacao.longitude + (longitude - estacao.longitude) * proporcao;
+            }
+        }
+
+        // --- 4. Treina modelo KNN se houver dados suficientes ---
+        const { count, error: countError } = await supabase
+            .from('dados_sinal')
+            .select('*', { count: 'exact', head: true });
+
+        if (countError) throw countError;
+
+        if (count >= 10) {
+            treinarModeloKNN()
+                .then(result => {
+                    console.log(`✅ Modelo treinado automaticamente com ${result.total_registros} registros.`);
+                })
+                .catch(error => {
+                    console.error('❌ Erro ao treinar modelo automaticamente:', error);
+                });
+        }
+
+        res.json({
+            success: true,
+            id: data[0]?.id,
+            message: 'Dados de sinal coletados com sucesso.',
+            total_registros: count,
+            latitude_corrigida: latFinal,
+            longitude_corrigida: lonFinal
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/treinar-modelo', async (req, res) => {
+    try {
+        const result = await treinarModeloKNN();
+        res.json({ success: true, message: `Modelo treinado com ${result.total_registros} registros.` });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/predizer-localizacao', (req, res) => {
+    const { estacao_id, rsrp, sinr, ta, k } = req.query;
+
+    if (!estacao_id) {
+        return res.status(400).json({ error: 'estacao_id é obrigatório' });
+    }
+
+    const kValue = parseInt(k) || 3;
+
+    predizerLocalizacaoKNN(estacao_id, parseFloat(rsrp), parseFloat(sinr), parseFloat(ta), kValue)
+        .then(result => {
+            res.json({
+                success: true,
+                latitude: result.latitude,
+                longitude: result.longitude,
+                k: result.k,
+                metodo: 'KNN'
+            });
+        })
+        .catch(error => {
+            res.status(500).json({ error: error });
+        });
+});
+
+// ============================================================
+// ===== NOVAS ROTAS PARA LOCALIZAÇÃO INTELIGENTE =====
+// ============================================================
+
+/**
+ * ROTA: /api/localizar-inteligente
+ * Descrição: Retorna a localização mais precisa possível com base em:
+ * - Média ponderada por RSRP
+ * - Filtro de Kalman (suavização)
+ * - Correção de viés por feedback
+ * - Raio de incerteza (precisão)
+ * 
+ * Parâmetro: ?numero=XX
+ * Retorna: objeto com latitude, longitude, raio_incerteza_metros, precisao, etc.
+ */
+app.get('/api/localizar-inteligente', async (req, res) => {
+    const { numero } = req.query;
+
+    if (!numero) {
+        return res.status(400).json({ error: 'Número não informado' });
+    }
+
+    try {
+        // Busca as últimas 15 leituras na tabela coletas
+        const { data: leituras, error: leiturasError } = await supabase
+            .from('coletas')
+            .select('latitude, longitude, rsrp, timestamp')
+            .eq('numero', numero)
+            .order('timestamp', { ascending: false })
+            .limit(15);
+
+        if (leiturasError) {
+            console.error('Erro ao buscar leituras:', leiturasError);
+            return res.status(500).json({ error: 'Erro ao consultar dados' });
+        }
+
+        // Se não houver leituras, retorna 404
+        if (!leituras || leituras.length === 0) {
+            return res.status(404).json({
+                erro: 'Nenhuma localização encontrada para este número',
+                sugestao: 'Realize uma coleta primeiro usando o aplicativo ou script'
+            });
+        }
+
+        // --- PASSO 1: Média Ponderada por RSRP ---
+        const { lat: latPonderada, lon: lonPonderada } = calcularMediaPonderada(leituras);
+
+        // --- PASSO 2: Filtro de Kalman (suavização com histórico) ---
+        const { data: historico, error: historicoError } = await supabase
+            .from('posicoes_historicas')
+            .select('latitude, longitude')
+            .eq('numero', numero)
+            .order('timestamp', { ascending: false })
+            .limit(5);
+
+        let latFinal = latPonderada;
+        let lonFinal = lonPonderada;
+
+        if (!historicoError && historico && historico.length > 0) {
+            const ultima = historico[0];
+            // 70% da nova leitura, 30% do histórico (filtro exponencial)
+            latFinal = ultima.latitude * 0.3 + latPonderada * 0.7;
+            lonFinal = ultima.longitude * 0.3 + lonPonderada * 0.7;
+        }
+
+        // --- PASSO 3: Aplicar viés corrigido pelo feedback dos usuários ---
+        const { data: usuario, error: usuarioError } = await supabase
+            .from('usuarios')
+            .select('vies_lat, vies_lon')
+            .eq('numero', numero)
+            .maybeSingle();
+
+        if (!usuarioError && usuario) {
+            latFinal += usuario.vies_lat;
+            lonFinal += usuario.vies_lon;
+        }
+
+        // --- PASSO 4: Calcular raio de incerteza ---
+        const raioMetros = calcularRaioIncerteza(leituras);
+
+        // --- PASSO 5: Salvar a posição calculada no histórico (para futuros filtros) ---
+        await supabase
+            .from('posicoes_historicas')
+            .insert([{
+                numero: numero,
+                latitude: latFinal,
+                longitude: lonFinal,
+                timestamp: new Date().toISOString()
+            }]);
+
+        // Retorna a localização mais precisa possível
+        res.json({
+            numero,
+            latitude: latFinal,
+            longitude: lonFinal,
+            raio_incerteza_metros: Math.round(raioMetros),
+            precisao: raioMetros < 100 ? 'Alta' : raioMetros < 300 ? 'Média' : 'Baixa',
+            total_amostras: leituras.length,
+            ultima_atualizacao: leituras[0]?.timestamp || null,
+            metodo: 'Ponderado por RSRP + Filtro Kalman + Correção de Viés'
+        });
+
+    } catch (err) {
+        console.error('Erro ao consultar localização inteligente:', err);
+        res.status(500).json({ error: 'Erro interno ao processar localização' });
+    }
+});
+
+/**
+ * ROTA: /api/feedback
+ * Descrição: Recebe uma correção manual do usuário e recalibra o viés do número
+ * Body: { numero, lat_real, lon_real, lat_mostrada, lon_mostrada }
+ */
+app.post('/api/feedback', async (req, res) => {
+    try {
+        const { numero, lat_real, lon_real, lat_mostrada, lon_mostrada } = req.body;
+
+        if (!numero || lat_real === undefined || lon_real === undefined) {
+            return res.status(400).json({ error: 'Campos obrigatórios: numero, lat_real, lon_real' });
+        }
+
+        // Salva o feedback
+        const { error: insertError } = await supabase
+            .from('feedback')
+            .insert([{
+                numero,
+                lat_real,
+                lon_real,
+                lat_mostrada: lat_mostrada || 0,
+                lon_mostrada: lon_mostrada || 0
+            }]);
+
+        if (insertError) {
+            console.error('Erro ao salvar feedback:', insertError);
+            return res.status(500).json({ error: 'Erro ao salvar feedback' });
+        }
+
+        // Recalcula o viés com os últimos 5 feedbacks do mesmo número
+        const { data: feedbacks, error: feedbackError } = await supabase
+            .from('feedback')
+            .select('lat_real, lon_real, lat_mostrada, lon_mostrada')
+            .eq('numero', numero)
+            .order('timestamp', { ascending: false })
+            .limit(5);
+
+        let viesLat = 0, viesLon = 0;
+        if (!feedbackError && feedbacks && feedbacks.length > 0) {
+            let somaViesLat = 0, somaViesLon = 0;
+            feedbacks.forEach(f => {
+                somaViesLat += (f.lat_real - (f.lat_mostrada || 0));
+                somaViesLon += (f.lon_real - (f.lon_mostrada || 0));
+            });
+            viesLat = somaViesLat / feedbacks.length;
+            viesLon = somaViesLon / feedbacks.length;
+
+            // Atualiza ou insere o usuário com o novo viés
+            await supabase
+                .from('usuarios')
+                .upsert({
+                    numero: numero,
+                    vies_lat: viesLat,
+                    vies_lon: viesLon,
+                    ultima_atualizacao: new Date().toISOString()
+                }, { onConflict: 'numero' });
+        }
+
+        res.status(201).json({
+            mensagem: 'Feedback recebido! Obrigado por melhorar o Orion.',
+            viés_aplicado: { vies_lat: viesLat, vies_lon: viesLon }
+        });
+
+    } catch (err) {
+        console.error('Erro ao processar feedback:', err);
+        res.status(500).json({ error: 'Erro interno ao processar feedback' });
+    }
+});
+
+// ============================================================
+// ROTA PARA ESTATÍSTICAS (JÁ EXISTENTE, AJUSTADA PARA NOVAS TABELAS)
+// ============================================================
+
+app.get('/api/estatisticas', async (req, res) => {
+    try {
+        const [
+            estacoesResult,
+            numerosResult,
+            alvosResult,
+            basesResult,
+            recursosResult,
+            filtrosResult,
+            localizacoesResult,
+            dadosSinalResult,
+            coletasResult,
+            feedbackResult,
+            usuariosResult,
+            historicoPosicoesResult
+        ] = await Promise.all([
+            supabase.from('estacoes').select('*', { count: 'exact', head: true }),
+            supabase.from('numeros').select('*', { count: 'exact', head: true }),
+            supabase.from('alvos').select('*', { count: 'exact', head: true }),
+            supabase.from('bases').select('*', { count: 'exact', head: true }),
+            supabase.from('recursos').select('*', { count: 'exact', head: true }),
+            supabase.from('filtros').select('*', { count: 'exact', head: true }),
+            supabase.from('historico_localizacao').select('*', { count: 'exact', head: true }),
+            supabase.from('dados_sinal').select('*', { count: 'exact', head: true }),
+            supabase.from('coletas').select('*', { count: 'exact', head: true }).catch(() => ({ count: 0 })),
+            supabase.from('feedback').select('*', { count: 'exact', head: true }).catch(() => ({ count: 0 })),
+            supabase.from('usuarios').select('*', { count: 'exact', head: true }).catch(() => ({ count: 0 })),
+            supabase.from('posicoes_historicas').select('*', { count: 'exact', head: true }).catch(() => ({ count: 0 }))
+        ]);
+
+        const { data: operadoras } = await supabase
+            .from('estacoes')
+            .select('operadora', { count: 'exact', head: false })
+            .not('operadora', 'is', null);
+
+        const { data: ufs } = await supabase
+            .from('estacoes')
+            .select('uf', { count: 'exact', head: false })
+            .not('uf', 'is', null);
+
+        const operadorasUnicas = new Set(operadoras?.map(item => item.operadora) || []);
+        const ufsUnicas = new Set(ufs?.map(item => item.uf) || []);
+
+        res.json({
+            total_estacoes: estacoesResult.count || 0,
+            total_operadoras: operadorasUnicas.size,
+            total_ufs: ufsUnicas.size,
+            total_numeros: numerosResult.count || 0,
+            total_alvos: alvosResult.count || 0,
+            total_bases: basesResult.count || 0,
+            total_recursos: recursosResult.count || 0,
+            total_filtros: filtrosResult.count || 0,
+            total_localizacoes: localizacoesResult.count || 0,
+            total_dados_sinal: dadosSinalResult.count || 0,
+            total_coletas: coletasResult.count || 0,
+            total_feedback: feedbackResult.count || 0,
+            total_usuarios_com_viés: usuariosResult.count || 0,
+            total_historico_posicoes: historicoPosicoesResult.count || 0
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================================
+// INICIALIZAÇÃO DO SERVIDOR
+// ============================================================
+
+(async () => {
+    await importarERBs();
+    console.log('✅ ORION pronto para uso.');
+})();
+
+app.listen(port, () => {
+    console.log(`🚀 ORION rodando na porta ${port} (IPv4 e IPv6)`);
+    console.log(`🧠 Novas rotas inteligentes disponíveis:`);
+    console.log(`   GET /api/localizar-inteligente?numero=XX`);
+    console.log(`   POST /api/feedback`);
+    console.log(`📊 Tabelas adicionais: coletas, feedback, usuarios, posicoes_historicas`);
+});
+
+process.on('SIGINT', () => {
+    console.log('👋 ORION encerrado.');
+    process.exit(0);
 });
