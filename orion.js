@@ -2,7 +2,7 @@
  * ====================================================================
  * ORION - SISTEMA DE GERENCIAMENTO DE ERBs E LOCALIZAÇÃO INTELIGENTE
  * ====================================================================
- * VERSÃO: 2.1 (com localização inteligente, feedback, KNN e cadastro)
+ * VERSÃO: 2.2 (com correções de vírgula/ponto, histórico e divisão por zero)
  * DATA: 2026-08-29
  * ====================================================================
  */
@@ -43,27 +43,77 @@ app.use((req, res, next) => {
 // ============================================================
 // FUNÇÕES AUXILIARES (matemática)
 // ============================================================
-function calcularMediaPonderada(leituras) {
-    const validas = leituras.filter(l => l.rsrp > -110);
-    if (validas.length === 0) {
-        const latMedia = leituras.reduce((s, l) => s + l.latitude, 0) / leituras.length;
-        const lonMedia = leituras.reduce((s, l) => s + l.longitude, 0) / leituras.length;
-        return { lat: latMedia, lon: lonMedia };
+
+/**
+ * Converte uma string numérica com vírgula para número com ponto
+ */
+function parseNumber(value) {
+    if (typeof value === 'number' && !isNaN(value)) return value;
+    if (typeof value === 'string') {
+        const cleaned = value.replace(',', '.').trim();
+        const num = parseFloat(cleaned);
+        return isNaN(num) ? null : num;
     }
-    const pesos = validas.map(l => Math.pow(10, l.rsrp / 10));
+    return null;
+}
+
+/**
+ * Média ponderada por RSRP com proteção contra divisão por zero
+ */
+function calcularMediaPonderada(leituras) {
+    // Filtra leituras válidas (RSRP > -110 para evitar ruído)
+    const validas = leituras.filter(l => {
+        const rsrp = parseNumber(l.rsrp);
+        return rsrp !== null && rsrp > -110;
+    });
+
+    if (validas.length === 0) {
+        // Fallback: média simples
+        const lats = leituras.map(l => parseNumber(l.latitude)).filter(v => v !== null);
+        const lons = leituras.map(l => parseNumber(l.longitude)).filter(v => v !== null);
+        if (lats.length === 0 || lons.length === 0) {
+            return { lat: null, lon: null };
+        }
+        return {
+            lat: lats.reduce((a, b) => a + b, 0) / lats.length,
+            lon: lons.reduce((a, b) => a + b, 0) / lons.length
+        };
+    }
+
+    // Converte RSRP para escala linear e calcula pesos
+    const pesos = validas.map(l => Math.pow(10, parseNumber(l.rsrp) / 10));
     const somaPesos = pesos.reduce((a, b) => a + b, 0);
+    if (somaPesos === 0) {
+        // Se todos os pesos forem zero, volta para a média simples
+        const lats = validas.map(l => parseNumber(l.latitude)).filter(v => v !== null);
+        const lons = validas.map(l => parseNumber(l.longitude)).filter(v => v !== null);
+        return {
+            lat: lats.reduce((a, b) => a + b, 0) / lats.length,
+            lon: lons.reduce((a, b) => a + b, 0) / lons.length
+        };
+    }
+
     let latFinal = 0, lonFinal = 0;
     validas.forEach((l, i) => {
-        latFinal += l.latitude * (pesos[i] / somaPesos);
-        lonFinal += l.longitude * (pesos[i] / somaPesos);
+        const lat = parseNumber(l.latitude);
+        const lon = parseNumber(l.longitude);
+        if (lat !== null && lon !== null) {
+            latFinal += lat * (pesos[i] / somaPesos);
+            lonFinal += lon * (pesos[i] / somaPesos);
+        }
     });
+
     return { lat: latFinal, lon: lonFinal };
 }
 
+/**
+ * Raio de incerteza baseado no desvio padrão
+ */
 function calcularRaioIncerteza(leituras) {
-    if (leituras.length < 2) return 300;
-    const lats = leituras.map(l => l.latitude);
-    const lons = leituras.map(l => l.longitude);
+    const lats = leituras.map(l => parseNumber(l.latitude)).filter(v => v !== null);
+    const lons = leituras.map(l => parseNumber(l.longitude)).filter(v => v !== null);
+    if (lats.length < 2 || lons.length < 2) return 300;
+
     const desvioLat = desvioPadrao(lats);
     const desvioLon = desvioPadrao(lons);
     const raioMetros = Math.max(desvioLat, desvioLon) * 111000;
@@ -78,6 +128,9 @@ function desvioPadrao(values) {
     return Math.sqrt(somaQuad / n);
 }
 
+/**
+ * Distância Haversine (km)
+ */
 function haversine(lat1, lon1, lat2, lon2) {
     const R = 6371;
     const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -91,6 +144,7 @@ function haversine(lat1, lon1, lat2, lon2) {
 // ============================================================
 // FUNÇÕES PARA IMPORTAR ERBs E ML (KNN)
 // ============================================================
+
 function parseCSVLine(line, linhaNumero) {
     line = line.trimEnd();
     if (line.startsWith('"') && line.endsWith('"')) {
@@ -284,49 +338,74 @@ function predizerLocalizacaoKNN(estacao_id, rsrp, sinr, ta, k = 3) {
 // ============================================================
 async function migrarDadosAntigos() {
     console.log('🔄 Verificando necessidade de migração...');
+    // Verifica se já há dados em posicoes_historicas
     const { count, error: countError } = await supabase
         .from('posicoes_historicas')
         .select('*', { count: 'exact', head: true });
+
     if (countError) {
-        console.log('ℹ️ Tabela posicoes_historicas pode não existir ainda. Verifique se o SQL foi executado.');
+        console.log('ℹ️ Tabela posicoes_historicas ainda não existe. Criando...');
+        // A criação é feita via SQL no Supabase, mas vamos tentar continuar.
+        // Se a tabela não existir, a migração será ignorada.
         return;
     }
+
     if (count > 0) {
         console.log(`✅ Histórico já possui ${count} registros. Migração não necessária.`);
         return;
     }
+
     console.log('📥 Populando posicoes_historicas com dados antigos...');
-    const { data, error } = await supabase
+
+    // Busca a última coordenada de cada número na tabela dados_sinal (ou coletas)
+    let { data, error } = await supabase
         .from('dados_sinal')
         .select('numero, latitude, longitude, data_hora')
         .order('data_hora', { ascending: false });
-    if (error) {
-        console.error('❌ Erro ao buscar dados antigos:', error);
-        return;
+
+    // Se não houver dados em dados_sinal, tenta da tabela coletas
+    if (error || !data || data.length === 0) {
+        console.log('ℹ️ Nenhum dado em dados_sinal. Tentando coletas...');
+        const result = await supabase
+            .from('coletas')
+            .select('numero, latitude, longitude, timestamp')
+            .order('timestamp', { ascending: false });
+        if (result.error) {
+            console.error('❌ Erro ao buscar dados antigos de coletas:', result.error);
+            return;
+        }
+        data = result.data;
+        if (!data || data.length === 0) {
+            console.log('ℹ️ Nenhum dado antigo para migrar.');
+            return;
+        }
+        // Renomeia campo timestamp para data_hora para consistência
+        data = data.map(row => ({ ...row, data_hora: row.timestamp }));
     }
-    if (!data || data.length === 0) {
-        console.log('ℹ️ Nenhum dado antigo para migrar.');
-        return;
-    }
+
+    // Agrupa pela última ocorrência de cada número
     const ultimasPosicoes = {};
     data.forEach(row => {
         if (!ultimasPosicoes[row.numero]) {
             ultimasPosicoes[row.numero] = {
                 numero: row.numero,
-                latitude: row.latitude,
-                longitude: row.longitude,
-                timestamp: row.data_hora
+                latitude: parseNumber(row.latitude) || 0,
+                longitude: parseNumber(row.longitude) || 0,
+                timestamp: row.data_hora || row.timestamp || new Date().toISOString()
             };
         }
     });
+
     const historico = Object.values(ultimasPosicoes);
     if (historico.length === 0) {
         console.log('ℹ️ Nenhum dado antigo para migrar.');
         return;
     }
+
     const { error: insertError } = await supabase
         .from('posicoes_historicas')
         .insert(historico);
+
     if (insertError) {
         console.error('❌ Erro na migração:', insertError);
     } else {
@@ -951,23 +1030,30 @@ app.post('/api/coletar-sinal-auto', async (req, res) => {
         return res.status(400).json({ error: 'Número, estacao_id, latitude e longitude são obrigatórios' });
     }
     try {
+        // Converte vírgula para ponto para garantir
+        const lat = parseFloat(String(latitude).replace(',', '.'));
+        const lon = parseFloat(String(longitude).replace(',', '.'));
+        if (isNaN(lat) || isNaN(lon)) {
+            return res.status(400).json({ error: 'Latitude ou longitude inválidas' });
+        }
+
         // Insere em dados_sinal
         const { data, error } = await supabase
             .from('dados_sinal')
-            .insert({ numero, estacao_id, latitude, longitude, rsrp: rsrp || null, sinr: sinr || null, ta: ta || null })
+            .insert({ numero, estacao_id, latitude: lat, longitude: lon, rsrp: rsrp || null, sinr: sinr || null, ta: ta || null })
             .select();
         if (error) throw error;
 
         // Insere em coletas (para localização inteligente)
         const { error: insertColetaError } = await supabase
             .from('coletas')
-            .insert([{ numero, estacao_id, latitude, longitude, rsrp, sinr, ta }]);
+            .insert([{ numero, estacao_id, latitude: lat, longitude: lon, rsrp, sinr, ta }]);
         if (insertColetaError) {
-            console.error('Erro ao inserir em coletas:', insertColetaError);
+            console.error('⚠️ Erro ao inserir em coletas (pode não existir):', insertColetaError);
         }
 
         // Correção por TA
-        let latFinal = latitude, lonFinal = longitude;
+        let latFinal = lat, lonFinal = lon;
         const { data: estacao, error: estacaoError } = await supabase
             .from('estacoes')
             .select('latitude, longitude')
@@ -975,11 +1061,11 @@ app.post('/api/coletar-sinal-auto', async (req, res) => {
             .maybeSingle();
         if (!estacaoError && estacao && ta) {
             const raioMaximoKm = (ta * 78.12) / 1000;
-            const distAtual = haversine(latitude, longitude, estacao.latitude, estacao.longitude);
+            const distAtual = haversine(lat, lon, estacao.latitude, estacao.longitude);
             if (distAtual > raioMaximoKm) {
                 const proporcao = raioMaximoKm / distAtual;
-                latFinal = estacao.latitude + (latitude - estacao.latitude) * proporcao;
-                lonFinal = estacao.longitude + (longitude - estacao.longitude) * proporcao;
+                latFinal = estacao.latitude + (lat - estacao.latitude) * proporcao;
+                lonFinal = estacao.longitude + (lon - estacao.longitude) * proporcao;
             }
         }
 
@@ -1003,6 +1089,7 @@ app.post('/api/coletar-sinal-auto', async (req, res) => {
             longitude_corrigida: lonFinal
         });
     } catch (error) {
+        console.error('Erro em /api/coletar-sinal-auto:', error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -1026,10 +1113,9 @@ app.get('/api/predizer-localizacao', (req, res) => {
 });
 
 // ============================================================
-// ROTAS INTELIGENTES (NOVAS)
+// ROTA INTELIGENTE (CORRIGIDA)
 // ============================================================
 
-// Localização inteligente (estilo Google)
 app.get('/api/localizar-inteligente', async (req, res) => {
     const { numero } = req.query;
     if (!numero) return res.status(400).json({ error: 'Número não informado' });
@@ -1055,8 +1141,23 @@ app.get('/api/localizar-inteligente', async (req, res) => {
             });
         }
 
+        // Converte vírgula para ponto e filtra inválidos
+        const leiturasCorrigidas = leituras.map(l => ({
+            latitude: parseNumber(l.latitude),
+            longitude: parseNumber(l.longitude),
+            rsrp: parseNumber(l.rsrp) || -100,
+            timestamp: l.timestamp
+        })).filter(l => l.latitude !== null && l.longitude !== null);
+
+        if (leiturasCorrigidas.length === 0) {
+            return res.status(500).json({ error: 'Dados inválidos (formato numérico incorreto)' });
+        }
+
         // Média ponderada por RSRP
-        const { lat: latPonderada, lon: lonPonderada } = calcularMediaPonderada(leituras);
+        const { lat: latPonderada, lon: lonPonderada } = calcularMediaPonderada(leiturasCorrigidas);
+        if (latPonderada === null || lonPonderada === null) {
+            return res.status(500).json({ error: 'Falha no cálculo da média ponderada' });
+        }
 
         // Filtro de Kalman (histórico)
         const { data: historico, error: historicoError } = await supabase
@@ -1069,28 +1170,40 @@ app.get('/api/localizar-inteligente', async (req, res) => {
         let latFinal = latPonderada, lonFinal = lonPonderada;
         if (!historicoError && historico && historico.length > 0) {
             const ultima = historico[0];
-            latFinal = ultima.latitude * 0.3 + latPonderada * 0.7;
-            lonFinal = ultima.longitude * 0.3 + lonPonderada * 0.7;
+            // Converte também os valores do histórico (podem ter vírgula)
+            const latHistorico = parseNumber(ultima.latitude);
+            const lonHistorico = parseNumber(ultima.longitude);
+            if (latHistorico !== null && lonHistorico !== null) {
+                latFinal = latHistorico * 0.3 + latPonderada * 0.7;
+                lonFinal = lonHistorico * 0.3 + lonPonderada * 0.7;
+            }
         }
 
-        // Aplicar viés do feedback
+        // Aplicar viés do feedback (se houver)
         const { data: usuario, error: usuarioError } = await supabase
             .from('usuarios')
             .select('vies_lat, vies_lon')
             .eq('numero', numero)
             .maybeSingle();
         if (!usuarioError && usuario) {
-            latFinal += usuario.vies_lat;
-            lonFinal += usuario.vies_lon;
+            const viesLat = parseNumber(usuario.vies_lat) || 0;
+            const viesLon = parseNumber(usuario.vies_lon) || 0;
+            latFinal += viesLat;
+            lonFinal += viesLon;
         }
 
         // Raio de incerteza
-        const raioMetros = calcularRaioIncerteza(leituras);
+        const raioMetros = calcularRaioIncerteza(leiturasCorrigidas);
 
-        // Salvar no histórico
-        await supabase
+        // Salvar no histórico (com tratamento de erro)
+        const { error: insertError } = await supabase
             .from('posicoes_historicas')
             .insert([{ numero, latitude: latFinal, longitude: lonFinal, timestamp: new Date().toISOString() }]);
+
+        if (insertError) {
+            console.error('⚠️ Erro ao inserir histórico:', insertError);
+            // Não bloqueia a resposta
+        }
 
         res.json({
             numero,
@@ -1104,12 +1217,14 @@ app.get('/api/localizar-inteligente', async (req, res) => {
         });
 
     } catch (err) {
-        console.error('Erro ao consultar localização inteligente:', err);
-        res.status(500).json({ error: 'Erro interno ao processar localização' });
+        console.error('❌ Erro na rota /api/localizar-inteligente:', err);
+        res.status(500).json({ error: 'Erro interno ao processar localização: ' + err.message });
     }
 });
 
-// Feedback do usuário
+// ============================================================
+// ROTA DE FEEDBACK (CORRIGIDA)
+// ============================================================
 app.post('/api/feedback', async (req, res) => {
     try {
         const { numero, lat_real, lon_real, lat_mostrada, lon_mostrada } = req.body;
@@ -1117,10 +1232,17 @@ app.post('/api/feedback', async (req, res) => {
             return res.status(400).json({ error: 'Campos obrigatórios: numero, lat_real, lon_real' });
         }
 
+        // Converte vírgula para ponto
+        const latReal = parseNumber(lat_real);
+        const lonReal = parseNumber(lon_real);
+        if (latReal === null || lonReal === null) {
+            return res.status(400).json({ error: 'lat_real ou lon_real inválidos' });
+        }
+
         // Salva o feedback
         const { error: insertError } = await supabase
             .from('feedback')
-            .insert([{ numero, lat_real, lon_real, lat_mostrada: lat_mostrada || 0, lon_mostrada: lon_mostrada || 0 }]);
+            .insert([{ numero, lat_real: latReal, lon_real: lonReal, lat_mostrada: parseNumber(lat_mostrada) || 0, lon_mostrada: parseNumber(lon_mostrada) || 0 }]);
         if (insertError) {
             console.error('Erro ao salvar feedback:', insertError);
             return res.status(500).json({ error: 'Erro ao salvar feedback' });
@@ -1138,8 +1260,12 @@ app.post('/api/feedback', async (req, res) => {
         if (!feedbackError && feedbacks && feedbacks.length > 0) {
             let somaViesLat = 0, somaViesLon = 0;
             feedbacks.forEach(f => {
-                somaViesLat += (f.lat_real - (f.lat_mostrada || 0));
-                somaViesLon += (f.lon_real - (f.lon_mostrada || 0));
+                const latReal = parseNumber(f.lat_real) || 0;
+                const lonReal = parseNumber(f.lon_real) || 0;
+                const latMostrada = parseNumber(f.lat_mostrada) || 0;
+                const lonMostrada = parseNumber(f.lon_mostrada) || 0;
+                somaViesLat += (latReal - latMostrada);
+                somaViesLon += (lonReal - lonMostrada);
             });
             viesLat = somaViesLat / feedbacks.length;
             viesLon = somaViesLon / feedbacks.length;
@@ -1156,7 +1282,7 @@ app.post('/api/feedback', async (req, res) => {
 
     } catch (err) {
         console.error('Erro ao processar feedback:', err);
-        res.status(500).json({ error: 'Erro interno ao processar feedback' });
+        res.status(500).json({ error: 'Erro interno ao processar feedback: ' + err.message });
     }
 });
 
