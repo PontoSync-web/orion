@@ -3,28 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Orion - Localizador Inteligente com ML</title>
+    <title>Orion - Localizador Inteligente</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', sans-serif; }
         body { background: #0b1a2e; color: #fff; display: flex; flex-direction: column; align-items: center; padding: 20px; }
-        h1 { color: #00d4ff; margin-bottom: 20px; text-shadow: 0 0 10px #00d4ff77; }
         .container { width: 100%; max-width: 950px; background: #132b44; padding: 20px; border-radius: 16px; box-shadow: 0 8px 30px rgba(0,0,0,0.6); }
         .search-box { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
         .search-box input { flex: 1; padding: 12px; border: none; border-radius: 8px; background: #1e3a5f; color: #fff; font-size: 16px; outline: 1px solid #2a4a7a; }
         .search-box input:focus { outline: 2px solid #00d4ff; }
         .search-box button { padding: 12px 24px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; transition: 0.3s; }
         .btn-buscar { background: #00d4ff; color: #0b1a2e; }
-        .btn-buscar:hover { background: #00b8e6; transform: scale(1.02); }
-        .btn-treinar { background: #ff9800; color: #0b1a2e; }
-        .btn-treinar:hover { background: #f57c00; transform: scale(1.02); }
-        .btn-limpar { background: #f44336; color: #fff; }
-        .btn-limpar:hover { background: #d32f2f; transform: scale(1.02); }
-        .ml-indicator { display: inline-block; padding: 2px 12px; border-radius: 12px; font-size: 11px; font-weight: bold; margin-left: 10px; }
-        .ml-active { background: #4caf50; color: #0b1a2e; }
-        .ml-training { background: #ffc107; color: #0b1a2e; animation: pulse 1s infinite; }
-        .ml-inactive { background: #666; color: #fff; }
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+        .btn-buscar:hover { background: #00b8e6; }
         #map { height: 450px; border-radius: 12px; margin: 15px 0; border: 2px solid #2a4a7a; }
         .info-panel { background: #0b1a2e; padding: 15px; border-radius: 10px; margin: 10px 0; display: none; border-left: 4px solid #00d4ff; }
         .info-panel.visible { display: block; }
@@ -33,43 +23,31 @@
         .info-item label { font-size: 10px; color: #88bbdd; display: block; }
         .info-item span { font-size: 14px; font-weight: bold; color: #fff; }
         .precisao-alta { color: #4caf50; }
-        .precisao-media { color: #ffc107; }
-        .precisao-baixa { color: #ff9800; }
-        .precisao-muito-baixa { color: #f44336; }
         .feedback-area { display: none; margin-top: 15px; padding: 15px; background: #1a3350; border-radius: 10px; border: 1px dashed #00d4ff; }
         .feedback-area.visible { display: block; }
         .feedback-area button { background: #ffc107; color: #0b1a2e; padding: 10px 20px; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; }
         .feedback-area button:hover { background: #ffb300; }
         .erro { color: #ff6b6b; padding: 10px; background: #2a1a1a; border-radius: 6px; margin: 10px 0; display: none; }
         .loading { color: #88bbdd; text-align: center; padding: 20px; display: none; }
-        .footer { margin-top: 20px; color: #557799; font-size: 12px; }
-        #metodo { font-size: 13px; color: #88bbdd; margin-top: 5px; font-style: italic; }
-        #feedbackStatus { margin-left: 15px; }
         .feedback-success { color: #4caf50; }
         .feedback-error { color: #f44336; }
         .feedback-info { color: #ffc107; }
-        .mensagem-fallback { color: #ff9800; padding: 10px; background: #2a1a00; border-radius: 6px; margin-top: 10px; border-left: 4px solid #ff9800; }
-        #coords-corrigidas { font-size: 13px; color: #88bbdd; margin-top: 5px; }
-        .ml-badge { background: #1a3a5a; padding: 8px 12px; border-radius: 8px; margin-top: 5px; font-size: 12px; border-left: 3px solid #00d4ff; }
-        .ml-badge strong { color: #00d4ff; }
+        #feedbackStatus { margin-left: 15px; }
+        .debug { background: #1a1a2e; color: #88ddff; padding: 10px; border-radius: 6px; font-family: monospace; font-size: 12px; margin-top: 10px; display: none; white-space: pre-wrap; word-break: break-all; max-height: 150px; overflow-y: auto; }
+        .debug.visible { display: block; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h1>
-        📍 Orion - Localizador Inteligente 
-        <span id="mlStatus" class="ml-indicator ml-inactive">🧠 ML Inativo</span>
-    </h1>
+    <h1>📍 Orion - Localizador</h1>
     
     <div class="search-box">
         <input type="text" id="numeroInput" placeholder="Digite o número (ex: 71988979724)" value="71988979724">
-        <button class="btn-buscar" onclick="buscarLocalizacao()">🔍 Localizar com ML</button>
-        <button class="btn-treinar" onclick="treinarModeloML()">🧠 Treinar ML</button>
-        <button class="btn-limpar" onclick="limparDadosML()">🗑️ Limpar ML</button>
+        <button class="btn-buscar" onclick="buscarLocalizacao()">🔍 Localizar</button>
     </div>
 
-    <div id="loading" class="loading">⏳ Buscando localização com inteligência artificial...</div>
+    <div id="loading" class="loading">⏳ Buscando localização...</div>
     <div id="erro" class="erro"></div>
 
     <div id="map"></div>
@@ -82,48 +60,32 @@
             <div class="info-item"><label>🎯 Raio Incerteza</label><span id="infoRaio">-</span></div>
             <div class="info-item"><label>📊 Amostras</label><span id="infoAmostras">-</span></div>
             <div class="info-item"><label>🕒 Última atualização</label><span id="infoData">-</span></div>
-            <div class="info-item"><label>🧠 Confiança ML</label><span id="mlConfianca">-</span></div>
         </div>
         <div id="metodo">🧠 Método: Aguardando consulta...</div>
-        <div id="mensagemFallback" class="mensagem-fallback" style="display:none;"></div>
-        <div id="coords-corrigidas" style="display:none;"></div>
-        <div id="mlInfo" class="ml-badge" style="display:none;">
-            <strong>🧠 ML Insights:</strong> <span id="mlInsights">-</span>
-        </div>
+        <div id="viesInfo" style="font-size:13px; color:#88bbdd; margin-top:5px;"></div>
     </div>
 
     <div id="feedbackArea" class="feedback-area">
         <p><strong>📍 A localização está errada?</strong></p>
-        <p style="font-size:13px; color:#88bbdd;">
-            Clique no mapa para definir a localização correta (surge um marcador vermelho) 
-            e depois clique em "Enviar Correção ML".
-        </p>
-        <button onclick="enviarFeedbackML()">✅ Enviar Correção ML</button>
+        <p style="font-size:13px; color:#88bbdd;">Clique no mapa para definir a localização correta e clique em "Enviar Correção".</p>
+        <button onclick="enviarFeedback()">✅ Enviar Correção</button>
         <span id="feedbackStatus" class="feedback-info">🟡 Aguardando ação...</span>
     </div>
 
-    <div class="footer">
-        Orion v3.1 • ML integrado • Aprendizado contínuo com feedback inteligente • Feedbacks melhoram a precisão
+    <div id="debug" class="debug"></div>
+
+    <div class="footer" style="margin-top:20px; color:#557799; font-size:12px;">
+        Orion v3.1 • Aprendizado contínuo • Feedbacks melhoram a precisão
     </div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 <script>
-    // ============================================================
-    // CONFIGURAÇÕES E ESTADO
-    // ============================================================
     const API_URL = window.location.origin;
     let map, marker, circle, posicaoAtual = null;
     let markerCorrigido = null;
-    let dadosFallback = null;
-    let modeloML = null;
-    let dadosTreino = [];
-    let mlTreinado = false;
 
-    // ============================================================
-    // FUNÇÕES AUXILIARES
-    // ============================================================
     function parseNumber(value) {
         if (typeof value === 'number' && !isNaN(value)) return value;
         if (typeof value === 'string') {
@@ -134,155 +96,13 @@
         return null;
     }
 
-    function distanciaHaversine(lat1, lon1, lat2, lon2) {
-        const R = 6371;
-        const dLat = (lat2 - lat1) * Math.PI / 180;
-        const dLon = (lon2 - lon1) * Math.PI / 180;
-        const a = Math.sin(dLat/2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) ** 2;
-        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    function logDebug(msg) {
+        const el = document.getElementById('debug');
+        el.textContent += msg + '\n';
+        el.classList.add('visible');
+        console.log(msg);
     }
 
-    function formatarErro(metros) {
-        if (metros < 50) return '🏆 Excelente (<50m)';
-        if (metros < 150) return '✅ Bom (150m)';
-        if (metros < 500) return '⚠️ Médio (500m)';
-        return '🔴 Ruim (>500m)';
-    }
-
-    // ============================================================
-    // MACHINE LEARNING - REGRESSÃO LINEAR PONDERADA
-    // ============================================================
-    function treinarModeloML() {
-        const numero = document.getElementById('numeroInput').value.trim();
-        if (!numero) {
-            mostrarMensagem('Digite um número primeiro.', 'erro');
-            return;
-        }
-
-        document.getElementById('mlStatus').className = 'ml-indicator ml-training';
-        document.getElementById('mlStatus').textContent = '🧠 Treinando...';
-
-        fetch(`${API_URL}/api/feedback?numero=${numero}`)
-            .then(res => {
-                if (!res.ok) throw new Error('Erro ao buscar feedbacks');
-                return res.json();
-            })
-            .then(data => {
-                if (data && data.length > 2) {
-                    dadosTreino = data.map(f => ({
-                        lat_real: parseNumber(f.lat_real),
-                        lon_real: parseNumber(f.lon_real),
-                        lat_mostrada: parseNumber(f.lat_mostrada),
-                        lon_mostrada: parseNumber(f.lon_mostrada),
-                        erro_lat: parseNumber(f.lat_real) - parseNumber(f.lat_mostrada),
-                        erro_lon: parseNumber(f.lon_real) - parseNumber(f.lon_mostrada),
-                        confianca: Math.max(0.1, 1 - (parseNumber(f.erro_metros) || 0) / 5000)
-                    })).filter(f => f.lat_real !== null && f.lon_real !== null);
-
-                    if (dadosTreino.length >= 3) {
-                        const pesos = dadosTreino.map(f => f.confianca);
-                        const somaPesos = pesos.reduce((a, b) => a + b, 0);
-                        let viesLat = 0, viesLon = 0;
-                        dadosTreino.forEach((f, i) => {
-                            viesLat += f.erro_lat * (pesos[i] / somaPesos);
-                            viesLon += f.erro_lon * (pesos[i] / somaPesos);
-                        });
-
-                        viesLat = Math.min(Math.max(viesLat, -0.01), 0.01);
-                        viesLon = Math.min(Math.max(viesLon, -0.01), 0.01);
-
-                        modeloML = { 
-                            viesLat, 
-                            viesLon, 
-                            confianca: Math.min(somaPesos / dadosTreino.length, 0.95),
-                            amostras: dadosTreino.length
-                        };
-                        mlTreinado = true;
-                        
-                        document.getElementById('mlStatus').className = 'ml-indicator ml-active';
-                        document.getElementById('mlStatus').textContent = `🧠 ML Ativo (${dadosTreino.length} amostras)`;
-                        document.getElementById('mlInsights').textContent = 
-                            `Viés lat: ${(viesLat * 111000).toFixed(0)}m, lon: ${(viesLon * 111000).toFixed(0)}m | Confiança: ${(modeloML.confianca * 100).toFixed(0)}%`;
-                        document.getElementById('mlInfo').style.display = 'block';
-                        
-                        mostrarMensagem(`🧠 Modelo ML treinado com ${dadosTreino.length} amostras!`, 'sucesso');
-                    } else {
-                        document.getElementById('mlStatus').className = 'ml-indicator ml-inactive';
-                        document.getElementById('mlStatus').textContent = `🧠 ML: ${dadosTreino.length}/3 amostras`;
-                        mostrarMensagem(`⚠️ Preciso de pelo menos 3 feedbacks. Atualmente: ${dadosTreino.length}`, 'erro');
-                    }
-                } else {
-                    document.getElementById('mlStatus').className = 'ml-indicator ml-inactive';
-                    document.getElementById('mlStatus').textContent = '🧠 ML: sem dados';
-                    mostrarMensagem('⚠️ Sem dados de feedback. Envie algumas correções primeiro.', 'erro');
-                }
-            })
-            .catch(err => {
-                console.error('Erro:', err);
-                document.getElementById('mlStatus').className = 'ml-indicator ml-inactive';
-                document.getElementById('mlStatus').textContent = '🧠 ML: erro';
-                mostrarMensagem('❌ Erro ao carregar feedbacks.', 'erro');
-            });
-    }
-
-    function limparDadosML() {
-        modeloML = null;
-        dadosTreino = [];
-        mlTreinado = false;
-        document.getElementById('mlStatus').className = 'ml-indicator ml-inactive';
-        document.getElementById('mlStatus').textContent = '🧠 ML Limpo';
-        document.getElementById('mlInfo').style.display = 'none';
-        document.getElementById('mlConfianca').textContent = 'N/A';
-        mostrarMensagem('🧹 Dados ML limpos. Envie novos feedbacks para treinar.', 'sucesso');
-    }
-
-    // ============================================================
-    // PREDIÇÃO COM ML
-    // ============================================================
-    function predizerComML(lat, lon, raio) {
-        if (!mlTreinado || !modeloML || modeloML.confianca < 0.2) {
-            return { lat, lon, raio, ajustado: false };
-        }
-        
-        const latAjustada = lat + modeloML.viesLat;
-        const lonAjustada = lon + modeloML.viesLon;
-        const raioAjustado = raio * (1 - modeloML.confianca * 0.6);
-        
-        return {
-            lat: latAjustada,
-            lon: lonAjustada,
-            raio: Math.max(raioAjustado, 5),
-            ajustado: true,
-            viesLat: modeloML.viesLat,
-            viesLon: modeloML.viesLon,
-            confianca: modeloML.confianca,
-            amostras: modeloML.amostras
-        };
-    }
-
-    // ============================================================
-    // FUNÇÃO PARA MOSTRAR MENSAGEM
-    // ============================================================
-    function mostrarMensagem(texto, tipo = 'sucesso', tempo = 5000) {
-        const el = document.getElementById('erro');
-        if (tipo === 'sucesso') {
-            el.style.color = '#4caf50';
-            el.style.background = '#1a4a2a';
-            el.textContent = '✅ ' + texto;
-        } else {
-            el.style.color = '#ff6b6b';
-            el.style.background = '#2a1a1a';
-            el.textContent = '❌ ' + texto;
-        }
-        el.style.display = 'block';
-        document.getElementById('loading').style.display = 'none';
-        clearTimeout(el._timeout);
-        el._timeout = setTimeout(() => { el.style.display = 'none'; }, tempo);
-    }
-
-    // ============================================================
-    // FUNÇÕES DO MAPA
-    // ============================================================
     function initMap(lat = -12.9342, lon = -38.3751) {
         if (map) {
             map.setView([lat, lon], 14);
@@ -295,36 +115,25 @@
 
         map.on('click', function(e) {
             if (!posicaoAtual) {
-                alert('Primeiro faça uma busca para carregar uma localização.');
+                alert('Primeiro faça uma busca.');
                 return;
             }
             if (!markerCorrigido) {
-                markerCorrigido = L.marker([e.latlng.lat, e.latlng.lng], {
-                    draggable: true,
-                    icon: L.icon({
-                        iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-                        shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-                        iconSize: [25, 41],
-                        iconAnchor: [12, 41]
-                    })
-                }).addTo(map);
+                markerCorrigido = L.marker([e.latlng.lat, e.latlng.lng], { draggable: true }).addTo(map);
                 markerCorrigido._icon.style.filter = 'hue-rotate(120deg) saturate(3)';
             } else {
                 markerCorrigido.setLatLng([e.latlng.lat, e.latlng.lng]);
             }
             document.getElementById('feedbackArea').classList.add('visible');
-            document.getElementById('feedbackStatus').textContent = '📍 Nova posição definida. Clique em "Enviar Correção ML".';
+            document.getElementById('feedbackStatus').textContent = '📍 Nova posição definida. Clique em "Enviar Correção".';
             document.getElementById('feedbackStatus').className = 'feedback-info';
         });
     }
 
-    // ============================================================
-    // BUSCAR LOCALIZAÇÃO (COM ML)
-    // ============================================================
     async function buscarLocalizacao() {
         const numero = document.getElementById('numeroInput').value.trim();
         if (!numero) {
-            mostrarMensagem('Digite um número válido.', 'erro');
+            alert('Digite um número válido.');
             return;
         }
 
@@ -332,98 +141,71 @@
         document.getElementById('erro').style.display = 'none';
         document.getElementById('infoPanel').classList.remove('visible');
         document.getElementById('feedbackArea').classList.remove('visible');
-        document.getElementById('mensagemFallback').style.display = 'none';
-        document.getElementById('metodo').textContent = '🧠 Processando com IA...';
-        document.getElementById('coords-corrigidas').style.display = 'none';
-        dadosFallback = null;
+        document.getElementById('debug').classList.remove('visible');
+        document.getElementById('debug').textContent = '';
+        logDebug('🔍 Buscando: ' + numero);
 
         try {
             const response = await fetch(`${API_URL}/api/localizar-fallback?numero=${encodeURIComponent(numero)}`);
             const data = await response.json();
+            logDebug('📦 Resposta do servidor: ' + JSON.stringify(data, null, 2));
 
             if (!response.ok) {
-                mostrarMensagem(data.erro || 'Número não encontrado.', 'erro');
+                document.getElementById('erro').textContent = '❌ ' + (data.erro || 'Número não encontrado.');
+                document.getElementById('erro').style.display = 'block';
                 return;
             }
 
-            dadosFallback = data.fallback || false;
-            let latBase = parseNumber(data.latitude);
-            let lonBase = parseNumber(data.longitude);
-            
-            if (latBase === null || lonBase === null) {
-                mostrarMensagem('Coordenadas inválidas recebidas.', 'erro');
+            const lat = parseNumber(data.latitude);
+            const lon = parseNumber(data.longitude);
+            if (lat === null || lon === null) {
+                alert('Coordenadas inválidas.');
                 return;
             }
-
-            // Aplica ML se disponível
-            let resultadoML = predizerComML(latBase, lonBase, data.raio_incerteza_metros || 300);
-            const latFinal = resultadoML.lat;
-            const lonFinal = resultadoML.lon;
-            const raioFinal = resultadoML.raio;
 
             posicaoAtual = {
-                lat: latFinal,
-                lon: lonFinal,
-                raio: raioFinal,
-                precisao: raioFinal < 50 ? 'Alta' : raioFinal < 150 ? 'Média' : raioFinal < 500 ? 'Baixa' : 'Muito Baixa',
+                lat: lat,
+                lon: lon,
+                raio: data.raio_incerteza_metros || 300,
+                precisao: data.precisao || 'Média',
                 amostras: data.total_amostras || 0,
-                data: data.ultima_atualizacao,
-                metodo: resultadoML.ajustado ? 'ML + ' + data.metodo : data.metodo || 'Orion v3.1',
-                mlAjustado: resultadoML.ajustado,
-                mlConfianca: resultadoML.confianca || 0
+                data: data.ultima_atualizacao
             };
 
-            initMap(latFinal, lonFinal);
+            initMap(lat, lon);
 
             if (marker) map.removeLayer(marker);
-            marker = L.marker([latFinal, lonFinal]).addTo(map);
+            marker = L.marker([lat, lon]).addTo(map);
 
             if (circle) map.removeLayer(circle);
-            const cor = posicaoAtual.precisao === 'Alta' ? '#4caf50' : 
-                        posicaoAtual.precisao === 'Média' ? '#ffc107' : 
-                        posicaoAtual.precisao === 'Baixa' ? '#ff9800' : '#f44336';
-            circle = L.circle([latFinal, lonFinal], {
-                radius: raioFinal,
+            const cor = posicaoAtual.precisao === 'Alta' ? '#4caf50' : '#ffc107';
+            circle = L.circle([lat, lon], {
+                radius: posicaoAtual.raio,
                 color: cor,
                 fillColor: cor,
                 fillOpacity: 0.15,
                 weight: 2
             }).addTo(map);
 
-            const zoomLevel = raioFinal < 50 ? 17 : raioFinal < 150 ? 16 : raioFinal < 500 ? 14 : 12;
-            map.setView([latFinal, lonFinal], zoomLevel);
+            map.setView([lat, lon], 15);
 
-            document.getElementById('infoLat').textContent = latFinal.toFixed(6);
-            document.getElementById('infoLon').textContent = lonFinal.toFixed(6);
+            document.getElementById('infoLat').textContent = lat.toFixed(6);
+            document.getElementById('infoLon').textContent = lon.toFixed(6);
             document.getElementById('infoPrecisao').textContent = posicaoAtual.precisao;
-            const precisaoClass = posicaoAtual.precisao.toLowerCase().replace(' ', '-');
-            document.getElementById('infoPrecisao').className = `precisao-${precisaoClass}`;
-            document.getElementById('infoRaio').textContent = `${raioFinal.toFixed(0)} m`;
+            document.getElementById('infoPrecisao').className = `precisao-${posicaoAtual.precisao.toLowerCase()}`;
+            document.getElementById('infoRaio').textContent = `${posicaoAtual.raio} m`;
             document.getElementById('infoAmostras').textContent = posicaoAtual.amostras || 'N/A';
             document.getElementById('infoData').textContent = data.ultima_atualizacao ? new Date(data.ultima_atualizacao).toLocaleString() : 'N/A';
-            document.getElementById('mlConfianca').textContent = posicaoAtual.mlAjustado ? `${(posicaoAtual.mlConfianca * 100).toFixed(0)}%` : 'N/A';
+            document.getElementById('metodo').textContent = `🧠 Método: ${data.metodo || 'Orion v3.1'}`;
             
-            let metodoTexto = posicaoAtual.metodo;
-            if (posicaoAtual.mlAjustado) {
-                metodoTexto += ` 🧠 ML aplicado (confiança ${(posicaoAtual.mlConfianca * 100).toFixed(0)}%)`;
-            }
-            document.getElementById('metodo').textContent = `🧠 ${metodoTexto}`;
-            
-            if (data.fallback && data.mensagem) {
-                const msgEl = document.getElementById('mensagemFallback');
-                msgEl.textContent = `⚠️ ${data.mensagem}`;
-                msgEl.style.display = 'block';
-            }
-
-            if (resultadoML.ajustado) {
-                document.getElementById('coords-corrigidas').style.display = 'block';
-                document.getElementById('coords-corrigidas').textContent = 
-                    `📊 ML: viés lat=${(resultadoML.viesLat * 111000).toFixed(0)}m, lon=${(resultadoML.viesLon * 111000).toFixed(0)}m | Confiança: ${(resultadoML.confianca * 100).toFixed(0)}%`;
+            if (data.vies_aplicado) {
+                document.getElementById('viesInfo').textContent = 
+                    `📊 Viés aplicado: lat=${data.vies_aplicado.lat || 0}, lon=${data.vies_aplicado.lon || 0}`;
             }
 
             document.getElementById('infoPanel').classList.add('visible');
             document.getElementById('feedbackArea').classList.add('visible');
-            document.getElementById('feedbackStatus').textContent = '🟡 Clique no mapa para corrigir se a localização estiver errada.';
+            document.getElementById('feedbackStatus').textContent = '🟡 Clique no mapa para corrigir.';
             document.getElementById('feedbackStatus').className = 'feedback-info';
 
             if (markerCorrigido) {
@@ -432,69 +214,61 @@
             }
 
         } catch (error) {
-            mostrarMensagem('Erro de conexão com o servidor.', 'erro');
-            console.error(error);
+            logDebug('❌ Erro: ' + error.message);
+            document.getElementById('erro').textContent = '❌ Erro de conexão.';
+            document.getElementById('erro').style.display = 'block';
         } finally {
             document.getElementById('loading').style.display = 'none';
         }
     }
 
-    // ============================================================
-    // ENVIAR FEEDBACK COM ML (CORRIGIDO)
-    // ============================================================
-    async function enviarFeedbackML() {
+    async function enviarFeedback() {
         const numero = document.getElementById('numeroInput').value.trim();
         if (!posicaoAtual) {
-            alert('Nenhuma localização carregada para corrigir.');
+            alert('Nenhuma localização carregada.');
             return;
         }
         if (!markerCorrigido) {
-            alert('Clique no mapa para definir a localização correta primeiro.');
+            alert('Clique no mapa para definir a localização correta.');
             return;
         }
 
-        // OBTÉM E CONVERTE AS COORDENADAS CORRETAMENTE
+        // CONVERTE VÍRGULA PARA PONTO
         const latReal = parseNumber(markerCorrigido.getLatLng().lat);
         const lonReal = parseNumber(markerCorrigido.getLatLng().lng);
         const latMostrada = parseNumber(posicaoAtual.lat);
         const lonMostrada = parseNumber(posicaoAtual.lon);
+
+        logDebug('📤 Enviando feedback:');
+        logDebug(`  lat_real: ${latReal} (${typeof latReal})`);
+        logDebug(`  lon_real: ${lonReal} (${typeof lonReal})`);
+        logDebug(`  lat_mostrada: ${latMostrada} (${typeof latMostrada})`);
+        logDebug(`  lon_mostrada: ${lonMostrada} (${typeof lonMostrada})`);
 
         if (latReal === null || lonReal === null || latMostrada === null || lonMostrada === null) {
             alert('Erro: coordenadas inválidas.');
             return;
         }
 
-        const erroMetros = distanciaHaversine(latMostrada, lonMostrada, latReal, lonReal) * 1000;
+        const body = {
+            numero: numero,
+            lat_real: latReal,
+            lon_real: lonReal,
+            lat_mostrada: latMostrada,
+            lon_mostrada: lonMostrada,
+            metodo: 'frontend',
+            rsrp: null,
+            sinr: null,
+            ta: null
+        };
 
-        if (!confirm(`Deseja corrigir a localização de ${numero}?\n\n` +
-            `Correção: ${latReal.toFixed(6)}, ${lonReal.toFixed(6)}\n` +
-            `Anterior: ${latMostrada.toFixed(6)}, ${lonMostrada.toFixed(6)}\n` +
-            `Erro: ${erroMetros.toFixed(0)}m (${formatarErro(erroMetros)})\n\n` +
-            `🧠 Isso ajudará o ML a aprender!`)) {
-            return;
-        }
+        logDebug('📦 Body enviado: ' + JSON.stringify(body));
 
         const statusEl = document.getElementById('feedbackStatus');
-        statusEl.textContent = '⏳ Enviando correção ML...';
+        statusEl.textContent = '⏳ Enviando...';
         statusEl.className = 'feedback-info';
 
         try {
-            // CONSTRÓI O BODY COM NÚMEROS (NÃO STRINGS)
-            const body = {
-                numero: numero,
-                lat_real: latReal,
-                lon_real: lonReal,
-                lat_mostrada: latMostrada,
-                lon_mostrada: lonMostrada,
-                metodo: posicaoAtual.metodo || 'desconhecido',
-                rsrp: null,
-                sinr: null,
-                ta: null,
-                erro_metros: erroMetros
-            };
-
-            console.log('📤 Enviando feedback:', body);
-
             const response = await fetch(`${API_URL}/api/feedback`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -502,34 +276,29 @@
             });
 
             const data = await response.json();
+            logDebug('📦 Resposta do servidor: ' + JSON.stringify(data));
+
             if (response.ok) {
-                statusEl.textContent = '✅ Correção ML enviada! O sistema vai aprender com isso.';
+                statusEl.textContent = '✅ Correção enviada! O sistema vai aprender.';
                 statusEl.className = 'feedback-success';
                 if (markerCorrigido) {
                     map.removeLayer(markerCorrigido);
                     markerCorrigido = null;
                 }
-                setTimeout(() => {
-                    treinarModeloML();
-                    buscarLocalizacao();
-                }, 2000);
+                setTimeout(() => buscarLocalizacao(), 2000);
             } else {
-                statusEl.textContent = '❌ Erro ao enviar: ' + (data.erro || 'Tente novamente');
+                statusEl.textContent = '❌ Erro: ' + (data.erro || 'Tente novamente');
                 statusEl.className = 'feedback-error';
-                console.error('❌ Resposta do servidor:', data);
-                alert('Erro ao enviar feedback: ' + (data.erro || 'Tente novamente'));
+                alert('Erro ao enviar feedback:\n' + JSON.stringify(data, null, 2));
             }
         } catch (error) {
+            logDebug('❌ Erro de rede: ' + error.message);
             statusEl.textContent = '❌ Erro de conexão.';
             statusEl.className = 'feedback-error';
-            console.error('❌ Erro de rede:', error);
-            alert('Erro de conexão com o servidor.');
+            alert('Erro de conexão: ' + error.message);
         }
     }
 
-    // ============================================================
-    // INICIALIZAÇÃO
-    // ============================================================
     document.addEventListener('DOMContentLoaded', () => {
         initMap(-12.9342, -38.3751);
     });
