@@ -5,674 +5,335 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ORION - Gerenciar Bases e Recursos</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #0a0a1a;
-            color: #00ff88;
-            padding: 20px;
-            min-height: 100vh;
-        }
-
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-
-        h1 {
-            color: #00ff88;
-            margin-bottom: 20px;
-            font-size: 2em;
-            border-bottom: 2px solid #00ff88;
-            padding-bottom: 10px;
-        }
-
-        h2 {
-            color: #88ffbb;
-            font-size: 1.3em;
-            margin-bottom: 15px;
-            border-bottom: 1px solid #446655;
-            padding-bottom: 5px;
-        }
-
-        h3 {
-            color: #88ffbb;
-            font-size: 1em;
-            margin: 15px 0 10px 0;
-        }
-
-        .grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-        }
-
-        .card {
-            background: #1a1a2e;
-            padding: 20px;
-            border: 1px solid #00ff88;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }
-
-        .form-group {
-            margin-bottom: 10px;
-        }
-
-        .form-group label {
-            display: block;
-            font-size: 0.8em;
-            color: #88ffbb;
-            margin-bottom: 3px;
-        }
-
-        input,
-        select {
-            width: 100%;
-            padding: 8px 12px;
-            background: #0a0a1a;
-            color: #00ff88;
-            border: 1px solid #00ff88;
-            border-radius: 4px;
-            font-size: 0.9em;
-            box-sizing: border-box;
-        }
-
-        input::placeholder {
-            color: #446655;
-        }
-
-        button {
-            padding: 8px 20px;
-            background: #00ff88;
-            color: #0a0a1a;
-            border: none;
-            border-radius: 4px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: background 0.2s;
-            font-size: 0.9em;
-            width: 100%;
-            margin-top: 5px;
-        }
-
-        button:hover {
-            background: #88ffbb;
-        }
-
-        .btn-danger {
-            background: #ff4444;
-            color: white;
-        }
-
-        .btn-danger:hover {
-            background: #ff6666;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 10px;
-            font-size: 0.85em;
-        }
-
-        th,
-        td {
-            border: 1px solid #00ff88;
-            padding: 6px 8px;
-            text-align: left;
-        }
-
-        th {
-            background: #1a1a2e;
-            color: #88ffbb;
-        }
-
-        td {
-            word-break: break-word;
-        }
-
-        .status-disponivel {
-            color: #00ff88;
-        }
-        .status-ocupado {
-            color: #ffaa00;
-        }
-        .status-manutencao {
-            color: #ff4444;
-        }
-        .status-indisponivel {
-            color: #666666;
-        }
-
-        .acoes-cell {
-            display: flex;
-            gap: 5px;
-            flex-wrap: wrap;
-        }
-
-        .acoes-cell button {
-            padding: 4px 10px;
-            font-size: 0.75em;
-            width: auto;
-            margin: 0;
-        }
-
-        .btn-deletar {
-            background: #ff4444;
-            color: white;
-        }
-        .btn-deletar:hover {
-            background: #ff6666;
-        }
-
-        .btn-editar {
-            background: #ffaa00;
-            color: #0a0a1a;
-        }
-        .btn-editar:hover {
-            background: #ffcc44;
-        }
-
-        .btn-alocar {
-            background: #44aaff;
-            color: #0a0a1a;
-        }
-        .btn-alocar:hover {
-            background: #66ccff;
-        }
-
-        .empty-message {
-            color: #446655;
-            text-align: center;
-            padding: 15px;
-            font-style: italic;
-        }
-
-        .status-bar {
-            margin-top: 10px;
-            padding: 10px;
-            background: #0a0a1a;
-            border: 1px solid #446655;
-            border-radius: 4px;
-            font-size: 0.8em;
-            color: #88ffbb;
-        }
-
-        /* Responsividade */
-        @media (max-width: 900px) {
-            .grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        @media (max-width: 600px) {
-            body {
-                padding: 10px;
-            }
-            .card {
-                padding: 15px;
-            }
-            table {
-                font-size: 0.75em;
-            }
-            th,
-            td {
-                padding: 4px 6px;
-            }
-            .acoes-cell button {
-                padding: 2px 8px;
-                font-size: 0.7em;
-            }
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', sans-serif; }
+        body { background: #0b1a2e; color: #fff; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        .container { width: 100%; max-width: 1100px; background: #132b44; padding: 25px; border-radius: 16px; box-shadow: 0 8px 30px rgba(0,0,0,0.6); }
+        h1, h2 { color: #00d4ff; margin-bottom: 20px; }
+        h2 { font-size: 1.2rem; margin-top: 30px; border-bottom: 1px solid #2a4a7a; padding-bottom: 10px; }
+        .form-group { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; align-items: flex-end; background: #0b1a2e; padding: 15px; border-radius: 10px; }
+        .form-group label { display: flex; flex-direction: column; flex: 1; min-width: 120px; gap: 4px; color: #88bbdd; font-size: 12px; }
+        .form-group input, .form-group select { padding: 8px 12px; border: none; border-radius: 6px; background: #1e3a5f; color: #fff; font-size: 14px; outline: 1px solid #2a4a7a; }
+        .form-group input:focus, .form-group select:focus { outline: 2px solid #00d4ff; }
+        .form-group button { padding: 8px 24px; background: #00d4ff; border: none; border-radius: 6px; font-weight: bold; color: #0b1a2e; cursor: pointer; transition: 0.3s; flex: 0 0 auto; height: 38px; }
+        .form-group button:hover { background: #00b8e6; transform: scale(1.02); }
+        .form-group button.danger { background: #f44336; color: #fff; }
+        .form-group button.danger:hover { background: #d32f2f; }
+        .mensagem { padding: 10px; border-radius: 6px; margin: 10px 0; display: none; }
+        .mensagem.sucesso { background: #1a4a2a; color: #8bffb0; display: block; border-left: 4px solid #4caf50; }
+        .mensagem.erro { background: #4a1a1a; color: #ff8b8b; display: block; border-left: 4px solid #f44336; }
+        .tabela { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 14px; }
+        .tabela th { background: #1e3a5f; text-align: left; padding: 12px 10px; color: #88bbdd; }
+        .tabela td { padding: 10px; border-bottom: 1px solid #1e3a5f; vertical-align: middle; }
+        .tabela tr:hover { background: #1a3350; }
+        .tabela .acoes button { background: #2a4a7a; border: none; padding: 4px 12px; border-radius: 4px; color: #fff; cursor: pointer; font-size: 12px; transition: 0.2s; margin-right: 4px; }
+        .tabela .acoes button:hover { background: #3a6a9a; }
+        .tabela .acoes button.danger { background: #f44336; }
+        .tabela .acoes button.danger:hover { background: #d32f2f; }
+        .vazio { color: #557799; text-align: center; padding: 20px; }
+        .loading { color: #88bbdd; text-align: center; padding: 20px; }
+        .voltar { display: inline-block; margin-top: 20px; color: #88bbdd; text-decoration: none; }
+        .voltar:hover { color: #00d4ff; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; background: #2a4a7a; }
+        .badge-cadastrado { background: #1a4a2a; color: #8bffb0; }
+        .badge-desconhecido { background: #4a3a1a; color: #ffb74d; }
     </style>
 </head>
 <body>
 
-    <div class="container">
-        <h1>📦 ORION - Gerenciar Bases e Recursos</h1>
+<div class="container">
+    <h1>📦 ORION - Gerenciar Bases e Recursos</h1>
+    <p style="color: #88bbdd; margin-bottom: 20px;">Gerencie suas bases (cidades/setores) e recursos (números de celular).</p>
 
-        <div class="status-bar" id="statusBar">
-            🟢 Sistema conectado. Gerencie suas bases e recursos.
-        </div>
+    <div id="mensagemGlobal" class="mensagem"></div>
 
-        <div class="grid">
-            <!-- ============================================================ -->
-            <!-- CARD DE BASES -->
-            <!-- ============================================================ -->
-            <div class="card">
-                <h2>🏢 Bases (Setores)</h2>
-                <p style="font-size:0.8em; color:#446655; margin-bottom:15px;">
-                    Cadastre as cidades ou setores onde seus recursos (números) podem estar alocados.
-                </p>
-
-                <div class="form-group">
-                    <label for="baseNome">Nome da Base *</label>
-                    <input id="baseNome" placeholder="Ex: Salvador - BA" value="">
-                </div>
-
-                <div class="form-group">
-                    <label for="baseUF">UF</label>
-                    <input id="baseUF" placeholder="Ex: BA" value="">
-                </div>
-
-                <div class="form-group">
-                    <label for="baseMunicipio">Município</label>
-                    <input id="baseMunicipio" placeholder="Ex: Salvador" value="">
-                </div>
-
-                <div class="form-group">
-                    <label for="baseLat">Latitude *</label>
-                    <input id="baseLat" placeholder="Ex: -12.9714" value="">
-                </div>
-
-                <div class="form-group">
-                    <label for="baseLon">Longitude *</label>
-                    <input id="baseLon" placeholder="Ex: -38.5014" value="">
-                </div>
-
-                <button onclick="cadastrarBase()">➕ Cadastrar Base</button>
-
-                <h3>📋 Bases Cadastradas</h3>
-                <div style="overflow-x: auto;">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th>Nome</th>
-                                <th>UF</th>
-                                <th>Município</th>
-                                <th>Ações</th>
-                            </tr>
-                        </thead>
-                        <tbody id="listaBases">
-                            <tr><td colspan="5" class="empty-message">Nenhuma base cadastrada.</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- ============================================================ -->
-            <!-- CARD DE RECURSOS -->
-            <!-- ============================================================ -->
-            <div class="card">
-                <h2>📱 Recursos (Números)</h2>
-                <p style="font-size:0.8em; color:#446655; margin-bottom:15px;">
-                    Associe cada número de celular a uma base. O ORION usará a localização da base para buscar ERBs.
-                </p>
-
-                <div class="form-group">
-                    <label for="recursoNumero">Número *</label>
-                    <input id="recursoNumero" placeholder="Ex: 71985549724" value="">
-                </div>
-
-                <div class="form-group">
-                    <label for="recursoOperadora">Operadora</label>
-                    <input id="recursoOperadora" placeholder="Ex: TIM, VIVO, CLARO" value="">
-                </div>
-
-                <div class="form-group">
-                    <label for="recursoNome">Nome do Recurso</label>
-                    <input id="recursoNome" placeholder="Ex: Aparelho Sala 1" value="">
-                </div>
-
-                <div class="form-group">
-                    <label for="recursoBaseId">Base Associada *</label>
-                    <select id="recursoBaseId">
-                        <option value="">Selecione uma base</option>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label for="recursoStatus">Status</label>
-                    <select id="recursoStatus">
-                        <option value="disponivel">Disponível</option>
-                        <option value="ocupado">Ocupado</option>
-                        <option value="manutencao">Manutenção</option>
-                        <option value="indisponivel">Indisponível</option>
-                    </select>
-                </div>
-
-                <button onclick="cadastrarRecurso()">📲 Cadastrar Recurso</button>
-
-                <h3>📋 Recursos Cadastrados</h3>
-                <div style="overflow-x: auto;">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th>Número</th>
-                                <th>Operadora</th>
-                                <th>Base</th>
-                                <th>Status</th>
-                                <th>Ações</th>
-                            </tr>
-                        </thead>
-                        <tbody id="listaRecursos">
-                            <tr><td colspan="6" class="empty-message">Nenhum recurso cadastrado.</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        <!-- ============================================================ -->
-        <!-- SEÇÃO DE ALOCAÇÃO (AÇÕES RÁPIDAS) -->
-        <!-- ============================================================ -->
-        <div class="card" style="margin-top: 20px;">
-            <h2>🔄 Ações Rápidas</h2>
-            <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;">
-                <div style="flex: 1; min-width: 150px;">
-                    <label for="rapidoRecursoId" style="display:block; font-size:0.8em; color:#88ffbb;">Recurso</label>
-                    <select id="rapidoRecursoId" style="width:100%;">
-                        <option value="">Selecione um recurso</option>
-                    </select>
-                </div>
-                <div style="flex: 1; min-width: 150px;">
-                    <label for="rapidoBaseId" style="display:block; font-size:0.8em; color:#88ffbb;">Nova Base</label>
-                    <select id="rapidoBaseId" style="width:100%;">
-                        <option value="">Selecione a base</option>
-                    </select>
-                </div>
-                <button onclick="moverRecurso()" style="flex: 0 0 auto; width: auto; padding: 8px 20px;">🚚 Mover para Base</button>
-                <button onclick="carregarDados()" style="flex: 0 0 auto; width: auto; padding: 8px 20px; background: #446655;">🔄 Recarregar</button>
-            </div>
-        </div>
+    <!-- ========== FORMULÁRIO DE BASE ========== -->
+    <h2>🏢 Cadastrar Nova Base</h2>
+    <div class="form-group" id="formBase">
+        <label>Nome da Base <input type="text" id="nomeBase" placeholder="Ex: Salvador Matriz" value="Salvador Piatã"></label>
+        <label>UF <input type="text" id="ufBase" placeholder="BA" value="BA"></label>
+        <label>Município <input type="text" id="municipioBase" placeholder="Salvador" value="Salvador"></label>
+        <label>Latitude <input type="number" step="any" id="latBase" placeholder="-12.9342" value="-12.9342"></label>
+        <label>Longitude <input type="number" step="any" id="lonBase" placeholder="-38.3751" value="-38.3751"></label>
+        <button onclick="cadastrarBase()">📥 Cadastrar Base</button>
     </div>
 
-    <script>
-        // ============================================================
-        // CONFIGURAÇÃO DA API
-        // ============================================================
-        const API_URL = window.location.origin;
+    <!-- ========== LISTA DE BASES ========== -->
+    <h2>🏢 Bases Cadastradas</h2>
+    <div id="listaBases" style="overflow-x: auto;">
+        <div class="loading">⏳ Carregando bases...</div>
+    </div>
 
-        // ============================================================
-        // FUNÇÕES AUXILIARES
-        // ============================================================
-        function mostrarStatus(mensagem, tipo = 'info') {
-            const bar = document.getElementById('statusBar');
-            const emojis = {
-                'info': 'ℹ️',
-                'success': '✅',
-                'error': '❌',
-                'warning': '⚠️'
-            };
-            bar.innerHTML = `${emojis[tipo] || 'ℹ️'} ${mensagem}`;
-            bar.style.borderColor = tipo === 'error' ? '#ff4444' : tipo === 'success' ? '#00ff88' : '#446655';
-        }
+    <!-- ========== FORMULÁRIO DE RECURSO ========== -->
+    <h2>📱 Cadastrar Recurso (Número)</h2>
+    <div class="form-group" id="formRecurso">
+        <label>Número <input type="text" id="numeroRecurso" placeholder="71985549724" value="71985549724"></label>
+        <label>Operadora <input type="text" id="operadoraRecurso" placeholder="Vivo" value="Vivo"></label>
+        <label>Nome (opcional) <input type="text" id="nomeRecurso" placeholder="Celular teste"></label>
+        <label>Base (ID) <input type="number" id="baseRecurso" placeholder="ID da base"></label>
+        <label>Status 
+            <select id="statusRecurso">
+                <option value="ativo">Ativo</option>
+                <option value="inativo">Inativo</option>
+                <option value="desconhecido" selected>Desconhecido</option>
+            </select>
+        </label>
+        <button onclick="cadastrarRecurso()">📥 Cadastrar Recurso</button>
+    </div>
 
-        // ============================================================
-        // FUNÇÕES DE BASE (API)
-        // ============================================================
-        async function carregarBases() {
-            try {
-                const res = await fetch(`${API_URL}/api/bases`);
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                const bases = await res.json();
+    <!-- ========== LISTA DE RECURSOS ========== -->
+    <h2>📱 Recursos Cadastrados</h2>
+    <div id="listaRecursos" style="overflow-x: auto;">
+        <div class="loading">⏳ Carregando recursos...</div>
+    </div>
 
-                // Atualiza tabela de bases
-                const tbody = document.getElementById('listaBases');
-                if (bases.length === 0) {
-                    tbody.innerHTML = `<tr><td colspan="5" class="empty-message">Nenhuma base cadastrada.</td></tr>`;
-                } else {
-                    tbody.innerHTML = '';
-                    bases.forEach(base => {
-                        const tr = document.createElement('tr');
-                        tr.innerHTML = `
-                            <td>${base.id}</td>
-                            <td><strong>${base.nome || 'Sem nome'}</strong></td>
-                            <td>${base.uf || '-'}</td>
-                            <td>${base.municipio || '-'}</td>
-                            <td>
-                                <div class="acoes-cell">
-                                    <button class="btn-deletar" onclick="deletarBase(${base.id})">🗑️</button>
-                                </div>
-                            </td>
-                        `;
-                        tbody.appendChild(tr);
-                    });
-                }
+    <a href="mapa-localizar.html" class="voltar">🗺️ Ir para o Mapa Inteligente</a>
+</div>
 
-                // Atualiza selects de bases
-                const selects = ['recursoBaseId', 'rapidoBaseId'];
-                selects.forEach(id => {
-                    const select = document.getElementById(id);
-                    const currentValue = select.value;
-                    select.innerHTML = '<option value="">Selecione uma base</option>';
-                    bases.forEach(base => {
-                        const option = document.createElement('option');
-                        option.value = base.id;
-                        option.text = `${base.nome || 'Base ' + base.id} (${base.uf || '??'})`;
-                        select.appendChild(option);
-                    });
-                    if (currentValue) select.value = currentValue;
-                });
+<script>
+    // ============================================================
+    // CONFIGURAÇÕES
+    // ============================================================
+    const API_URL = window.location.origin;
 
-                return bases;
-            } catch (error) {
-                mostrarStatus(`Erro ao carregar bases: ${error.message}`, 'error');
-                return [];
-            }
-        }
+    // ============================================================
+    // FUNÇÃO PARA MOSTRAR MENSAGEM
+    // ============================================================
+    function mostrarMensagem(texto, tipo = 'sucesso', tempo = 5000) {
+        const el = document.getElementById('mensagemGlobal');
+        el.textContent = texto;
+        el.className = `mensagem ${tipo}`;
+        clearTimeout(el._timeout);
+        el._timeout = setTimeout(() => {
+            el.className = 'mensagem';
+            el.textContent = '';
+        }, tempo);
+    }
 
-        async function cadastrarBase() {
-            const nome = document.getElementById('baseNome').value.trim();
-            const uf = document.getElementById('baseUF').value.trim().toUpperCase();
-            const municipio = document.getElementById('baseMunicipio').value.trim();
-            const latitude = parseFloat(document.getElementById('baseLat').value);
-            const longitude = parseFloat(document.getElementById('baseLon').value);
+    // ============================================================
+    // 1. GERENCIAR BASES
+    // ============================================================
 
-            if (!nome || isNaN(latitude) || isNaN(longitude)) {
-                mostrarStatus('❌ Nome, Latitude e Longitude são obrigatórios.', 'error');
+    async function carregarBases() {
+        const container = document.getElementById('listaBases');
+        try {
+            const response = await fetch(`${API_URL}/api/bases`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+
+            if (!data || data.length === 0) {
+                container.innerHTML = `<div class="vazio">Nenhuma base cadastrada.</div>`;
                 return;
             }
 
-            try {
-                const res = await fetch(`${API_URL}/api/bases`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ nome, uf, municipio, latitude, longitude })
-                });
-                const result = await res.json();
-                if (result.success) {
-                    mostrarStatus(`✅ Base "${nome}" cadastrada com sucesso!`, 'success');
-                    // Limpa campos
-                    document.getElementById('baseNome').value = '';
-                    document.getElementById('baseUF').value = '';
-                    document.getElementById('baseMunicipio').value = '';
-                    document.getElementById('baseLat').value = '';
-                    document.getElementById('baseLon').value = '';
-                    carregarBases();
-                } else {
-                    mostrarStatus(`❌ Erro: ${result.error}`, 'error');
-                }
-            } catch (error) {
-                mostrarStatus(`❌ Erro de conexão: ${error.message}`, 'error');
-            }
+            let html = `<table class="tabela"><thead><tr>
+                <th>ID</th><th>Nome</th><th>UF</th><th>Município</th>
+                <th>Latitude</th><th>Longitude</th><th>Ações</th>
+            </tr></thead><tbody>`;
+            data.forEach(item => {
+                html += `<tr>
+                    <td>${item.id}</td>
+                    <td><strong>${item.nome}</strong></td>
+                    <td>${item.uf || '-'}</td>
+                    <td>${item.municipio || '-'}</td>
+                    <td>${item.latitude}</td>
+                    <td>${item.longitude}</td>
+                    <td class="acoes">
+                        <button onclick="excluirBase(${item.id})" class="danger">🗑️ Excluir</button>
+                        <button onclick="preencherBase(${item.id})">✏️ Editar</button>
+                    </td>
+                </tr>`;
+            });
+            html += `</tbody></table>`;
+            container.innerHTML = html;
+        } catch (error) {
+            container.innerHTML = `<div class="vazio" style="color:#f44336;">❌ Erro ao carregar bases: ${error.message}</div>`;
+        }
+    }
+
+    async function cadastrarBase() {
+        const nome = document.getElementById('nomeBase').value.trim();
+        const uf = document.getElementById('ufBase').value.trim();
+        const municipio = document.getElementById('municipioBase').value.trim();
+        const latitude = parseFloat(document.getElementById('latBase').value);
+        const longitude = parseFloat(document.getElementById('lonBase').value);
+
+        if (!nome || isNaN(latitude) || isNaN(longitude)) {
+            mostrarMensagem('❌ Preencha todos os campos corretamente.', 'erro');
+            return;
         }
 
-        async function deletarBase(id) {
-            if (!confirm(`Tem certeza que deseja deletar a base ${id}? Isso pode afetar recursos associados.`)) return;
-            try {
-                const res = await fetch(`${API_URL}/api/bases/${id}`, { method: 'DELETE' });
-                const result = await res.json();
-                if (result.success) {
-                    mostrarStatus(`✅ Base ${id} deletada.`, 'success');
-                    carregarBases();
-                    carregarRecursos();
-                } else {
-                    mostrarStatus(`❌ Erro: ${result.error}`, 'error');
-                }
-            } catch (error) {
-                mostrarStatus(`❌ Erro de conexão: ${error.message}`, 'error');
+        const body = { nome, uf, municipio, latitude, longitude };
+
+        try {
+            const response = await fetch(`${API_URL}/api/bases`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                mostrarMensagem(`✅ Base "${nome}" cadastrada com sucesso! (ID: ${data.id})`, 'sucesso');
+                // Limpa o campo nome, mantendo os demais
+                document.getElementById('nomeBase').value = '';
+                carregarBases();
+            } else {
+                mostrarMensagem(`❌ Erro ao cadastrar base: ${data.error || 'Falha no servidor'}`, 'erro');
             }
+        } catch (error) {
+            mostrarMensagem(`❌ Erro de rede: ${error.message}`, 'erro');
         }
+    }
 
-        // ============================================================
-        // FUNÇÕES DE RECURSO (API)
-        // ============================================================
-        async function carregarRecursos() {
-            try {
-                const res = await fetch(`${API_URL}/api/recursos`);
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                const recursos = await res.json();
+    // Função para preencher o formulário de base com os dados para edição
+    function preencherBase(id) {
+        mostrarMensagem(`✏️ Edição da base ${id} em breve. Por enquanto, exclua e recrie.`, 'sucesso', 3000);
+        // Aqui você pode implementar a lógica de edição
+    }
 
-                // Carrega bases para associar nomes
-                const basesRes = await fetch(`${API_URL}/api/bases`);
-                const bases = await basesRes.json();
-                const baseMap = {};
-                bases.forEach(b => { baseMap[b.id] = b; });
-
-                // Atualiza tabela de recursos
-                const tbody = document.getElementById('listaRecursos');
-                if (recursos.length === 0) {
-                    tbody.innerHTML = `<tr><td colspan="6" class="empty-message">Nenhum recurso cadastrado.</td></tr>`;
-                } else {
-                    tbody.innerHTML = '';
-                    recursos.forEach(recurso => {
-                        const base = baseMap[recurso.base_id] || null;
-                        const statusClass = `status-${recurso.status || 'indisponivel'}`;
-                        const tr = document.createElement('tr');
-                        tr.innerHTML = `
-                            <td>${recurso.id}</td>
-                            <td><strong>${recurso.numero}</strong></td>
-                            <td>${recurso.operadora || '-'}</td>
-                            <td>${base ? base.nome : 'Sem base'}</td>
-                            <td class="${statusClass}">${recurso.status || 'Indisponível'}</td>
-                            <td>
-                                <div class="acoes-cell">
-                                    <button class="btn-deletar" onclick="deletarRecurso(${recurso.id})">🗑️</button>
-                                </div>
-                            </td>
-                        `;
-                        tbody.appendChild(tr);
-                    });
-                }
-
-                // Atualiza select de recursos para ações rápidas
-                const select = document.getElementById('rapidoRecursoId');
-                const currentValue = select.value;
-                select.innerHTML = '<option value="">Selecione um recurso</option>';
-                recursos.forEach(recurso => {
-                    const option = document.createElement('option');
-                    option.value = recurso.id;
-                    option.text = `${recurso.numero} (${recurso.operadora || '??'})`;
-                    select.appendChild(option);
-                });
-                if (currentValue) select.value = currentValue;
-
-                return recursos;
-            } catch (error) {
-                mostrarStatus(`Erro ao carregar recursos: ${error.message}`, 'error');
-                return [];
+    async function excluirBase(id) {
+        if (!confirm(`Deseja realmente excluir a base com ID ${id}?`)) return;
+        try {
+            const response = await fetch(`${API_URL}/api/bases/${id}`, { method: 'DELETE' });
+            if (response.ok) {
+                mostrarMensagem(`🗑️ Base ${id} excluída com sucesso.`, 'sucesso');
+                carregarBases();
+            } else {
+                const data = await response.json();
+                mostrarMensagem(`❌ Erro ao excluir: ${data.error || response.status}`, 'erro');
             }
+        } catch (error) {
+            mostrarMensagem(`❌ Erro de rede: ${error.message}`, 'erro');
         }
+    }
 
-        async function cadastrarRecurso() {
-            const numero = document.getElementById('recursoNumero').value.trim();
-            const operadora = document.getElementById('recursoOperadora').value.trim();
-            const nome = document.getElementById('recursoNome').value.trim();
-            const base_id = document.getElementById('recursoBaseId').value;
-            const status = document.getElementById('recursoStatus').value;
+    // ============================================================
+    // 2. GERENCIAR RECURSOS
+    // ============================================================
 
-            if (!numero || !base_id) {
-                mostrarStatus('❌ Número e Base são obrigatórios.', 'error');
+    async function carregarRecursos() {
+        const container = document.getElementById('listaRecursos');
+        try {
+            const response = await fetch(`${API_URL}/api/recursos`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+
+            if (!data || data.length === 0) {
+                container.innerHTML = `<div class="vazio">Nenhum recurso cadastrado.</div>`;
                 return;
             }
 
-            try {
-                const res = await fetch(`${API_URL}/api/recursos`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ numero, operadora, nome, base_id, status })
-                });
-                const result = await res.json();
-                if (result.success) {
-                    mostrarStatus(`✅ Recurso ${numero} cadastrado com sucesso!`, 'success');
-                    document.getElementById('recursoNumero').value = '';
-                    document.getElementById('recursoOperadora').value = '';
-                    document.getElementById('recursoNome').value = '';
-                    document.getElementById('recursoBaseId').value = '';
-                    carregarRecursos();
-                } else {
-                    mostrarStatus(`❌ Erro: ${result.error}`, 'error');
-                }
-            } catch (error) {
-                mostrarStatus(`❌ Erro de conexão: ${error.message}`, 'error');
-            }
+            let html = `<table class="tabela"><thead><tr>
+                <th>ID</th><th>Número</th><th>Operadora</th><th>Base ID</th><th>Status</th><th>Ações</th>
+            </tr></thead><tbody>`;
+            data.forEach(item => {
+                html += `<tr>
+                    <td>${item.id}</td>
+                    <td><strong>${item.numero}</strong></td>
+                    <td>${item.operadora || '-'}</td>
+                    <td>${item.base_id || '-'}</td>
+                    <td><span class="badge badge-${item.status}">${item.status || 'desconhecido'}</span></td>
+                    <td class="acoes">
+                        <button onclick="excluirRecurso(${item.id})" class="danger">🗑️ Excluir</button>
+                        <button onclick="moverRecurso(${item.id})">📌 Mover</button>
+                    </td>
+                </tr>`;
+            });
+            html += `</tbody></table>`;
+            container.innerHTML = html;
+        } catch (error) {
+            container.innerHTML = `<div class="vazio" style="color:#f44336;">❌ Erro ao carregar recursos: ${error.message}</div>`;
+        }
+    }
+
+    async function cadastrarRecurso() {
+        const numero = document.getElementById('numeroRecurso').value.trim();
+        const operadora = document.getElementById('operadoraRecurso').value.trim();
+        const nome = document.getElementById('nomeRecurso').value.trim();
+        const base_id = parseInt(document.getElementById('baseRecurso').value);
+        const status = document.getElementById('statusRecurso').value;
+
+        if (!numero) {
+            mostrarMensagem('❌ Número é obrigatório.', 'erro');
+            return;
         }
 
-        async function deletarRecurso(id) {
-            if (!confirm(`Tem certeza que deseja deletar o recurso ${id}?`)) return;
-            try {
-                const res = await fetch(`${API_URL}/api/recursos/${id}`, { method: 'DELETE' });
-                const result = await res.json();
-                if (result.success) {
-                    mostrarStatus(`✅ Recurso ${id} deletado.`, 'success');
-                    carregarRecursos();
-                } else {
-                    mostrarStatus(`❌ Erro: ${result.error}`, 'error');
-                }
-            } catch (error) {
-                mostrarStatus(`❌ Erro de conexão: ${error.message}`, 'error');
+        // Se base_id não for um número válido, enviar como null
+        const baseIdFinal = isNaN(base_id) ? null : base_id;
+
+        const body = { numero, operadora, nome, base_id: baseIdFinal, status };
+
+        try {
+            const response = await fetch(`${API_URL}/api/recursos`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                mostrarMensagem(`✅ Recurso "${numero}" cadastrado com sucesso! (ID: ${data.id})`, 'sucesso');
+                document.getElementById('numeroRecurso').value = '';
+                document.getElementById('nomeRecurso').value = '';
+                document.getElementById('baseRecurso').value = '';
+                carregarRecursos();
+            } else {
+                mostrarMensagem(`❌ Erro ao cadastrar recurso: ${data.error || 'Falha no servidor'}`, 'erro');
             }
+        } catch (error) {
+            mostrarMensagem(`❌ Erro de rede: ${error.message}`, 'erro');
+        }
+    }
+
+    function moverRecurso(id) {
+        const novaBase = prompt('Digite o ID da nova base (número inteiro):');
+        if (novaBase === null) return; // Cancelou
+        const baseId = parseInt(novaBase);
+        if (isNaN(baseId)) {
+            mostrarMensagem('❌ ID da base inválido. Deve ser um número.', 'erro');
+            return;
         }
 
-        // ============================================================
-        // AÇÃO RÁPIDA: MOVER RECURSO
-        // ============================================================
-        async function moverRecurso() {
-            const recursoId = document.getElementById('rapidoRecursoId').value;
-            const novaBaseId = document.getElementById('rapidoBaseId').value;
-
-            if (!recursoId || !novaBaseId) {
-                mostrarStatus('❌ Selecione um recurso e uma base de destino.', 'error');
-                return;
+        fetch(`${API_URL}/api/recursos/${id}/mover`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ base_id: baseId })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                mostrarMensagem(`✅ Recurso movido para base ${baseId} com sucesso.`, 'sucesso');
+                carregarRecursos();
+            } else {
+                mostrarMensagem(`❌ Erro ao mover: ${data.error || 'Falha no servidor'}`, 'erro');
             }
+        })
+        .catch(error => mostrarMensagem(`❌ Erro de rede: ${error.message}`, 'erro'));
+    }
 
-            try {
-                const res = await fetch(`${API_URL}/api/recursos/${recursoId}/mover`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ base_id: novaBaseId })
-                });
-                const result = await res.json();
-                if (result.success) {
-                    mostrarStatus(`✅ Recurso movido com sucesso!`, 'success');
-                    carregarRecursos();
-                } else {
-                    mostrarStatus(`❌ Erro: ${result.error}`, 'error');
-                }
-            } catch (error) {
-                mostrarStatus(`❌ Erro de conexão: ${error.message}`, 'error');
+    async function excluirRecurso(id) {
+        if (!confirm(`Deseja realmente excluir o recurso com ID ${id}?`)) return;
+        try {
+            const response = await fetch(`${API_URL}/api/recursos/${id}`, { method: 'DELETE' });
+            if (response.ok) {
+                mostrarMensagem(`🗑️ Recurso ${id} excluído com sucesso.`, 'sucesso');
+                carregarRecursos();
+            } else {
+                const data = await response.json();
+                mostrarMensagem(`❌ Erro ao excluir: ${data.error || response.status}`, 'erro');
             }
+        } catch (error) {
+            mostrarMensagem(`❌ Erro de rede: ${error.message}`, 'erro');
         }
+    }
 
-        // ============================================================
-        // FUNÇÃO PARA RECARREGAR TODOS OS DADOS
-        // ============================================================
-        async function carregarDados() {
-            mostrarStatus('🔄 Recarregando dados...', 'info');
-            await carregarBases();
-            await carregarRecursos();
-            mostrarStatus('✅ Dados recarregados com sucesso.', 'success');
-        }
-
-        // ============================================================
-        // INICIALIZAÇÃO
-        // ============================================================
-        (async function init() {
-            mostrarStatus('🔄 Carregando dados do sistema...', 'info');
-            await carregarBases();
-            await carregarRecursos();
-            mostrarStatus('✅ Sistema pronto. Gerencie suas bases e recursos.', 'success');
-        })();
-    </script>
-
+    // ============================================================
+    // INICIALIZAÇÃO
+    // ============================================================
+    document.addEventListener('DOMContentLoaded', () => {
+        carregarBases();
+        carregarRecursos();
+    });
+</script>
 </body>
 </html>
