@@ -29,9 +29,9 @@ const port = process.env.PORT || 3000;
 // ============================================================
 const DATA_DIR = path.join(__dirname, 'data');
 const CONFIG = {
-    VIES_MINIMO: 0.00001,      // 1 metro em graus
-    CONFIANCA_MINIMA: 0.3,      // 30% de confiança para aplicar viés
-    ERRO_MAXIMO_FILTRAR: 5000,  // 5km - filtrar outliers
+    VIES_MINIMO: 0.00001,
+    CONFIANCA_MINIMA: 0.3,
+    ERRO_MAXIMO_FILTRAR: 5000,
     PESO_RSRP_PADRAO: 1.0,
     PESO_TA_PADRAO: 0.5
 };
@@ -70,14 +70,12 @@ function parseNumber(value) {
 }
 
 function calcularMediaPonderada(leituras, pesosPersonalizados = null) {
-    // Filtra leituras válidas
     const validas = leituras.filter(l => {
         const rsrp = parseNumber(l.rsrp);
         return rsrp !== null && rsrp > -110;
     });
 
     if (validas.length === 0) {
-        // Fallback: média simples
         const lats = leituras.map(l => parseNumber(l.latitude)).filter(v => v !== null);
         const lons = leituras.map(l => parseNumber(l.longitude)).filter(v => v !== null);
         if (lats.length === 0 || lons.length === 0) {
@@ -90,15 +88,12 @@ function calcularMediaPonderada(leituras, pesosPersonalizados = null) {
         };
     }
 
-    // Converte RSRP para escala linear e calcula pesos
     let pesos = validas.map(l => Math.pow(10, parseNumber(l.rsrp) / 10));
     
-    // Aplica pesos personalizados (aprendizado)
     if (pesosPersonalizados) {
         pesos = pesos.map((p, i) => {
             const rsrp = parseNumber(validas[i].rsrp);
             if (rsrp === null) return p;
-            // Ajusta peso baseado no RSRP (aprendido)
             const fator = pesosPersonalizados.rsrp?.[Math.floor(rsrp / 10) * 10] || 1.0;
             return p * fator;
         });
@@ -452,7 +447,7 @@ async function carregarAjustesGlobais() {
 }
 
 // ============================================================
-// ROTAS DA API (TODAS AS ROTAS EXISTENTES)
+// ROTAS DA API
 // ============================================================
 
 // --- ESTAÇÕES (ERBs) ---
@@ -840,4 +835,670 @@ app.put('/api/recursos/:id/mover', async (req, res) => {
 });
 
 app.delete('/api/recursos/:id', async (req, res) => {
-    const
+    const { id } = req.params;
+    try {
+        const { error } = await supabase
+            .from('recursos')
+            .delete()
+            .eq('id', id);
+        if (error) throw error;
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// --- FILTROS ---
+app.post('/api/filtros', async (req, res) => {
+    const { nome, tag, operadora, uf, municipio, base_id, distancia_max, horario_inicio, horario_fim, notificar, ativo } = req.body;
+    if (!nome) return res.status(400).json({ error: 'Nome do filtro é obrigatório' });
+    try {
+        const { data, error } = await supabase
+            .from('filtros')
+            .insert({ nome, tag: tag || null, operadora: operadora || null, uf: uf || null, municipio: municipio || null, base_id: base_id || null, distancia_max: distancia_max || null, horario_inicio: horario_inicio || null, horario_fim: horario_fim || null, notificar: notificar !== undefined ? notificar : 1, ativo: ativo !== undefined ? ativo : 1 })
+            .select();
+        if (error) throw error;
+        res.json({ success: true, id: data[0]?.id });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/filtros', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('filtros')
+            .select('*')
+            .order('nome');
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/filtros/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('filtros')
+            .select('*')
+            .eq('id', id)
+            .single();
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Filtro não encontrado' });
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.put('/api/filtros/:id', async (req, res) => {
+    const { id } = req.params;
+    const { nome, tag, operadora, uf, municipio, base_id, distancia_max, horario_inicio, horario_fim, notificar, ativo } = req.body;
+    try {
+        const { error } = await supabase
+            .from('filtros')
+            .update({ nome, tag: tag || null, operadora: operadora || null, uf: uf || null, municipio: municipio || null, base_id: base_id || null, distancia_max: distancia_max || null, horario_inicio: horario_inicio || null, horario_fim: horario_fim || null, notificar: notificar !== undefined ? notificar : 1, ativo: ativo !== undefined ? ativo : 1 })
+            .eq('id', id);
+        if (error) throw error;
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.delete('/api/filtros/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { error } = await supabase
+            .from('filtros')
+            .delete()
+            .eq('id', id);
+        if (error) throw error;
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// --- HISTÓRICO E INTELIGÊNCIA PREDITIVA ---
+app.get('/api/historico', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('historico')
+            .select('*, estacoes(operadora, municipio, uf)')
+            .order('data_consulta', { ascending: false })
+            .limit(100);
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/historico', async (req, res) => {
+    const { numero, estacao_id, distancia } = req.body;
+    if (!numero || !estacao_id) return res.status(400).json({ error: 'Número e estacao_id são obrigatórios' });
+    try {
+        const { data, error } = await supabase
+            .from('historico')
+            .insert({ numero, estacao_id, distancia: distancia || null })
+            .select();
+        if (error) throw error;
+        res.json({ success: true, id: data[0]?.id });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/historico-localizacao', async (req, res) => {
+    const { numero, latitude, longitude, estacao_id } = req.body;
+    if (!numero || latitude === undefined || longitude === undefined) {
+        return res.status(400).json({ error: 'Número, latitude e longitude são obrigatórios' });
+    }
+    try {
+        const { data, error } = await supabase
+            .from('historico_localizacao')
+            .insert({ numero, latitude, longitude, estacao_id: estacao_id || null })
+            .select();
+        if (error) throw error;
+        res.json({ success: true, id: data[0]?.id });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/analise-padroes', async (req, res) => {
+    const { numero } = req.query;
+    if (!numero) return res.status(400).json({ error: 'Número é obrigatório' });
+    try {
+        const { data: rows, error } = await supabase
+            .from('historico_localizacao')
+            .select('*')
+            .eq('numero', numero)
+            .order('data_hora', { ascending: false })
+            .limit(100);
+        if (error) throw error;
+        if (!rows || rows.length === 0) return res.json({ pattern: 'Sem dados suficientes' });
+        const locationCount = {};
+        rows.forEach(row => {
+            const key = `${row.latitude},${row.longitude}`;
+            locationCount[key] = (locationCount[key] || 0) + 1;
+        });
+        let mostFrequent = null, maxCount = 0;
+        for (const [key, count] of Object.entries(locationCount)) {
+            if (count > maxCount) { maxCount = count; mostFrequent = key; }
+        }
+        const [lat, lon] = mostFrequent ? mostFrequent.split(',').map(Number) : [null, null];
+        const hourCount = {};
+        rows.forEach(row => {
+            const hora = new Date(row.data_hora).getHours().toString();
+            hourCount[hora] = (hourCount[hora] || 0) + 1;
+        });
+        let mostFrequentHour = null, maxHourCount = 0;
+        for (const [hora, count] of Object.entries(hourCount)) {
+            if (count > maxHourCount) { maxHourCount = count; mostFrequentHour = hora; }
+        }
+        res.json({ pattern: { localizacao_mais_frequente: { latitude: lat, longitude: lon }, horario_mais_frequente: mostFrequentHour, total_registros: rows.length } });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/alertas', async (req, res) => {
+    const { numero } = req.query;
+    if (!numero) return res.status(400).json({ error: 'Número é obrigatório' });
+    try {
+        const { data: rows, error } = await supabase
+            .from('historico_localizacao')
+            .select('*')
+            .eq('numero', numero)
+            .order('data_hora', { ascending: false })
+            .limit(10);
+        if (error) throw error;
+        if (!rows || rows.length < 3) return res.json({ alerta: 'Sem dados suficientes para alertas' });
+        let distanciaTotal = 0, intervalos = 0;
+        for (let i = 0; i < rows.length - 1; i++) {
+            const lat1 = rows[i].latitude, lon1 = rows[i].longitude;
+            const lat2 = rows[i+1].latitude, lon2 = rows[i+1].longitude;
+            const dist = Math.sqrt(Math.pow(lat2 - lat1, 2) + Math.pow(lon2 - lon1, 2)) * 111;
+            distanciaTotal += dist;
+            intervalos++;
+        }
+        const velocidadeMedia = intervalos > 0 ? distanciaTotal / intervalos : 0;
+        if (velocidadeMedia > 50) {
+            res.json({ alerta: `🚨 Movimento suspeito detectado (${velocidadeMedia.toFixed(1)} km/h).` });
+        } else if (velocidadeMedia > 20) {
+            res.json({ alerta: `⚠️ Movimento moderado detectado (${velocidadeMedia.toFixed(1)} km/h).` });
+        } else {
+            res.json({ alerta: `✅ Padrão normal (${velocidadeMedia.toFixed(1)} km/h).` });
+        }
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// --- COLETA DE SINAL E ML ---
+app.post('/api/coletar-sinal', async (req, res) => {
+    const { numero, estacao_id, latitude, longitude, rsrp, sinr, ta } = req.body;
+    if (!numero || !estacao_id || latitude === undefined || longitude === undefined) {
+        return res.status(400).json({ error: 'Número, estacao_id, latitude e longitude são obrigatórios' });
+    }
+    try {
+        const { data, error } = await supabase
+            .from('dados_sinal')
+            .insert({ numero, estacao_id, latitude, longitude, rsrp: rsrp || null, sinr: sinr || null, ta: ta || null })
+            .select();
+        if (error) throw error;
+        res.json({ success: true, id: data[0]?.id, message: 'Dados de sinal coletados com sucesso.' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/coletar-sinal-auto', async (req, res) => {
+    const { numero, estacao_id, latitude, longitude, rsrp, sinr, ta } = req.body;
+    if (!numero || !estacao_id || latitude === undefined || longitude === undefined) {
+        return res.status(400).json({ error: 'Número, estacao_id, latitude e longitude são obrigatórios' });
+    }
+    try {
+        const lat = parseNumber(latitude);
+        const lon = parseNumber(longitude);
+        if (lat === null || lon === null) {
+            return res.status(400).json({ error: 'Latitude ou longitude inválidas' });
+        }
+
+        const { data, error } = await supabase
+            .from('dados_sinal')
+            .insert({ numero, estacao_id, latitude: lat, longitude: lon, rsrp: rsrp || null, sinr: sinr || null, ta: ta || null })
+            .select();
+        if (error) throw error;
+
+        const { error: insertColetaError } = await supabase
+            .from('coletas')
+            .insert([{ numero, estacao_id, latitude: lat, longitude: lon, rsrp, sinr, ta }]);
+        if (insertColetaError) {
+            console.error('⚠️ Erro ao inserir em coletas:', insertColetaError);
+        }
+
+        let latFinal = lat, lonFinal = lon;
+        const { data: estacao, error: estacaoError } = await supabase
+            .from('estacoes')
+            .select('latitude, longitude')
+            .eq('id_estacao', estacao_id)
+            .maybeSingle();
+        if (!estacaoError && estacao && ta) {
+            const raioMaximoKm = (ta * 78.12) / 1000;
+            const distAtual = haversine(lat, lon, estacao.latitude, estacao.longitude);
+            if (distAtual > raioMaximoKm) {
+                const proporcao = raioMaximoKm / distAtual;
+                latFinal = estacao.latitude + (lat - estacao.latitude) * proporcao;
+                lonFinal = estacao.longitude + (lon - estacao.longitude) * proporcao;
+            }
+        }
+
+        const { count, error: countError } = await supabase
+            .from('dados_sinal')
+            .select('*', { count: 'exact', head: true });
+        if (countError) throw countError;
+        if (count >= 10) {
+            treinarModeloKNN()
+                .then(result => console.log(`✅ Modelo treinado automaticamente com ${result.total_registros} registros.`))
+                .catch(error => console.error('❌ Erro ao treinar modelo automaticamente:', error));
+        }
+
+        res.json({
+            success: true,
+            id: data[0]?.id,
+            message: 'Dados de sinal coletados com sucesso.',
+            total_registros: count,
+            latitude_corrigida: latFinal,
+            longitude_corrigida: lonFinal
+        });
+    } catch (error) {
+        console.error('Erro em /api/coletar-sinal-auto:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/treinar-modelo', async (req, res) => {
+    try {
+        const result = await treinarModeloKNN();
+        res.json({ success: true, message: `Modelo treinado com ${result.total_registros} registros.` });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/predizer-localizacao', (req, res) => {
+    const { estacao_id, rsrp, sinr, ta, k } = req.query;
+    if (!estacao_id) return res.status(400).json({ error: 'estacao_id é obrigatório' });
+    const kValue = parseInt(k) || 3;
+    predizerLocalizacaoKNN(estacao_id, parseFloat(rsrp), parseFloat(sinr), parseFloat(ta), kValue)
+        .then(result => res.json({ success: true, latitude: result.latitude, longitude: result.longitude, k: result.k, metodo: 'KNN' }))
+        .catch(error => res.status(500).json({ error }));
+});
+
+// ============================================================
+// ROTA: /api/localizar-fallback (FALLBACK INTELIGENTE COM VIÉS)
+// ============================================================
+app.get('/api/localizar-fallback', async (req, res) => {
+    const { numero } = req.query;
+    if (!numero) return res.status(400).json({ error: 'Número não informado' });
+
+    try {
+        let viesLat = 0, viesLon = 0;
+        const { data: usuario, error: usuarioError } = await supabase
+            .from('usuarios')
+            .select('vies_lat, vies_lon')
+            .eq('numero', numero)
+            .maybeSingle();
+
+        if (!usuarioError && usuario) {
+            viesLat = parseNumber(usuario.vies_lat) || 0;
+            viesLon = parseNumber(usuario.vies_lon) || 0;
+            console.log(`📊 Viés encontrado para ${numero}: lat=${viesLat}, lon=${viesLon}`);
+        }
+
+        const { data: leituras, error: leiturasError } = await supabase
+            .from('coletas')
+            .select('latitude, longitude, rsrp, timestamp')
+            .eq('numero', numero)
+            .order('timestamp', { ascending: false })
+            .limit(15);
+
+        if (!leiturasError && leituras && leituras.length > 0) {
+            console.log(`📊 Encontradas ${leituras.length} leituras para ${numero}`);
+            const leiturasCorrigidas = leituras.map(l => ({
+                latitude: parseNumber(l.latitude),
+                longitude: parseNumber(l.longitude),
+                rsrp: parseNumber(l.rsrp) || -100,
+                timestamp: l.timestamp
+            })).filter(l => l.latitude !== null && l.longitude !== null);
+
+            if (leiturasCorrigidas.length > 0) {
+                const { lat, lon } = calcularMediaPonderada(leiturasCorrigidas);
+                const raio = calcularRaioIncerteza(leiturasCorrigidas);
+                
+                const latFinal = lat + viesLat;
+                const lonFinal = lon + viesLon;
+                
+                return res.json({
+                    numero,
+                    latitude: latFinal,
+                    longitude: lonFinal,
+                    raio_incerteza_metros: Math.round(raio),
+                    precisao: raio < 100 ? 'Alta' : raio < 300 ? 'Média' : 'Baixa',
+                    total_amostras: leituras.length,
+                    metodo: 'Ponderado por RSRP + Filtro Kalman + Correção de Viés',
+                    fallback: false,
+                    vies_aplicado: { lat: viesLat, lon: viesLon }
+                });
+            }
+        }
+
+        const { data: ultimoGPS, error: gpsError } = await supabase
+            .from('historico_localizacao')
+            .select('latitude, longitude')
+            .eq('numero', numero)
+            .order('data_hora', { ascending: false })
+            .limit(1);
+
+        if (!gpsError && ultimoGPS && ultimoGPS.length > 0) {
+            const latFinal = ultimoGPS[0].latitude + viesLat;
+            const lonFinal = ultimoGPS[0].longitude + viesLon;
+            
+            return res.json({
+                numero,
+                latitude: latFinal,
+                longitude: lonFinal,
+                raio_incerteza_metros: 500,
+                precisao: 'Muito Baixa',
+                total_amostras: 0,
+                metodo: 'Última localização GPS conhecida + Correção de Viés',
+                fallback: true,
+                vies_aplicado: { lat: viesLat, lon: viesLon },
+                mensagem: 'Localização aproximada baseada no último GPS. Clique para corrigir.'
+            });
+        }
+
+        const { data: ultimoSinal, error: sinalError } = await supabase
+            .from('dados_sinal')
+            .select('estacao_id, latitude, longitude')
+            .eq('numero', numero)
+            .order('data_hora', { ascending: false })
+            .limit(1);
+
+        if (!sinalError && ultimoSinal && ultimoSinal.length > 0) {
+            const estacaoId = ultimoSinal[0].estacao_id;
+            console.log(`📡 Buscando torre com ID: ${estacaoId}`);
+            
+            if (estacaoId && estacaoId !== 'desconhecido') {
+                const { data: estacao, error: estacaoError } = await supabase
+                    .from('estacoes')
+                    .select('latitude, longitude')
+                    .eq('id_estacao', estacaoId)
+                    .single();
+
+                if (!estacaoError && estacao) {
+                    const latFinal = estacao.latitude + viesLat;
+                    const lonFinal = estacao.longitude + viesLon;
+                    
+                    console.log(`🗼 Torre encontrada: ${latFinal}, ${lonFinal} (com viés)`);
+                    return res.json({
+                        numero,
+                        latitude: latFinal,
+                        longitude: lonFinal,
+                        raio_incerteza_metros: 5000,
+                        precisao: 'Muito Baixa',
+                        total_amostras: 0,
+                        metodo: 'Localização da torre (Cell ID) + Correção de Viés',
+                        fallback: true,
+                        estacao_id: estacaoId,
+                        vies_aplicado: { lat: viesLat, lon: viesLon },
+                        mensagem: 'Localização aproximada baseada na torre de celular. Clique para corrigir.'
+                    });
+                }
+            }
+        }
+
+        console.log(`❌ Nenhuma localização encontrada para ${numero}`);
+        return res.status(404).json({
+            erro: 'Nenhuma localização encontrada para este número',
+            sugestao: 'Instale o script de coleta no celular ou envie dados de sinal manualmente.'
+        });
+
+    } catch (err) {
+        console.error('❌ Erro no fallback:', err);
+        res.status(500).json({ error: 'Erro ao processar localização: ' + err.message });
+    }
+});
+
+// ============================================================
+// ROTA DE FEEDBACK (COM APRENDIZADO CONTÍNUO)
+// ============================================================
+app.post('/api/feedback', async (req, res) => {
+    try {
+        const { numero, lat_real, lon_real, lat_mostrada, lon_mostrada, metodo, estacao_id, rsrp, sinr, ta } = req.body;
+
+        if (!numero || lat_real === undefined || lon_real === undefined) {
+            return res.status(400).json({ error: 'Campos obrigatórios: numero, lat_real, lon_real' });
+        }
+
+        const latReal = parseNumber(lat_real);
+        const lonReal = parseNumber(lon_real);
+        if (latReal === null || lonReal === null) {
+            return res.status(400).json({ error: 'lat_real ou lon_real inválidos' });
+        }
+
+        // --- 1. SALVAR FEEDBACK COMPLETO ---
+        const { error: insertError } = await supabase
+            .from('feedback')
+            .insert([{
+                numero,
+                lat_real: latReal,
+                lon_real: lonReal,
+                lat_mostrada: parseNumber(lat_mostrada) || 0,
+                lon_mostrada: parseNumber(lon_mostrada) || 0,
+                metodo: metodo || 'desconhecido',
+                estacao_id: estacao_id || null,
+                rsrp: parseNumber(rsrp) || null,
+                sinr: parseNumber(sinr) || null,
+                ta: parseNumber(ta) || null,
+                erro_metros: calcularErro(lat_mostrada || 0, lon_mostrada || 0, latReal, lonReal),
+                timestamp: new Date().toISOString()
+            }]);
+
+        if (insertError) {
+            console.error('Erro ao salvar feedback:', insertError);
+            return res.status(500).json({ error: 'Erro ao salvar feedback' });
+        }
+
+        // --- 2. ANALISAR PADRÕES DE ERRO ---
+        const { data: feedbacks, error: feedbackError } = await supabase
+            .from('feedback')
+            .select('*')
+            .eq('numero', numero)
+            .order('timestamp', { ascending: false })
+            .limit(20);
+
+        let viesLat = 0, viesLon = 0;
+        let qtd = 0;
+
+        if (!feedbackError && feedbacks && feedbacks.length >= 3) {
+            let somaViesLat = 0, somaViesLon = 0;
+            feedbacks.forEach(f => {
+                const latReal = parseNumber(f.lat_real) || 0;
+                const lonReal = parseNumber(f.lon_real) || 0;
+                const latMostrada = parseNumber(f.lat_mostrada) || 0;
+                const lonMostrada = parseNumber(f.lon_mostrada) || 0;
+                const erro = calcularErro(latMostrada, lonMostrada, latReal, lonReal);
+                if (erro < CONFIG.ERRO_MAXIMO_FILTRAR) {
+                    somaViesLat += (latReal - latMostrada);
+                    somaViesLon += (lonReal - lonMostrada);
+                    qtd++;
+                }
+            });
+
+            if (qtd > 0) {
+                viesLat = somaViesLat / qtd;
+                viesLon = somaViesLon / qtd;
+
+                // --- 3. ATUALIZAR VIÉS DO USUÁRIO ---
+                await supabase
+                    .from('usuarios')
+                    .upsert({
+                        numero,
+                        vies_lat: viesLat,
+                        vies_lon: viesLon,
+                        ultima_atualizacao: new Date().toISOString(),
+                        total_feedbacks: qtd,
+                        confianca: Math.min(qtd / 10, 1)
+                    }, { onConflict: 'numero' });
+
+                // --- 4. AJUSTAR PESOS POR RSRP (aprendizado global) ---
+                if (feedbacks.some(f => f.rsrp !== null)) {
+                    await ajustarPesosPorRSRP(feedbacks);
+                }
+            }
+        }
+
+        res.status(201).json({
+            mensagem: 'Feedback recebido e analisado! O sistema está aprendendo.',
+            viés_aplicado: { vies_lat: viesLat, vies_lon: viesLon },
+            confianca: Math.min(qtd / 10, 1)
+        });
+
+    } catch (err) {
+        console.error('Erro ao processar feedback:', err);
+        res.status(500).json({ error: 'Erro interno ao processar feedback: ' + err.message });
+    }
+});
+
+// ============================================================
+// FUNÇÃO: AJUSTAR PESOS POR RSRP (APRENDIZADO GLOBAL)
+// ============================================================
+async function ajustarPesosPorRSRP(feedbacks) {
+    try {
+        const faixas = {
+            'forte': { min: -80, max: -50, erros: [] },
+            'medio': { min: -100, max: -80, erros: [] },
+            'fraco': { min: -110, max: -100, erros: [] }
+        };
+
+        feedbacks.forEach(f => {
+            const rsrp = parseNumber(f.rsrp);
+            if (rsrp === null) return;
+            const erro = parseNumber(f.erro_metros) || 0;
+            if (rsrp >= -80) faixas.forte.erros.push(erro);
+            else if (rsrp >= -100) faixas.medio.erros.push(erro);
+            else faixas.fraco.erros.push(erro);
+        });
+
+        let ajustes = {};
+        for (const [nome, faixa] of Object.entries(faixas)) {
+            if (faixa.erros.length > 2) {
+                const mediaErro = faixa.erros.reduce((a, b) => a + b, 0) / faixa.erros.length;
+                ajustes[nome] = mediaErro;
+            }
+        }
+
+        await supabase
+            .from('configuracoes')
+            .upsert({
+                chave: 'ajustes_rsrp',
+                valor: ajustes,
+                ultima_atualizacao: new Date().toISOString()
+            }, { onConflict: 'chave' });
+
+        console.log('📊 Ajustes globais por RSRP atualizados:', ajustes);
+        return ajustes;
+    } catch (error) {
+        console.error('Erro ao ajustar pesos por RSRP:', error);
+        return null;
+    }
+}
+
+// ============================================================
+// ROTA: /api/estatisticas
+// ============================================================
+app.get('/api/estatisticas', async (req, res) => {
+    try {
+        const [
+            estacoesResult, numerosResult, alvosResult, basesResult,
+            recursosResult, filtrosResult, localizacoesResult,
+            dadosSinalResult, coletasResult, feedbackResult,
+            usuariosResult, historicoPosicoesResult, configuracoesResult
+        ] = await Promise.all([
+            supabase.from('estacoes').select('*', { count: 'exact', head: true }),
+            supabase.from('numeros').select('*', { count: 'exact', head: true }),
+            supabase.from('alvos').select('*', { count: 'exact', head: true }),
+            supabase.from('bases').select('*', { count: 'exact', head: true }),
+            supabase.from('recursos').select('*', { count: 'exact', head: true }),
+            supabase.from('filtros').select('*', { count: 'exact', head: true }),
+            supabase.from('historico_localizacao').select('*', { count: 'exact', head: true }),
+            supabase.from('dados_sinal').select('*', { count: 'exact', head: true }),
+            supabase.from('coletas').select('*', { count: 'exact', head: true }).catch(() => ({ count: 0 })),
+            supabase.from('feedback').select('*', { count: 'exact', head: true }).catch(() => ({ count: 0 })),
+            supabase.from('usuarios').select('*', { count: 'exact', head: true }).catch(() => ({ count: 0 })),
+            supabase.from('posicoes_historicas').select('*', { count: 'exact', head: true }).catch(() => ({ count: 0 })),
+            supabase.from('configuracoes').select('*', { count: 'exact', head: true }).catch(() => ({ count: 0 }))
+        ]);
+
+        const { data: operadoras } = await supabase
+            .from('estacoes')
+            .select('operadora')
+            .not('operadora', 'is', null);
+        const { data: ufs } = await supabase
+            .from('estacoes')
+            .select('uf')
+            .not('uf', 'is', null);
+
+        const operadorasUnicas = new Set(operadoras?.map(item => item.operadora) || []);
+        const ufsUnicas = new Set(ufs?.map(item => item.uf) || []);
+
+        res.json({
+            total_estacoes: estacoesResult.count || 0,
+            total_operadoras: operadorasUnicas.size,
+            total_ufs: ufsUnicas.size,
+            total_numeros: numerosResult.count || 0,
+            total_alvos: alvosResult.count || 0,
+            total_bases: basesResult.count || 0,
+            total_recursos: recursosResult.count || 0,
+            total_filtros: filtrosResult.count || 0,
+            total_localizacoes: localizacoesResult.count || 0,
+            total_dados_sinal: dadosSinalResult.count || 0,
+            total_coletas: coletasResult.count || 0,
+            total_feedback: feedbackResult.count || 0,
+            total_usuarios_com_viés: usuariosResult.count || 0,
+            total_historico_posicoes: historicoPosicoesResult.count || 0,
+            total_configuracoes: configuracoesResult.count || 0
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================================
+// INICIALIZAÇÃO
+// ============================================================
+(async () => {
+    await importarERBs();
+    await migrarDadosAntigos();
+    console.log('✅ ORION pronto para uso.');
+})();
+
+app.listen(port, () => {
+    console.log(`🚀 ORION rodando na porta ${port}`);
+    console.log(`📅 Data/Hora: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`);
+    console.log(`🧠 Rotas disponíveis:`);
+    console.log(`   GET /api/localizar-fallback?numero=XX (FALLBACK INTELIGENTE COM VIÉS)`);
+    console.log(`   POST /api/feedback`);
+    console.log(`📊 Tabelas: coletas, feedback, usuarios, posicoes_historicas, configuracoes`);
+});
+
+process.on('SIGINT', () => {
+    console.log('👋 ORION encerrado.');
+    process.exit(0);
+});
