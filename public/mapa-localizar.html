@@ -180,7 +180,6 @@
                     })).filter(f => f.lat_real !== null && f.lon_real !== null);
 
                     if (dadosTreino.length >= 3) {
-                        // Regressão ponderada
                         const pesos = dadosTreino.map(f => f.confianca);
                         const somaPesos = pesos.reduce((a, b) => a + b, 0);
                         let viesLat = 0, viesLon = 0;
@@ -189,7 +188,6 @@
                             viesLon += f.erro_lon * (pesos[i] / somaPesos);
                         });
 
-                        // Limita viés para evitar overfitting (±0.01 graus ≈ 1km)
                         viesLat = Math.min(Math.max(viesLat, -0.01), 0.01);
                         viesLon = Math.min(Math.max(viesLon, -0.01), 0.01);
 
@@ -211,7 +209,7 @@
                     } else {
                         document.getElementById('mlStatus').className = 'ml-indicator ml-inactive';
                         document.getElementById('mlStatus').textContent = `🧠 ML: ${dadosTreino.length}/3 amostras`;
-                        mostrarMensagem(`⚠️ Preciso de pelo menos 3 feedbacks para treinar. Atualmente: ${dadosTreino.length}`, 'erro');
+                        mostrarMensagem(`⚠️ Preciso de pelo menos 3 feedbacks. Atualmente: ${dadosTreino.length}`, 'erro');
                     }
                 } else {
                     document.getElementById('mlStatus').className = 'ml-indicator ml-inactive';
@@ -220,10 +218,10 @@
                 }
             })
             .catch(err => {
-                console.error('Erro ao carregar feedbacks:', err);
+                console.error('Erro:', err);
                 document.getElementById('mlStatus').className = 'ml-indicator ml-inactive';
                 document.getElementById('mlStatus').textContent = '🧠 ML: erro';
-                mostrarMensagem('❌ Erro ao carregar dados de treino.', 'erro');
+                mostrarMensagem('❌ Erro ao carregar feedbacks.', 'erro');
             });
     }
 
@@ -442,7 +440,7 @@
     }
 
     // ============================================================
-    // ENVIAR FEEDBACK COM ML
+    // ENVIAR FEEDBACK COM ML (CORRIGIDO)
     // ============================================================
     async function enviarFeedbackML() {
         const numero = document.getElementById('numeroInput').value.trim();
@@ -455,6 +453,7 @@
             return;
         }
 
+        // OBTÉM E CONVERTE AS COORDENADAS CORRETAMENTE
         const latReal = parseNumber(markerCorrigido.getLatLng().lat);
         const lonReal = parseNumber(markerCorrigido.getLatLng().lng);
         const latMostrada = parseNumber(posicaoAtual.lat);
@@ -480,21 +479,26 @@
         statusEl.className = 'feedback-info';
 
         try {
+            // CONSTRÓI O BODY COM NÚMEROS (NÃO STRINGS)
+            const body = {
+                numero: numero,
+                lat_real: latReal,
+                lon_real: lonReal,
+                lat_mostrada: latMostrada,
+                lon_mostrada: lonMostrada,
+                metodo: posicaoAtual.metodo || 'desconhecido',
+                rsrp: null,
+                sinr: null,
+                ta: null,
+                erro_metros: erroMetros
+            };
+
+            console.log('📤 Enviando feedback:', body);
+
             const response = await fetch(`${API_URL}/api/feedback`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    numero: numero,
-                    lat_real: latReal,
-                    lon_real: lonReal,
-                    lat_mostrada: latMostrada,
-                    lon_mostrada: lonMostrada,
-                    metodo: posicaoAtual.metodo || 'desconhecido',
-                    rsrp: null,
-                    sinr: null,
-                    ta: null,
-                    erro_metros: erroMetros
-                })
+                body: JSON.stringify(body)
             });
 
             const data = await response.json();
@@ -512,87 +516,15 @@
             } else {
                 statusEl.textContent = '❌ Erro ao enviar: ' + (data.erro || 'Tente novamente');
                 statusEl.className = 'feedback-error';
-                console.error('Resposta do servidor:', data);
+                console.error('❌ Resposta do servidor:', data);
+                alert('Erro ao enviar feedback: ' + (data.erro || 'Tente novamente'));
             }
         } catch (error) {
             statusEl.textContent = '❌ Erro de conexão.';
             statusEl.className = 'feedback-error';
-            console.error(error);
+            console.error('❌ Erro de rede:', error);
+            alert('Erro de conexão com o servidor.');
         }
-    }
-
-    // ============================================================
-    // TREINAR MODELO ML (botão)
-    // ============================================================
-    function treinarModeloML() {
-        const numero = document.getElementById('numeroInput').value.trim();
-        if (!numero) {
-            mostrarMensagem('Digite um número primeiro.', 'erro');
-            return;
-        }
-        document.getElementById('mlStatus').className = 'ml-indicator ml-training';
-        document.getElementById('mlStatus').textContent = '🧠 Treinando...';
-        // Aguarda um pouco para dar tempo de carregar os dados
-        setTimeout(() => {
-            fetch(`${API_URL}/api/feedback?numero=${numero}`)
-                .then(res => res.json())
-                .then(data => {
-                    if (data && data.length > 2) {
-                        dadosTreino = data.map(f => ({
-                            lat_real: parseNumber(f.lat_real),
-                            lon_real: parseNumber(f.lon_real),
-                            lat_mostrada: parseNumber(f.lat_mostrada),
-                            lon_mostrada: parseNumber(f.lon_mostrada),
-                            erro_lat: parseNumber(f.lat_real) - parseNumber(f.lat_mostrada),
-                            erro_lon: parseNumber(f.lon_real) - parseNumber(f.lon_mostrada),
-                            confianca: Math.max(0.1, 1 - (parseNumber(f.erro_metros) || 0) / 5000)
-                        })).filter(f => f.lat_real !== null && f.lon_real !== null);
-
-                        if (dadosTreino.length >= 3) {
-                            const pesos = dadosTreino.map(f => f.confianca);
-                            const somaPesos = pesos.reduce((a, b) => a + b, 0);
-                            let viesLat = 0, viesLon = 0;
-                            dadosTreino.forEach((f, i) => {
-                                viesLat += f.erro_lat * (pesos[i] / somaPesos);
-                                viesLon += f.erro_lon * (pesos[i] / somaPesos);
-                            });
-
-                            viesLat = Math.min(Math.max(viesLat, -0.01), 0.01);
-                            viesLon = Math.min(Math.max(viesLon, -0.01), 0.01);
-
-                            modeloML = { 
-                                viesLat, 
-                                viesLon, 
-                                confianca: Math.min(somaPesos / dadosTreino.length, 0.95),
-                                amostras: dadosTreino.length
-                            };
-                            mlTreinado = true;
-                            
-                            document.getElementById('mlStatus').className = 'ml-indicator ml-active';
-                            document.getElementById('mlStatus').textContent = `🧠 ML Ativo (${dadosTreino.length} amostras)`;
-                            document.getElementById('mlInsights').textContent = 
-                                `Viés lat: ${(viesLat * 111000).toFixed(0)}m, lon: ${(viesLon * 111000).toFixed(0)}m | Confiança: ${(modeloML.confianca * 100).toFixed(0)}%`;
-                            document.getElementById('mlInfo').style.display = 'block';
-                            
-                            mostrarMensagem(`🧠 Modelo ML treinado com ${dadosTreino.length} amostras!`, 'sucesso');
-                        } else {
-                            document.getElementById('mlStatus').className = 'ml-indicator ml-inactive';
-                            document.getElementById('mlStatus').textContent = `🧠 ML: ${dadosTreino.length}/3 amostras`;
-                            mostrarMensagem(`⚠️ Preciso de pelo menos 3 feedbacks. Atualmente: ${dadosTreino.length}`, 'erro');
-                        }
-                    } else {
-                        document.getElementById('mlStatus').className = 'ml-indicator ml-inactive';
-                        document.getElementById('mlStatus').textContent = '🧠 ML: sem dados';
-                        mostrarMensagem('⚠️ Sem dados de feedback. Envie algumas correções primeiro.', 'erro');
-                    }
-                })
-                .catch(err => {
-                    console.error('Erro:', err);
-                    document.getElementById('mlStatus').className = 'ml-indicator ml-inactive';
-                    document.getElementById('mlStatus').textContent = '🧠 ML: erro';
-                    mostrarMensagem('❌ Erro ao carregar feedbacks.', 'erro');
-                });
-        }, 500);
     }
 
     // ============================================================
