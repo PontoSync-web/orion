@@ -2,8 +2,16 @@
  * ====================================================================
  * ORION - SISTEMA DE GERENCIAMENTO DE ERBs E LOCALIZAÇÃO INTELIGENTE
  * ====================================================================
- * VERSÃO: 2.3 (com fallback inteligente e aprendizado contínuo)
- * DATA: 2026-08-30
+ * VERSÃO: 3.0 (com aprendizado contínuo, feedback inteligente e ajuste automático)
+ * DATA: 2026-08-31
+ * ====================================================================
+ * 
+ * O Orion agora aprende com cada correção do usuário:
+ * 1. Salva feedbacks detalhados (RSRP, SINR, TA, método usado)
+ * 2. Calcula viés médio por número
+ * 3. Analisa padrões de erro por faixa de RSRP
+ * 4. Ajusta pesos automaticamente
+ * 5. Melhora a precisão continuamente
  * ====================================================================
  */
 
@@ -20,6 +28,13 @@ const port = process.env.PORT || 3000;
 // CONFIGURAÇÕES
 // ============================================================
 const DATA_DIR = path.join(__dirname, 'data');
+const CONFIG = {
+    VIES_MINIMO: 0.00001,      // 1 metro em graus
+    CONFIANCA_MINIMA: 0.3,      // 30% de confiança para aplicar viés
+    ERRO_MAXIMO_FILTRAR: 5000,  // 5km - filtrar outliers
+    PESO_RSRP_PADRAO: 1.0,
+    PESO_TA_PADRAO: 0.5
+};
 
 // ============================================================
 // SUPABASE
@@ -54,32 +69,49 @@ function parseNumber(value) {
     return null;
 }
 
-function calcularMediaPonderada(leituras) {
+function calcularMediaPonderada(leituras, pesosPersonalizados = null) {
+    // Filtra leituras válidas
     const validas = leituras.filter(l => {
         const rsrp = parseNumber(l.rsrp);
         return rsrp !== null && rsrp > -110;
     });
 
     if (validas.length === 0) {
+        // Fallback: média simples
         const lats = leituras.map(l => parseNumber(l.latitude)).filter(v => v !== null);
         const lons = leituras.map(l => parseNumber(l.longitude)).filter(v => v !== null);
         if (lats.length === 0 || lons.length === 0) {
-            return { lat: null, lon: null };
+            return { lat: null, lon: null, pesos_usados: null };
         }
         return {
             lat: lats.reduce((a, b) => a + b, 0) / lats.length,
-            lon: lons.reduce((a, b) => a + b, 0) / lons.length
+            lon: lons.reduce((a, b) => a + b, 0) / lons.length,
+            pesos_usados: null
         };
     }
 
-    const pesos = validas.map(l => Math.pow(10, parseNumber(l.rsrp) / 10));
+    // Converte RSRP para escala linear e calcula pesos
+    let pesos = validas.map(l => Math.pow(10, parseNumber(l.rsrp) / 10));
+    
+    // Aplica pesos personalizados (aprendizado)
+    if (pesosPersonalizados) {
+        pesos = pesos.map((p, i) => {
+            const rsrp = parseNumber(validas[i].rsrp);
+            if (rsrp === null) return p;
+            // Ajusta peso baseado no RSRP (aprendido)
+            const fator = pesosPersonalizados.rsrp?.[Math.floor(rsrp / 10) * 10] || 1.0;
+            return p * fator;
+        });
+    }
+
     const somaPesos = pesos.reduce((a, b) => a + b, 0);
     if (somaPesos === 0) {
         const lats = validas.map(l => parseNumber(l.latitude)).filter(v => v !== null);
         const lons = validas.map(l => parseNumber(l.longitude)).filter(v => v !== null);
         return {
             lat: lats.reduce((a, b) => a + b, 0) / lats.length,
-            lon: lons.reduce((a, b) => a + b, 0) / lons.length
+            lon: lons.reduce((a, b) => a + b, 0) / lons.length,
+            pesos_usados: null
         };
     }
 
@@ -93,7 +125,7 @@ function calcularMediaPonderada(leituras) {
         }
     });
 
-    return { lat: latFinal, lon: lonFinal };
+    return { lat: latFinal, lon: lonFinal, pesos_usados: pesos };
 }
 
 function calcularRaioIncerteza(leituras) {
@@ -122,6 +154,14 @@ function haversine(lat1, lon1, lat2, lon2) {
               Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
               Math.sin(dLon / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function calcularErro(lat1, lon1, lat2, lon2) {
+    const lat1Num = parseNumber(lat1) || 0;
+    const lon1Num = parseNumber(lon1) || 0;
+    const lat2Num = parseNumber(lat2) || 0;
+    const lon2Num = parseNumber(lon2) || 0;
+    return haversine(lat1Num, lon1Num, lat2Num, lon2Num) * 1000;
 }
 
 // ============================================================
@@ -390,204 +430,414 @@ async function migrarDadosAntigos() {
 }
 
 // ============================================================
-// ROTAS DA API (Todas as rotas existentes + novas)
+// FUNÇÃO PARA CARREGAR AJUSTES GLOBAIS
 // ============================================================
-
-// ... [Todas as rotas existentes: estacoes, numeros, alvos, bases, recursos, filtros, historico, alertas, coleta] ...
-
-// ============================================================
-// NOVA ROTA: /api/localizar-fallback (FALLBACK INTELIGENTE)
-// ============================================================
-app.get('/api/localizar-fallback', async (req, res) => {
-    const { numero } = req.query;
-    if (!numero) return res.status(400).json({ error: 'Número não informado' });
-
+async function carregarAjustesGlobais() {
     try {
-        // 1. Primeiro, tenta localizar com dados de sinal (coletas)
-        const { data: leituras, error: leiturasError } = await supabase
-            .from('coletas')
-            .select('latitude, longitude, rsrp, timestamp')
-            .eq('numero', numero)
-            .order('timestamp', { ascending: false })
-            .limit(15);
+        const { data, error } = await supabase
+            .from('configuracoes')
+            .select('valor')
+            .eq('chave', 'ajustes_rsrp')
+            .single();
+        
+        if (error || !data) {
+            console.log('ℹ️ Ajustes globais não encontrados. Usando padrão.');
+            return { rsrp: {} };
+        }
+        return data.valor;
+    } catch (error) {
+        console.log('⚠️ Erro ao carregar ajustes globais:', error);
+        return { rsrp: {} };
+    }
+}
 
-        if (!leiturasError && leituras && leituras.length > 0) {
-            console.log(`📊 Encontradas ${leituras.length} leituras para ${numero}`);
-            const leiturasCorrigidas = leituras.map(l => ({
-                latitude: parseNumber(l.latitude),
-                longitude: parseNumber(l.longitude),
-                rsrp: parseNumber(l.rsrp) || -100,
-                timestamp: l.timestamp
-            })).filter(l => l.latitude !== null && l.longitude !== null);
+// ============================================================
+// ROTAS DA API (TODAS AS ROTAS EXISTENTES)
+// ============================================================
 
-            if (leiturasCorrigidas.length > 0) {
-                const { lat, lon } = calcularMediaPonderada(leiturasCorrigidas);
-                const raio = calcularRaioIncerteza(leiturasCorrigidas);
-                return res.json({
-                    numero,
-                    latitude: lat || 0,
-                    longitude: lon || 0,
-                    raio_incerteza_metros: Math.round(raio),
-                    precisao: raio < 100 ? 'Alta' : raio < 300 ? 'Média' : 'Baixa',
-                    total_amostras: leituras.length,
-                    metodo: 'Ponderado por RSRP + Filtro Kalman + Correção de Viés',
-                    fallback: false
-                });
+// --- ESTAÇÕES (ERBs) ---
+app.get('/api/estacoes/mais-proxima', async (req, res) => {
+    const { lat, lon } = req.query;
+    if (!lat || !lon) return res.status(400).json({ error: 'Latitude e longitude são obrigatórias' });
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lon);
+    if (isNaN(latitude) || isNaN(longitude)) return res.status(400).json({ error: 'Valores inválidos' });
+    try {
+        const { data: estacoes, error } = await supabase
+            .from('estacoes')
+            .select('*')
+            .not('latitude', 'is', null)
+            .not('longitude', 'is', null);
+        if (error) throw error;
+        let maisProxima = null;
+        let menorDistancia = Infinity;
+        estacoes.forEach(estacao => {
+            const dist = Math.sqrt(Math.pow(estacao.latitude - latitude, 2) + Math.pow(estacao.longitude - longitude, 2)) * 111;
+            if (dist < menorDistancia) {
+                menorDistancia = dist;
+                maisProxima = { ...estacao, distancia: dist };
             }
-        }
-
-        // 2. Se não tem dados de sinal, busca a última localização GPS enviada
-        const { data: ultimoGPS, error: gpsError } = await supabase
-            .from('historico_localizacao')
-            .select('latitude, longitude')
-            .eq('numero', numero)
-            .order('data_hora', { ascending: false })
-            .limit(1);
-
-        if (!gpsError && ultimoGPS && ultimoGPS.length > 0) {
-            console.log(`📍 Último GPS encontrado para ${numero}`);
-            return res.json({
-                numero,
-                latitude: ultimoGPS[0].latitude,
-                longitude: ultimoGPS[0].longitude,
-                raio_incerteza_metros: 500,
-                precisao: 'Muito Baixa',
-                total_amostras: 0,
-                metodo: 'Última localização GPS conhecida',
-                fallback: true,
-                mensagem: 'Localização aproximada baseada no último GPS. Clique para corrigir.'
-            });
-        }
-
-        // 3. Busca a localização da torre (Cell ID) no banco de ERBs
-        const { data: ultimoSinal, error: sinalError } = await supabase
-            .from('dados_sinal')
-            .select('estacao_id, latitude, longitude')
-            .eq('numero', numero)
-            .order('data_hora', { ascending: false })
-            .limit(1);
-
-        if (!sinalError && ultimoSinal && ultimoSinal.length > 0) {
-            const estacaoId = ultimoSinal[0].estacao_id;
-            console.log(`📡 Buscando torre com ID: ${estacaoId}`);
-            
-            if (estacaoId && estacaoId !== 'desconhecido') {
-                const { data: estacao, error: estacaoError } = await supabase
-                    .from('estacoes')
-                    .select('latitude, longitude')
-                    .eq('id_estacao', estacaoId)
-                    .single();
-
-                if (!estacaoError && estacao) {
-                    console.log(`🗼 Torre encontrada: ${estacao.latitude}, ${estacao.longitude}`);
-                    return res.json({
-                        numero,
-                        latitude: estacao.latitude,
-                        longitude: estacao.longitude,
-                        raio_incerteza_metros: 5000,
-                        precisao: 'Muito Baixa',
-                        total_amostras: 0,
-                        metodo: 'Localização da torre (Cell ID)',
-                        fallback: true,
-                        estacao_id: estacaoId,
-                        mensagem: 'Localização aproximada baseada na torre de celular. Clique para corrigir.'
-                    });
-                }
-            }
-        }
-
-        // 4. Nada encontrado – retorna 404 com sugestão
-        console.log(`❌ Nenhuma localização encontrada para ${numero}`);
-        return res.status(404).json({
-            erro: 'Nenhuma localização encontrada para este número',
-            sugestao: 'Instale o script de coleta no celular ou envie dados de sinal manualmente.'
         });
-
-    } catch (err) {
-        console.error('❌ Erro no fallback:', err);
-        res.status(500).json({ error: 'Erro ao processar localização: ' + err.message });
+        if (!maisProxima) return res.status(404).json({ error: 'Nenhuma ERB encontrada' });
+        res.json(maisProxima);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
 });
 
-// ============================================================
-// ROTA DE FEEDBACK (já existente, mantida)
-// ============================================================
-app.post('/api/feedback', async (req, res) => {
+app.get('/api/estacoes/proximas', async (req, res) => {
+    const { lat, lon, raio } = req.query;
+    if (!lat || !lon) return res.status(400).json({ error: 'Latitude e longitude são obrigatórias' });
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lon);
+    const raioKm = parseFloat(raio) || 10;
     try {
-        const { numero, lat_real, lon_real, lat_mostrada, lon_mostrada } = req.body;
-        if (!numero || lat_real === undefined || lon_real === undefined) {
-            return res.status(400).json({ error: 'Campos obrigatórios: numero, lat_real, lon_real' });
-        }
-
-        const latReal = parseNumber(lat_real);
-        const lonReal = parseNumber(lon_real);
-        if (latReal === null || lonReal === null) {
-            return res.status(400).json({ error: 'lat_real ou lon_real inválidos' });
-        }
-
-        const { error: insertError } = await supabase
-            .from('feedback')
-            .insert([{ numero, lat_real: latReal, lon_real: lonReal, lat_mostrada: parseNumber(lat_mostrada) || 0, lon_mostrada: parseNumber(lon_mostrada) || 0 }]);
-        if (insertError) {
-            console.error('Erro ao salvar feedback:', insertError);
-            return res.status(500).json({ error: 'Erro ao salvar feedback' });
-        }
-
-        const { data: feedbacks, error: feedbackError } = await supabase
-            .from('feedback')
-            .select('lat_real, lon_real, lat_mostrada, lon_mostrada')
-            .eq('numero', numero)
-            .order('timestamp', { ascending: false })
-            .limit(5);
-
-        let viesLat = 0, viesLon = 0;
-        if (!feedbackError && feedbacks && feedbacks.length > 0) {
-            let somaViesLat = 0, somaViesLon = 0;
-            feedbacks.forEach(f => {
-                const latReal = parseNumber(f.lat_real) || 0;
-                const lonReal = parseNumber(f.lon_real) || 0;
-                const latMostrada = parseNumber(f.lat_mostrada) || 0;
-                const lonMostrada = parseNumber(f.lon_mostrada) || 0;
-                somaViesLat += (latReal - latMostrada);
-                somaViesLon += (lonReal - lonMostrada);
-            });
-            viesLat = somaViesLat / feedbacks.length;
-            viesLon = somaViesLon / feedbacks.length;
-
-            await supabase
-                .from('usuarios')
-                .upsert({ numero, vies_lat: viesLat, vies_lon: viesLon, ultima_atualizacao: new Date().toISOString() }, { onConflict: 'numero' });
-        }
-
-        res.status(201).json({
-            mensagem: 'Feedback recebido! Obrigado por melhorar o Orion.',
-            viés_aplicado: { vies_lat: viesLat, vies_lon: viesLon }
-        });
-
-    } catch (err) {
-        console.error('Erro ao processar feedback:', err);
-        res.status(500).json({ error: 'Erro interno ao processar feedback: ' + err.message });
+        const { data: estacoes, error } = await supabase
+            .from('estacoes')
+            .select('*')
+            .not('latitude', 'is', null)
+            .not('longitude', 'is', null);
+        if (error) throw error;
+        const resultados = estacoes
+            .map(estacao => ({ ...estacao, distancia: Math.sqrt(Math.pow(estacao.latitude - latitude, 2) + Math.pow(estacao.longitude - longitude, 2)) * 111 }))
+            .filter(item => item.distancia <= raioKm)
+            .sort((a, b) => a.distancia - b.distancia)
+            .slice(0, 50);
+        res.json(resultados);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
 });
 
-// ============================================================
-// INICIALIZAÇÃO
-// ============================================================
-(async () => {
-    await importarERBs();
-    console.log('✅ ORION pronto para uso.');
-})();
-
-app.listen(port, () => {
-    console.log(`🚀 ORION rodando na porta ${port}`);
-    console.log(`📅 Data/Hora: ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`);
-    console.log(`🧠 Rotas disponíveis:`);
-    console.log(`   GET /api/localizar-fallback?numero=XX (FALLBACK INTELIGENTE)`);
-    console.log(`   POST /api/feedback`);
-    console.log(`📊 Tabelas: coletas, feedback, usuarios, posicoes_historicas`);
+app.get('/api/estacoes/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('estacoes')
+            .select('*')
+            .eq('id_estacao', id)
+            .single();
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Estação não encontrada' });
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
-process.on('SIGINT', () => {
-    console.log('👋 ORION encerrado.');
-    process.exit(0);
+app.get('/api/estacoes/uf/:uf', async (req, res) => {
+    const { uf } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('estacoes')
+            .select('*')
+            .eq('uf', uf.toUpperCase())
+            .order('municipio');
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
+
+app.get('/api/estacoes/operadora/:operadora', async (req, res) => {
+    const { operadora } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('estacoes')
+            .select('*')
+            .ilike('operadora', `%${operadora}%`)
+            .order('uf')
+            .order('municipio');
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// --- NÚMEROS ---
+app.post('/api/numeros', async (req, res) => {
+    const { numero, operadora, uf, municipio } = req.body;
+    if (!numero) return res.status(400).json({ error: 'Número é obrigatório' });
+    try {
+        const { data, error } = await supabase
+            .from('numeros')
+            .upsert({ numero, operadora: operadora || '', uf: uf || '', municipio: municipio || '' })
+            .select();
+        if (error) throw error;
+        res.json({ success: true, id: data[0]?.id });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/numeros/localizacao', async (req, res) => {
+    const { numero, latitude, longitude, uf, municipio } = req.body;
+    if (!numero || latitude === undefined || longitude === undefined) {
+        return res.status(400).json({ error: 'Número, latitude e longitude são obrigatórios' });
+    }
+    try {
+        const { error } = await supabase
+            .from('numeros')
+            .upsert({ numero, uf: uf || '', municipio: municipio || '', latitude, longitude });
+        if (error) throw error;
+        res.json({ success: true, message: `Localização do número ${numero} atualizada` });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/numeros', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('numeros')
+            .select('*')
+            .order('data_cadastro', { ascending: false });
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/numeros/:numero', async (req, res) => {
+    const { numero } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('numeros')
+            .select('*')
+            .eq('numero', numero)
+            .single();
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Número não encontrado' });
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// --- ALVOS ---
+app.post('/api/alvos', async (req, res) => {
+    const { numero, operadora, uf, municipio, tag, nome } = req.body;
+    if (!numero) return res.status(400).json({ error: 'Número é obrigatório' });
+    try {
+        const { data, error } = await supabase
+            .from('alvos')
+            .upsert({ numero, operadora: operadora || '', uf: uf || '', municipio: municipio || '', tag: tag || '', nome: nome || '' })
+            .select();
+        if (error) throw error;
+        res.json({ success: true, id: data[0]?.id });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/alvos', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('alvos')
+            .select('*')
+            .order('data_cadastro', { ascending: false });
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/alvos/tag/:tag', async (req, res) => {
+    const { tag } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('alvos')
+            .select('*')
+            .eq('tag', tag)
+            .order('data_cadastro', { ascending: false });
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.delete('/api/alvos/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { error } = await supabase
+            .from('alvos')
+            .delete()
+            .eq('id', id);
+        if (error) throw error;
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// --- BASES ---
+app.post('/api/bases', async (req, res) => {
+    const { nome, uf, municipio, latitude, longitude, descricao } = req.body;
+    if (!nome || latitude === undefined || longitude === undefined) {
+        return res.status(400).json({ error: 'Nome, latitude e longitude são obrigatórios' });
+    }
+    try {
+        const { data, error } = await supabase
+            .from('bases')
+            .insert({ nome, uf: uf || '', municipio: municipio || '', latitude, longitude, descricao: descricao || '' })
+            .select();
+        if (error) throw error;
+        res.json({ success: true, id: data[0]?.id });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/bases', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('bases')
+            .select('*')
+            .order('nome');
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/bases/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('bases')
+            .select('*')
+            .eq('id', id)
+            .single();
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Base não encontrada' });
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.delete('/api/bases/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { error } = await supabase
+            .from('bases')
+            .delete()
+            .eq('id', id);
+        if (error) throw error;
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// --- RECURSOS ---
+async function criarBaseAutomatica(numero, lat = -15.8, lon = -47.9) {
+    const nomeBase = `Base Automática - ${numero}`;
+    const { data, error } = await supabase
+        .from('bases')
+        .insert({ nome: nomeBase, uf: '', municipio: '', latitude: lat, longitude: lon, descricao: 'Base criada automaticamente pelo ORION' })
+        .select();
+    if (error) throw error;
+    return data[0].id;
+}
+
+app.post('/api/recursos', async (req, res) => {
+    const { numero, operadora, nome, base_id, status, latitude, longitude } = req.body;
+    if (!numero) return res.status(400).json({ error: 'Número é obrigatório' });
+    try {
+        const { data: recursoExistente, error: findError } = await supabase
+            .from('recursos')
+            .select('*')
+            .eq('numero', numero)
+            .maybeSingle();
+        if (findError) throw findError;
+        let finalBaseId = base_id;
+        let coordenadasUsadas = { lat: latitude || -15.8, lon: longitude || -47.9 };
+        if (!recursoExistente && !base_id) {
+            try {
+                finalBaseId = await criarBaseAutomatica(numero, coordenadasUsadas.lat, coordenadasUsadas.lon);
+                console.log(`✅ Base automática criada para o número ${numero} (ID: ${finalBaseId})`);
+            } catch (error) {
+                return res.status(500).json({ error: 'Erro ao criar base automática: ' + error.message });
+            }
+        }
+        const { data, error } = await supabase
+            .from('recursos')
+            .upsert({ numero, operadora: operadora || '', nome: nome || '', base_id: finalBaseId || null, status: status || 'desconhecido' })
+            .select();
+        if (error) throw error;
+        res.json({ success: true, id: data[0]?.id, base_id: finalBaseId, message: recursoExistente ? 'Recurso atualizado' : 'Recurso cadastrado com base automática' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/recursos', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('recursos')
+            .select('*')
+            .order('numero');
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/recursos/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('recursos')
+            .select('*')
+            .eq('id', id)
+            .single();
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Recurso não encontrado' });
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/recursos/numero/:numero', async (req, res) => {
+    const { numero } = req.params;
+    try {
+        const { data, error } = await supabase
+            .from('recursos')
+            .select('*')
+            .eq('numero', numero)
+            .single();
+        if (error) throw error;
+        if (!data) return res.status(404).json({ error: 'Recurso não encontrado' });
+        res.json(data);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.put('/api/recursos/:id/mover', async (req, res) => {
+    const { id } = req.params;
+    const { base_id } = req.body;
+    if (base_id === undefined) return res.status(400).json({ error: 'base_id é obrigatório' });
+    try {
+        const { error } = await supabase
+            .from('recursos')
+            .update({ base_id })
+            .eq('id', id);
+        if (error) throw error;
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.delete('/api/recursos/:id', async (req, res) => {
+    const
