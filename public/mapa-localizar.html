@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Orion - Localizador Inteligente</title>
+    <title>Orion - Localizador</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', sans-serif; }
@@ -33,8 +33,9 @@
         .feedback-error { color: #f44336; }
         .feedback-info { color: #ffc107; }
         #feedbackStatus { margin-left: 15px; }
-        .debug { background: #1a1a2e; color: #88ddff; padding: 10px; border-radius: 6px; font-family: monospace; font-size: 12px; margin-top: 10px; display: none; white-space: pre-wrap; word-break: break-all; max-height: 150px; overflow-y: auto; }
+        .debug { background: #1a1a2e; color: #88ddff; padding: 10px; border-radius: 6px; font-family: monospace; font-size: 12px; margin-top: 10px; display: none; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; }
         .debug.visible { display: block; }
+        .footer { margin-top: 20px; color: #557799; font-size: 12px; }
     </style>
 </head>
 <body>
@@ -74,9 +75,7 @@
 
     <div id="debug" class="debug"></div>
 
-    <div class="footer" style="margin-top:20px; color:#557799; font-size:12px;">
-        Orion v3.1 • Aprendizado contínuo • Feedbacks melhoram a precisão
-    </div>
+    <div class="footer">Orion v3.1 • Aprendizado contínuo • Feedbacks melhoram a precisão</div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -148,7 +147,7 @@
         try {
             const response = await fetch(`${API_URL}/api/localizar-fallback?numero=${encodeURIComponent(numero)}`);
             const data = await response.json();
-            logDebug('📦 Resposta do servidor: ' + JSON.stringify(data, null, 2));
+            logDebug('📦 Resposta: ' + JSON.stringify(data, null, 2));
 
             if (!response.ok) {
                 document.getElementById('erro').textContent = '❌ ' + (data.erro || 'Número não encontrado.');
@@ -233,20 +232,25 @@
             return;
         }
 
-        // CONVERTE VÍRGULA PARA PONTO
         const latReal = parseNumber(markerCorrigido.getLatLng().lat);
         const lonReal = parseNumber(markerCorrigido.getLatLng().lng);
         const latMostrada = parseNumber(posicaoAtual.lat);
         const lonMostrada = parseNumber(posicaoAtual.lon);
 
-        logDebug('📤 Enviando feedback:');
-        logDebug(`  lat_real: ${latReal} (${typeof latReal})`);
-        logDebug(`  lon_real: ${lonReal} (${typeof lonReal})`);
-        logDebug(`  lat_mostrada: ${latMostrada} (${typeof latMostrada})`);
-        logDebug(`  lon_mostrada: ${lonMostrada} (${typeof lonMostrada})`);
+        logDebug('📤 Validando coordenadas:');
+        logDebug(`  latReal: ${latReal} (${typeof latReal})`);
+        logDebug(`  lonReal: ${lonReal} (${typeof lonReal})`);
 
-        if (latReal === null || lonReal === null || latMostrada === null || lonMostrada === null) {
-            alert('Erro: coordenadas inválidas.');
+        if (latReal === null || lonReal === null) {
+            alert('Erro: coordenadas de correção inválidas.');
+            return;
+        }
+        if (latMostrada === null || lonMostrada === null) {
+            alert('Erro: coordenadas da localização atual inválidas.');
+            return;
+        }
+        if (isNaN(latReal) || isNaN(lonReal) || isNaN(latMostrada) || isNaN(lonMostrada)) {
+            alert('Erro: coordenadas não são números válidos.');
             return;
         }
 
@@ -262,7 +266,11 @@
             ta: null
         };
 
-        logDebug('📦 Body enviado: ' + JSON.stringify(body));
+        logDebug('📦 Body a ser enviado: ' + JSON.stringify(body));
+
+        if (!confirm(`Corrigir localização de ${numero}?\n\nCorreção: ${latReal.toFixed(6)}, ${lonReal.toFixed(6)}\nAnterior: ${latMostrada.toFixed(6)}, ${lonMostrada.toFixed(6)}`)) {
+            return;
+        }
 
         const statusEl = document.getElementById('feedbackStatus');
         statusEl.textContent = '⏳ Enviando...';
@@ -285,11 +293,11 @@
                     map.removeLayer(markerCorrigido);
                     markerCorrigido = null;
                 }
-                setTimeout(() => buscarLocalizacao(), 2000);
+                setTimeout(() => buscarLocalizacao(), 1500);
             } else {
                 statusEl.textContent = '❌ Erro: ' + (data.erro || 'Tente novamente');
                 statusEl.className = 'feedback-error';
-                alert('Erro ao enviar feedback:\n' + JSON.stringify(data, null, 2));
+                alert('Erro ao enviar feedback:\n\n' + JSON.stringify(data, null, 2));
             }
         } catch (error) {
             logDebug('❌ Erro de rede: ' + error.message);
@@ -301,6 +309,7 @@
 
     document.addEventListener('DOMContentLoaded', () => {
         initMap(-12.9342, -38.3751);
+        setTimeout(() => buscarLocalizacao(), 500);
     });
 
     document.getElementById('numeroInput').addEventListener('keypress', function(e) {
