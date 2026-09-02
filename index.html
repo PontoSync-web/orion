@@ -1,54 +1,333 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ORION - Sistema de ERBs</title>
-  <style>
-    body { font-family: Arial; margin: 20px; background: #0a0a1a; color: #00ff88; }
-    .container { max-width: 800px; margin: auto; }
-    input, button { padding: 8px; margin: 5px; background: #1a1a2e; color: #00ff88; border: 1px solid #00ff88; }
-    button { cursor: pointer; }
-    #resultado { background: #1a1a2e; padding: 10px; margin-top: 10px; white-space: pre-wrap; font-size: 12px; max-height: 400px; overflow-y: auto; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚀 Orion - Sistema de Localização Inteligente</title>
+    
+    <style>
+        /* ============================================================
+           RESET E CONFIGURAÇÕES GLOBAIS
+           ============================================================ */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        /* ============================================================
+           CONTAINER PRINCIPAL
+           ============================================================ */
+        .container {
+            max-width: 1200px;
+            width: 100%;
+            background: rgba(13, 17, 48, 0.9);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            border: 1px solid rgba(0, 212, 255, 0.15);
+            padding: 40px;
+            box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+            text-align: center;
+        }
+
+        /* ============================================================
+           HEADER
+           ============================================================ */
+        .logo {
+            font-size: 64px;
+            margin-bottom: 10px;
+        }
+
+        h1 {
+            font-size: 42px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #00d4ff, #7b2ffc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            font-size: 18px;
+            color: #888;
+            margin-bottom: 30px;
+        }
+
+        .subtitle strong {
+            color: #00d4ff;
+            -webkit-text-fill-color: #00d4ff;
+        }
+
+        /* ============================================================
+           BADGE DE STATUS
+           ============================================================ */
+        .status-badge {
+            display: inline-block;
+            padding: 8px 24px;
+            border-radius: 30px;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(0, 212, 255, 0.3);
+            background: rgba(0, 212, 255, 0.08);
+            color: #00d4ff;
+        }
+
+        .status-badge .dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #00ff88;
+            margin-right: 8px;
+            animation: pulse-dot 2s infinite;
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* ============================================================
+           CARDS DE ESTATÍSTICAS
+           ============================================================ */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            margin: 30px 0;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 12px;
+            padding: 20px 16px;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            transition: all 0.3s;
+        }
+
+        .stat-card:hover {
+            background: rgba(255, 255, 255, 0.08);
+            transform: translateY(-4px);
+            border-color: rgba(0, 212, 255, 0.2);
+        }
+
+        .stat-number {
+            font-size: 32px;
+            font-weight: 700;
+            color: #00d4ff;
+            display: block;
+        }
+
+        .stat-label {
+            font-size: 13px;
+            color: #888;
+            margin-top: 4px;
+        }
+
+        /* ============================================================
+           ÁREA DE AÇÕES
+           ============================================================ */
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            justify-content: center;
+            margin: 20px 0 30px;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 28px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 15px;
+            text-decoration: none;
+            transition: all 0.3s;
+            border: none;
+            cursor: pointer;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #00d4ff, #7b2ffc);
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 30px rgba(0, 212, 255, 0.3);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #00ff88, #00cc77);
+            color: #0a0e27;
+        }
+
+        .btn-success:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 30px rgba(0, 255, 136, 0.3);
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #aaa;
+        }
+
+        .btn-outline:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: #00d4ff;
+            color: #fff;
+        }
+
+        /* ============================================================
+           CRÉDITOS
+           ============================================================ */
+        .credits {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+            font-size: 13px;
+            color: #555;
+        }
+
+        .credits strong {
+            color: #00d4ff;
+            -webkit-text-fill-color: #00d4ff;
+        }
+
+        .credits .heart {
+            color: #ff4466;
+        }
+
+        /* ============================================================
+           RESPONSIVIDADE
+           ============================================================ */
+        @media (max-width: 768px) {
+            .container {
+                padding: 24px;
+            }
+
+            h1 {
+                font-size: 28px;
+            }
+
+            .logo {
+                font-size: 48px;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .stat-number {
+                font-size: 24px;
+            }
+
+            .actions {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .btn {
+                width: 100%;
+                justify-content: center;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
 </head>
 <body>
-  <div class="container">
-    <h1>🛰️ ORION - Sistema de ERBs</h1>
-    <p>Status: <span id="status">Carregando...</span></p>
-    
-    <h3>📍 Buscar ERBs próximas</h3>
-    <input id="lat" placeholder="Latitude" value="-23.5505">
-    <input id="lon" placeholder="Longitude" value="-46.6333">
-    <input id="raio" placeholder="Raio (km)" value="10">
-    <button onclick="buscar()">Buscar</button>
-    
-    <h3>📊 Estatísticas</h3>
-    <button onclick="estatisticas()">Carregar</button>
-    
-    <pre id="resultado">Aguardando...</pre>
-  </div>
 
-  <script>
-    const API_URL = window.location.origin;
+    <div class="container">
+        <!-- ============================================================
+        HEADER
+        ============================================================ -->
+        <div class="logo">🚀</div>
+        <h1>Sistema Orion</h1>
+        <p class="subtitle">
+            Localização inteligente baseada em <strong>ERBs</strong> · 
+            <strong>108.040</strong> torres · 
+            <strong>ML</strong> em tempo real
+        </p>
 
-    async function buscar() {
-      const lat = document.getElementById('lat').value;
-      const lon = document.getElementById('lon').value;
-      const raio = document.getElementById('raio').value;
-      const res = await fetch(`${API_URL}/api/estacoes/proximas?lat=${lat}&lon=${lon}&raio=${raio}`);
-      const data = await res.json();
-      document.getElementById('resultado').textContent = JSON.stringify(data, null, 2);
-    }
+        <!-- ============================================================
+        STATUS
+        ============================================================ -->
+        <div class="status-badge">
+            <span class="dot"></span>
+            Sistema em operação · v8.0.0
+        </div>
 
-    async function estatisticas() {
-      const res = await fetch(`${API_URL}/api/estatisticas`);
-      const data = await res.json();
-      document.getElementById('resultado').textContent = JSON.stringify(data, null, 2);
-      document.getElementById('status').textContent = '✅ Ativo';
-    }
+        <!-- ============================================================
+        ESTATÍSTICAS
+        ============================================================ -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <span class="stat-number">108.040</span>
+                <span class="stat-label">📡 Torres (ERBs)</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-number">5</span>
+                <span class="stat-label">📱 Operadoras</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-number">91%</span>
+                <span class="stat-label">🎯 Precisão</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-number">43m</span>
+                <span class="stat-label">📍 Erro médio</span>
+            </div>
+        </div>
 
-    estatisticas();
-  </script>
+        <!-- ============================================================
+        AÇÕES
+        ============================================================ -->
+        <div class="actions">
+            <a href="#" class="btn btn-primary">
+                🗺️ Mapa Inteligente
+            </a>
+            <a href="#" class="btn btn-success">
+                📦 Gerenciar Bases
+            </a>
+            <a href="#" class="btn btn-outline">
+                📊 Dashboard
+            </a>
+        </div>
+
+        <!-- ============================================================
+        CRÉDITOS
+        ============================================================ -->
+        <div class="credits">
+            Desenvolvido com <span class="heart">❤️</span> por 
+            <strong>Eng. Itamar Souza</strong> · 
+            <strong>Dôra</strong> (UX/UI) · 
+            <strong>Gissélia</strong> (Testes)
+            <br>
+            © 2026 · Sistema Orion v8.0.0
+        </div>
+    </div>
+
 </body>
 </html>
