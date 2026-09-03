@@ -1,16 +1,44 @@
 {
   "name": "orion",
-  "version": "2.1.0",
-  "description": "Sistema Orion de localização inteligente",
+  "version": "8.0.0",
+  "description": "Sistema Orion de Localização Inteligente baseada em ERBs",
   "main": "orion.js",
   "scripts": {
-    "start": "node orion.js"
+    "start": "node orion.js",
+    "dev": "nodemon orion.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
+  "keywords": [
+    "orion",
+    "localization",
+    "erbs",
+    "machine-learning",
+    "supabase",
+    "kalman-filter"
+  ],
+  "author": "Eng. Itamar Souza",
+  "license": "MIT",
   "dependencies": {
+    "cors": "^2.8.5",
     "express": "^4.18.2",
-    "@supabase/supabase-js": "^2.39.0"
+    "@supabase/supabase-js": "^2.38.0",
+    "dotenv": "^16.3.1",
+    "csv-parser": "^3.0.0",
+    "fs": "^0.0.1-security",
+    "path": "^0.12.7"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
   },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/souza-oliveira-br-max/orion"
+  },
+  "bugs": {
+    "url": "https://github.com/souza-oliveira-br-max/orion/issues"
+  },
+  "homepage": "https://souza-oliveira-br-max.github.io/orion/"
 }
