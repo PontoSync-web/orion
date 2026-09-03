@@ -4,7 +4,7 @@
  * ===================================================================
  * Versão: 8.0.0
  * Data: 03/09/2026
- * Horário: 08:30:00 BRT
+ * Horário: 09:45:00 BRT
  * Autor: Eng. Itamar Souza
  * 
  * Descrição: Módulo principal de processamento de localização
@@ -57,13 +57,19 @@ app.get('/health', (req, res) => {
 // ============================================================
 app.get('/api/estatisticas', async (req, res) => {
     try {
-        const { count: totalTorres } = await supabase
+        // Contar torres
+        const { count: totalTorres, error: errTorres } = await supabase
             .from('erbs')
             .select('*', { count: 'exact', head: true });
 
-        const { count: totalFeedbacks } = await supabase
+        if (errTorres) throw errTorres;
+
+        // Contar feedbacks
+        const { count: totalFeedbacks, error: errFeedbacks } = await supabase
             .from('feedbacks')
             .select('*', { count: 'exact', head: true });
+
+        if (errFeedbacks) throw errFeedbacks;
 
         res.json({
             sucesso: true,
@@ -76,6 +82,7 @@ app.get('/api/estatisticas', async (req, res) => {
                 timestamp: new Date().toISOString()
             }
         });
+
     } catch (error) {
         console.error('Erro ao buscar estatísticas:', error);
         res.status(500).json({ 
@@ -87,11 +94,11 @@ app.get('/api/estatisticas', async (req, res) => {
 });
 
 // ============================================================
-// ROTA DE LOCALIZAÇÃO (FALLBACK)
+// ROTA DE LOCALIZAÇÃO - IMPLEMENTAÇÃO REAL
 // ============================================================
-app.get('/api/localizar-fallback', async (req, res) => {
+app.get('/api/localizar', async (req, res) => {
     const numero = req.query.numero;
-    
+
     if (!numero) {
         return res.status(400).json({
             sucesso: false,
@@ -102,47 +109,84 @@ app.get('/api/localizar-fallback', async (req, res) => {
     console.log(`📱 Localizando número: ${numero}`);
 
     try {
-        // Buscar torres próximas (exemplo: em Salvador)
-        const { data: torres, error } = await supabase
-            .from('erbs')
-            .select('*')
-            .limit(10);
+        // --- 1. Buscar as torres mais próximas usando a função do Supabase ---
+        // Ponto de referência: Salvador (ajuste conforme necessário)
+        const latReferencia = -12.9342;
+        const lngReferencia = -38.3751;
+        const raioKm = 50;
 
-        if (error) throw error;
+        const { data: torres, error } = await supabase
+            .rpc('buscar_torres_proximas', {
+                lat_origem: latReferencia,
+                lng_origem: lngReferencia,
+                raio_km: raioKm
+            });
+
+        if (error) {
+            console.error('Erro ao buscar torres:', error);
+            throw error;
+        }
 
         if (!torres || torres.length === 0) {
             return res.json({
                 sucesso: false,
-                mensagem: 'Nenhuma torre encontrada'
+                mensagem: 'Nenhuma torre encontrada na região'
             });
         }
 
-        // Calcular média simples das coordenadas
-        let lat = 0, lng = 0;
-        torres.forEach(t => {
-            lat += t.lat;
-            lng += t.lng;
-        });
-        lat /= torres.length;
-        lng /= torres.length;
+        console.log(`📡 Encontradas ${torres.length} torres próximas`);
 
+        // --- 2. Aplicar Média Ponderada pelo RSRP ---
+        let pesoTotal = 0;
+        let latPonderada = 0;
+        let lngPonderada = 0;
+
+        torres.forEach(t => {
+            // Normaliza RSRP (valores típicos: -140 a -40 dBm)
+            const rsrpNormalizado = (t.rsrp + 140) / 100; // Resulta em 0 a 1
+            const peso = Math.max(rsrpNormalizado, 0.1); // Peso mínimo de 0.1
+            
+            latPonderada += t.lat * peso;
+            lngPonderada += t.lng * peso;
+            pesoTotal += peso;
+        });
+
+        const lat = latPonderada / pesoTotal;
+        const lng = lngPonderada / pesoTotal;
+
+        // --- 3. Calcular erro estimado (simplificado) ---
+        // Quanto mais torres, menor o erro
+        const fatorTorres = Math.min(torres.length / 20, 1);
+        const erroBase = 80; // Erro base em metros
+        const erro = erroBase * (1 - fatorTorres * 0.5);
+
+        // --- 4. Calcular confiança ---
+        const confianca = Math.min(0.6 + (torres.length / 100) * 0.4, 0.95);
+
+        // --- 5. Verificar se há ML aplicado ---
+        // Por enquanto, sempre falso (será ativado com feedbacks)
+        const mlAplicado = false;
+
+        // --- 6. Retornar o resultado ---
         res.json({
             sucesso: true,
             localizacao: {
                 lat,
                 lng,
-                confianca: 0.85,
-                mlAplicado: false,
-                erro: 43 + Math.random() * 30
+                confianca: Math.round(confianca * 100) / 100,
+                mlAplicado,
+                erro: Math.round(erro * 100) / 100
             },
-            torres: torres.slice(0, 5)
+            torres: torres.slice(0, 15) // Retorna as 15 primeiras torres
         });
+
+        console.log(`✅ Localização retornada: ${lat}, ${lng} (erro: ${Math.round(erro)}m)`);
 
     } catch (error) {
         console.error('Erro na localização:', error);
         res.status(500).json({
             sucesso: false,
-            mensagem: 'Erro interno',
+            mensagem: 'Erro interno ao processar localização',
             erro: error.message
         });
     }
@@ -162,6 +206,8 @@ app.post('/api/feedback', async (req, res) => {
             });
         }
 
+        console.log(`📝 Recebendo feedback para o número ${numero}`);
+
         const { data, error } = await supabase
             .from('feedbacks')
             .insert([{
@@ -173,6 +219,8 @@ app.post('/api/feedback', async (req, res) => {
             }]);
 
         if (error) throw error;
+
+        // TODO: Treinar modelo ML com novos feedbacks (se houver >= 10)
 
         res.json({
             sucesso: true,
@@ -209,8 +257,10 @@ app.post('/api/treinar-modelo-global', async (req, res) => {
             });
         }
 
-        // Simulação de treinamento
         console.log(`🧠 Treinando modelo com ${feedbacks.length} feedbacks...`);
+
+        // Simulação de treinamento (a ser implementado)
+        // Aqui seria a lógica real de Machine Learning
 
         res.json({
             sucesso: true,
@@ -235,7 +285,8 @@ app.post('/api/treinar-modelo-global', async (req, res) => {
 app.get('/teste', (req, res) => {
     res.json({
         mensagem: 'ORION API está funcionando!',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        version: '8.0.0'
     });
 });
 
@@ -249,7 +300,7 @@ app.listen(PORT, () => {
     console.log('📊 Rotas disponíveis:');
     console.log('   GET /health');
     console.log('   GET /api/estatisticas');
-    console.log('   GET /api/localizar-fallback?numero=XX');
+    console.log('   GET /api/localizar?numero=XX');
     console.log('   POST /api/feedback');
     console.log('   POST /api/treinar-modelo-global');
     console.log('   GET /teste');
